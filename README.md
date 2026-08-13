@@ -277,6 +277,21 @@ own screencast, so frames arrive when the page actually repaints — measured at
 continuously animating page, against about 2 for a screenshot timer, and costing nothing at all while
 the page sits still. `SCREEN_EVERY_NTH` (default 1) trades smoothness for bandwidth.
 
+### Watching it work
+
+A run of browser or desktop actions is drawn as **one card, not one card per call** — "Used the
+browser · 8 steps" — with each step as a sentence rather than a tool name: *Opened vercel.com*,
+*Clicked Deploy*, *Waited 3 seconds*. Each carries a thumbnail of what the screen looked like when it
+finished, so scrolling back through yesterday's session shows the pictures and not just the prose.
+
+The run stays open while it is working and collapses when it ends. Prose between two runs splits
+them, because that is the assistant stopping to say something — a real boundary between two pieces of
+work, and folding across it would claim a structure the turn does not have.
+
+Thumbnails are stored as attachments and referenced by id, never inlined into the transcript: a long
+browsing session would otherwise put megabytes of base64 into a conversation that gets read back on
+every load.
+
 ### The sandbox is not your browser
 
 Two different browsers, and confusing them is the single easiest way to be surprised by this app:
@@ -346,6 +361,31 @@ still renders at full rate.
 
 Set `BROWSER_SHOW=true` to put it back on screen, `BROWSER_MUTE=true` for silence, or
 `BROWSER_HEADLESS=true` for no window at all — and no sound.
+
+### Which browser it drives
+
+A clean sandbox is the right default and useless behind a sign-in wall: the assistant cannot read
+your Gmail in a browser that has never heard of you. So each computer chooses, in
+**Settings → Computers → Browser**, and the choice reaches the machine on its next heartbeat.
+
+| | What it is | What it costs |
+|---|---|---|
+| **Sandbox** *(default)* | A fresh browser with an empty profile | Signed in to nothing. Nothing it does is saved. |
+| **Saved profile** | A persistent profile of the worker's own, on that machine | Sign in once through the live panel and it stays signed in. Real cookies, sitting on that machine's disk. |
+| **Your own Chrome** | The Chrome you already have open, over its debugging port | Chrome must be started with `--remote-debugging-port=9222` — quit it completely first, or the flag is ignored. |
+
+**Saved profile does not use your Chrome profile directory**, and that is deliberate rather than a
+limitation we did not get to. Chrome holds an exclusive lock on `User Data` while it is running, so
+pointing at it fails whenever your browser is open — which is nearly always — with an error that says
+nothing about why. A separate profile gives almost all of the benefit and cannot corrupt the one you
+actually browse with.
+
+**Attaching borrows your browser; it never closes it.** Ending a session drops the connection and
+leaves every tab exactly where it was, and the assistant is refused if it tries to close the last tab
+— on most platforms that would quit Chrome and take everything you had open with it.
+
+`BROWSER_MODE` sets the default for a machine before it has ever been paired; `BROWSER_CDP_PORT`
+changes the port attaching looks at.
 
 ---
 
@@ -1209,13 +1249,23 @@ git clone <your-repo-url> ai-remote
 cd ai-remote
 npm install
 
-# worker/.env — one line, so it knows which deployment to join
-echo "SERVER_URL=https://your-app.vercel.app" > worker/.env
-
-npm start
+npm run connect -- https://your-app.vercel.app
 ```
 
-No flags. It shows a pairing code:
+The address is on the **Computers** tab of your own deployment, under Settings, already written into
+a line you can copy — so there is nothing to type from memory.
+
+**Not `npm start` here, and the difference matters.** `npm start` brings up a *second copy of the
+app* on this machine and points the worker at that, so the pairing code it prints lands in a database
+your deployment cannot see. Typing that code into the deployed app gets "this code is not valid" —
+correctly, and confusingly. `npm run connect` starts the worker alone and points it at the address
+you name.
+
+The address is remembered in `worker/.env`, so from then on a plain `npm run connect` is enough. Name
+a *different* server and the stored token is cleared first: a token only works on the server that
+issued it, and carrying one across would give a 401 and a misleading "no longer paired".
+
+It shows a pairing code:
 
 ```
   ┌─────────────────────────────────────┐
@@ -1275,7 +1325,7 @@ than silently created, so a typo does not become an empty workspace and a confus
 > names an account and cannot reach anything. What makes it yours is a signed-in
 > person typing that code, which is the only step that touches an account at all.
 
-Want only the worker on a headless box? `npm start -- --no-server`, or `npm run pair`. Want only the
+Want only the worker on a headless box? `npm run connect -- <url>`. Want only the
 app, with no worker at all? `npm start -- --no-worker`.
 
 > There used to be a second way in: generate an account-wide token, paste it into a file on the
@@ -1305,11 +1355,10 @@ winget install OpenJS.NodeJS.LTS Git.Git
 git clone <your-repo-url> C:\ai-remote ; cd C:\ai-remote ; npm install
 
 # worker\.env
-SERVER_URL=https://your-app.vercel.app
 DESKTOP_ACCESS=true      # the whole screen, not just the browser sandbox
 FILE_ACCESS=full         # optional: reach outside the workspace folder
 
-npm start -- --no-server   # worker only; the app is already deployed
+npm run connect -- https://your-app.vercel.app   # worker only; the app is already deployed
 ```
 
 Pair the code from any device, then **Settings → Computers** to make it the machine tool calls go to.
@@ -1329,7 +1378,7 @@ Three things decide whether this actually works, and all three are Windows, not 
   which leaves the session running on the virtual console — or turn on auto-logon and never sign out.
 - **Start it at logon, not as a service.** A service runs in session 0, which has no desktop at all.
   A Task Scheduler task with *"At log on"*, *"Run only when user is logged on"*, pointed at
-  `npm start -- --no-server`, is the arrangement that survives a reboot.
+  `npm run connect`, is the arrangement that survives a reboot.
 - **Nothing may lock the screen.** Turn off the screen saver, the lock timeout, and sleep. A lock
   screen is a desktop the assistant cannot see past.
 
@@ -1598,7 +1647,7 @@ Agentic runs use more tokens than plain chat, because tool results re-enter the 
 ```bash
 npm start                     # app + worker (if configured), one terminal
 npm run share                 # the same, plus a Cloudflare tunnel
-npm start -- --no-server      # worker only, for a headless box
+npm run connect -- <url>      # this machine, driven by a deployment elsewhere
 npm start -- --no-worker      # app only
 npm run dev                   # server alone, with --watch
 npm run worker                # the machine worker alone
@@ -1606,7 +1655,7 @@ npm run db:init               # create the schema against DATABASE_URL and verif
 npm run accounts              # which accounts exist in this database
 npm run reset-password -- you@example.com    # set a password directly, no email needed
 npm run make-admin -- you@example.com        # promote an account to administrator
-npm run pair                  # pair this machine with a deployment, nothing else
+npm run pair                  # the same thing, under its older name
 npm run lint                  # eslint
 npm run check                 # lint + every fast suite — the one to run before pushing
 npm test                      # all six fast suites

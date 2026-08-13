@@ -2087,6 +2087,112 @@ details.block pre {
 .tool__time { color: var(--text-faint); font-size: 11.5px; }
 .tool--error .tool__name { color: var(--danger); }
 
+/* ── a run of steps ──────────────────────────────────────────────────
+ *
+ * Eight browser actions in one card, because that is one piece of work rather
+ * than eight. The row is deliberately not monospace: this is the half of the
+ * transcript written for the person, and `browser_click {"ref":"7"}` was the
+ * problem it exists to fix.
+ */
+.steps__title { color: var(--text); font-size: 13px; }
+.steps__tally { color: var(--text-faint); font-size: 12px; }
+.steps--error .steps__title { color: var(--danger); }
+
+.steps__list {
+  margin: 0;
+  padding: 2px 13px 11px 13px;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.step__mark {
+  display: flex;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.step--error .step__mark { color: var(--danger); }
+.step__label {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.step__verb { color: var(--text-dim); white-space: nowrap; }
+.step__detail {
+  color: var(--text-faint);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.step__time { color: var(--text-faint); font-size: 11.5px; }
+
+/* The thumbnail and the raw output both belong under their step rather than
+   beside it, so they span the whole row instead of squeezing the label. */
+.step__shot,
+.step__out { grid-column: 1 / -1; }
+
+.step__shot {
+  margin: 4px 0 2px 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: none;
+  overflow: hidden;
+  cursor: zoom-in;
+  line-height: 0;
+  width: max-content;
+  max-width: calc(100% - 24px);
+}
+.step__shot img {
+  display: block;
+  width: 210px;
+  max-width: 100%;
+  height: auto;
+}
+.step__shot:hover { border-color: var(--accent); }
+
+.step__out { margin-left: 24px; }
+.step__out > summary {
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+}
+.step__out > summary::-webkit-details-marker { display: none; }
+.step__out pre {
+  margin: 4px 0 2px;
+  padding: 9px;
+  border-radius: 7px;
+  background: #0d1216;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A small button beside a line of prose — the copy control on the connect
+   command, where a full-size button would tower over the sentence. */
+.btn--tiny {
+  padding: 1px 7px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  vertical-align: middle;
+}
+.connect__cmd { user-select: all; }
+
 .spinner {
   width: 11px;
   height: 11px;

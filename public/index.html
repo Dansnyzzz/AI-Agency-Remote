@@ -1168,10 +1168,12 @@
             eight-character code — enter it and that computer is yours from any device you sign in
             on, for good. Nothing on the internet connects inward: the computer polls outward.
           </p>
-          <ol class="steps">
-            <li>On that computer: clone this repo, <code>npm install</code>, then <code>npm start</code>.</li>
-            <li>It shows a pairing code. Enter it here or from the <strong>Computers</strong> button in the header.</li>
-          </ol>
+          <!-- Filled from script, because the third step contains this
+               deployment's own address and a hard-coded `npm start` was the
+               reason a deployed app could never be connected to a computer:
+               `npm start` points the worker at localhost, so the pairing code
+               went into a database the deployment cannot see. -->
+          <ol class="steps" id="connect-steps"></ol>
           <button class="btn btn--primary" id="open-pair" type="button">Enter a pairing code</button>
         </section>
 

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ensureLocalSecrets } from '../server/secrets.js';
+import { parseLaunchArgs, planWorkerEnv, isLocalServer } from './lib/workerLink.js';
 
 /**
  * One command, everything at once.
@@ -17,6 +18,11 @@ import { ensureLocalSecrets } from '../server/secrets.js';
  * They are independent, so running all three together is the normal case rather
  * than a special one: the local app serves you here, the worker serves the
  * deployment your phone talks to, and the tunnel exposes the local app.
+ *
+ * `npm run connect -- https://your-app.vercel.app` is the other shape: no local
+ * app at all, just this computer offering itself to a deployment. See
+ * `lib/workerLink.js` for why the address is remembered and why changing it
+ * throws the old token away.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -49,14 +55,51 @@ if (fs.existsSync(workerEnvFile)) {
   }
 }
 
-const flags = new Set(process.argv.slice(2));
-const wantTunnel = flags.has('--tunnel') || /^(1|true)$/i.test(process.env.TUNNEL || '');
-const wantServer = !flags.has('--no-server');
+let args;
+try {
+  args = parseLaunchArgs(process.argv.slice(2));
+} catch (err) {
+  console.error(`\n  ${err.message}\n`);
+  console.error('  Examples:');
+  console.error('    npm start                                      the app on this machine');
+  console.error('    npm run connect -- https://your-app.vercel.app  this machine, driven by a deployment\n');
+  process.exit(1);
+}
+
+const wantTunnel = args.tunnel || /^(1|true)$/i.test(process.env.TUNNEL || '');
+const wantServer = args.wantServer;
 const port = process.env.PORT || 5173;
 
+/**
+ * Remember where this computer was told to report.
+ *
+ * Written before anything starts, so the worker's own env-file read picks it up
+ * and so the next run needs no argument at all. `planWorkerEnv` also decides
+ * whether the stored token survives — a token is only valid on the server that
+ * minted it, and carrying one across a change of address produces a 401 and a
+ * misleading "no longer paired" message.
+ */
+let announceLink = null;
+if (args.server) {
+  const before = fs.existsSync(workerEnvFile) ? fs.readFileSync(workerEnvFile, 'utf8') : '';
+  const plan = planWorkerEnv(before, args.server);
+
+  if (plan.changed) {
+    fs.mkdirSync(path.dirname(workerEnvFile), { recursive: true });
+    fs.writeFileSync(workerEnvFile, plan.text, { mode: 0o600 });
+  }
+  workerEnv.SERVER_URL = args.server;
+  if (plan.droppedToken) {
+    delete workerEnv.WORKER_TOKEN;
+    delete process.env.WORKER_TOKEN;
+  }
+  announceLink = plan;
+}
+
 const workerToken = workerEnv.WORKER_TOKEN || process.env.WORKER_TOKEN;
-const workerServer = workerEnv.SERVER_URL || process.env.SERVER_URL || `http://localhost:${port}`;
-const remoteWorker = !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(workerServer);
+const workerServer =
+  args.server || workerEnv.SERVER_URL || process.env.SERVER_URL || `http://localhost:${port}`;
+const remoteWorker = !isLocalServer(workerServer);
 
 /**
  * The worker comes up unless you say otherwise.
@@ -71,7 +114,7 @@ const remoteWorker = !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.te
  * waits. Both are useful, neither needs explaining, and `--no-worker` is there
  * for anyone who genuinely wants the app on its own.
  */
-const wantWorker = !flags.has('--no-worker');
+const wantWorker = args.wantWorker;
 
 // ── preflight ─────────────────────────────────────────────────────────
 //
@@ -153,10 +196,40 @@ if (wantWorker) {
 if (wantTunnel) console.log('    tunnel    starting…');
 console.log('');
 
+/**
+ * Say what changed, and why, before the pairing box appears.
+ *
+ * Without this the user sees a request for a fresh code with no explanation and
+ * reasonably concludes something is broken. The token was thrown away on
+ * purpose, and one sentence is the difference between a deliberate step and an
+ * apparent fault.
+ */
+if (announceLink?.droppedToken) {
+  console.log(`  This computer was paired to ${announceLink.previous}.`);
+  console.log('  A token only works on the server that issued it, so it has been cleared.');
+  console.log('  Pair again below — it takes one code.\n');
+} else if (announceLink?.changed) {
+  console.log(`  Saved ${workerServer} to worker/.env. Future runs need no address.\n`);
+}
+
 if (!wantServer && !wantWorker) {
   console.error('  Nothing to run: --no-server, and no computer to connect.\n');
   console.error('  Add --pair to pair this machine with a deployment, or set SERVER_URL');
   console.error('  in worker/.env to point it at one.\n');
+  process.exit(1);
+}
+
+/**
+ * Pairing against a deployment that has not been named is the failure this whole
+ * change exists to remove, so it is caught here rather than ten seconds later as
+ * an invalid code. Only when there is no app on this machine to pair *with*:
+ * a plain `npm start` pairs the local worker to the local app, which is correct.
+ */
+if (!wantServer && !remoteWorker && !workerToken) {
+  console.error('  This computer has nowhere to report to.\n');
+  console.error('  Name the deployment you want it to answer to:\n');
+  console.error('    npm run connect -- https://your-app.vercel.app\n');
+  console.error('  The address is on the Computers tab of that deployment, under Settings.\n');
   process.exit(1);
 }
 

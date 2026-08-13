@@ -22,6 +22,7 @@ import {
   refreshSession,
 } from './auth.js';
 import { limit as rateLimit, forgive } from './ratelimit.js';
+import { publicUrlFor } from './util/net.js';
 import { emailBackend } from './email.js';
 import { summary as usageSummary, limitFor } from './usage.js';
 import { getPrefs, setPrefs, setApiKey, addApiKey, removeApiKey, providerStatus } from './settings.js';
@@ -66,10 +67,18 @@ import {
   listDevices,
   revokeDevice,
   setDeviceWorkspace,
+  setDeviceBrowserMode,
   localPairingCode,
 } from './devices.js';
 import { pendingAnnouncement, decideAnnouncement } from './modelNews.js';
-import { saveUpload, verifyOwned, previewOf, mediaOf, LIMITS as ATTACHMENT_LIMITS } from './attachments.js';
+import {
+  saveUpload,
+  verifyOwned,
+  previewOf,
+  mediaOf,
+  keepStepShot,
+  LIMITS as ATTACHMENT_LIMITS,
+} from './attachments.js';
 import { createDocument, extensionOf, RUNNABLE } from './office/index.js';
 import { compact as compactChat, measure as measureContext } from './compact.js';
 
@@ -365,20 +374,62 @@ export function createApp() {
         ok: true,
         account: req.workerUser.email,
         device: req.workerDevice?.name || null,
-        config: { workspace: device?.workspace ?? null },
+        config: {
+          workspace: device?.workspace ?? null,
+          // Null reads as "sandbox" on the worker, which is the right default
+          // for every computer that has never opened this setting.
+          browserMode: device?.browser_mode ?? null,
+        },
       });
     }),
   );
 
-  // Long-poll so the worker reacts in well under a second without hammering the
-  // database. Jobs are claimed for this worker's owner only, and — once an
-  // account can hold several computers — only those addressed to this one or to
-  // no one in particular.
+  /**
+   * Long-poll so the worker reacts in well under a second without hammering the
+   * database. Jobs are claimed for this worker's owner only, and — once an
+   * account can hold several computers — only those addressed to this one or to
+   * no one in particular.
+   *
+   * **How long to hold depends on whether anybody is waiting.**
+   *
+   * Holding a request open for 25 seconds is free on a machine you own, and it
+   * is the reason a tool call feels instant. On a serverless deployment it is 25
+   * seconds of billed execution — and a worker left running overnight repeats it
+   * roughly 3,400 hours a month, which is not a rounding error against a free
+   * tier, it is the whole allowance spent on an idle laptop.
+   *
+   * So an account with recent work gets the full hold, because somebody is
+   * sitting there watching. An idle account is answered immediately with a
+   * `sleepMs` the worker honours, and the function stops running in between.
+   *
+   * The cost is stated plainly rather than hidden: the *first* tool call after a
+   * quiet spell can wait up to `sleepMs` extra. Every call after it is at full
+   * speed, since by then the account counts as busy. Set WORKER_IDLE_SLEEP_MS=0
+   * to switch the behaviour off entirely.
+   */
+  const ACTIVE_WINDOW_MS = 2 * 60 * 1000;
+  const IDLE_SLEEP_MS = Math.max(
+    0,
+    Number(process.env.WORKER_IDLE_SLEEP_MS ?? (isServerless() ? 4000 : 0)) || 0,
+  );
+
   workerApi.get(
     '/jobs',
     wrap(async (req, res) => {
       const store = getStore();
       const deviceId = req.workerDevice?.id || null;
+
+      if (IDLE_SLEEP_MS > 0) {
+        const lastAt = await store.recentJobAt(req.workerUser.id).catch(() => null);
+        const busy = lastAt && Date.now() - lastAt.getTime() < ACTIVE_WINDOW_MS;
+        if (!busy) {
+          // One claim before sleeping, so a job queued in the gap is not made to
+          // wait for the sleep it just missed.
+          const job = await store.claimJob(req.workerUser.id, deviceId);
+          return res.json(job ? { job } : { job: null, sleepMs: IDLE_SLEEP_MS });
+        }
+      }
+
       const deadline = Date.now() + 25_000;
       while (Date.now() < deadline && !req.socket.destroyed) {
         const job = await store.claimJob(req.workerUser.id, deviceId);
@@ -420,10 +471,14 @@ export function createApp() {
   workerApi.post(
     '/jobs/:id/result',
     wrap(async (req, res) => {
-      const { output, error } = req.body || {};
+      const { output, error, shot } = req.body || {};
       await getStore().completeJob(req.workerUser.id, req.params.id, {
         status: error ? 'error' : 'done',
-        result: error ? { error } : { output },
+        // The picture is stored as an attachment and referenced by id — never
+        // written into this row. A browsing session is dozens of these, and
+        // inlining them would put megabytes of base64 into the transcript that
+        // gets read back on every reload.
+        result: error ? { error } : { output, ...(shot ? { shot: await keepStepShot(req.workerUser.id, shot) } : {}) },
       });
       res.json({ ok: true });
     }),
@@ -498,6 +553,9 @@ export function createApp() {
           storage: store.kind,
           serverless: isServerless(),
           localMachine: !!store.local,
+          // So the Computers tab can print the one command that actually works
+          // on this deployment, with its address already filled in.
+          publicUrl: publicUrlFor(req),
         },
       });
     }),
@@ -918,6 +976,25 @@ export function createApp() {
       try {
         const device = await setDeviceWorkspace(req.user.id, req.params.id, req.body?.path);
         res.json({ device: { id: device.id, name: device.name, wanted: device.workspace } });
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    }),
+  );
+
+  /**
+   * Which browser this computer drives.
+   *
+   * Same channel as the workspace above — stored here, collected by the machine
+   * on its next heartbeat — because there is no inbound connection to push it
+   * down and there does not need to be.
+   */
+  api.put(
+    '/devices/:id/browser',
+    wrap(async (req, res) => {
+      try {
+        const device = await setDeviceBrowserMode(req.user.id, req.params.id, req.body?.mode);
+        res.json({ device: { id: device.id, name: device.name, browserMode: device.browser_mode } });
       } catch (err) {
         res.status(400).json({ error: err.message });
       }

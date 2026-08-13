@@ -42,6 +42,58 @@ export const vi = {
   // Danh sách việc do `update_plan` vẽ trong một tin nhắn, và số đếm cạnh cùng
   // các bước đó ở thanh tiến trình.
   'chat.plan': 'Kế hoạch',
+
+  /* ── một chuỗi thao tác ─────────────────────────────────────────── */
+  'steps.browser': 'Đã dùng trình duyệt',
+  'steps.desktop': 'Đã dùng máy tính',
+  'steps.count': '{n} bước',
+  'step.output': 'Kết quả',
+  'step.seconds': '{n} giây',
+  'step.browser.open': 'Mở',
+  'step.browser.tabs': 'Xem các tab',
+  'step.browser.switchTab': 'Chuyển sang tab',
+  'step.browser.closeTab': 'Đóng tab',
+  'step.browser.look': 'Đọc trang',
+  'step.browser.click': 'Bấm',
+  'step.browser.type': 'Gõ',
+  'step.browser.press': 'Nhấn phím',
+  'step.browser.back': 'Quay lại',
+  'step.browser.forward': 'Đi tiếp',
+  'step.browser.select': 'Chọn',
+  'step.browser.hover': 'Rê chuột lên',
+  'step.browser.scroll': 'Cuộn',
+  'step.browser.wait': 'Chờ',
+  'step.browser.close': 'Đóng trình duyệt',
+  'step.desktop.windows': 'Xem các cửa sổ',
+  'step.desktop.launch': 'Mở',
+  'step.desktop.look': 'Nhìn màn hình',
+  'step.desktop.focus': 'Chuyển sang',
+  'step.desktop.click': 'Bấm',
+  'step.desktop.type': 'Gõ',
+  'step.desktop.key': 'Nhấn phím',
+  'step.desktop.scroll': 'Cuộn',
+  'step.desktop.wait': 'Chờ',
+  'step.desktop.close': 'Đóng',
+
+  /* ── kết nối một máy tính ────────────────────────────────────────── */
+  'worker.copy': 'Sao chép',
+  'worker.copied': 'Đã sao chép',
+
+  /* ── trình duyệt mà máy tính đó điều khiển ───────────────────────── */
+  'browser.label': 'Trình duyệt',
+  'browser.sandbox': 'Sandbox — trình duyệt sạch, chưa đăng nhập gì',
+  'browser.profile': 'Hồ sơ riêng — giữ nguyên đăng nhập cho lần sau',
+  'browser.attach': 'Chrome của bạn — chính cái bạn đang mở',
+  'browser.sandboxHint':
+    'Một trình duyệt mới với hồ sơ trắng. Không có gì của bạn trong đó, và không lưu lại gì.',
+  'browser.profileHint':
+    'Một hồ sơ riêng nằm trên máy đó. Đăng nhập một lần qua khung xem trực tiếp là nhớ mãi. Cookie là thật, và nó nằm trên máy đó.',
+  'browser.attachHint':
+    'Điều khiển đúng Chrome bạn đang mở, kèm mọi tài khoản bạn đang đăng nhập. Chrome phải được khởi động kèm --remote-debugging-port={port}.',
+  'browser.attachMissing':
+    'Không có gì đang lắng nghe ở cổng {port} trên máy đó. Thoát hẳn Chrome, rồi mở lại kèm --remote-debugging-port={port} — hoặc chọn trình duyệt khác ở đây.',
+  'browser.pending': 'Đang chờ máy đó nhận thay đổi.',
+  'browser.saved': 'Đã lưu. Máy đó sẽ chuyển trong khoảng mười lăm giây.',
   'chat.planCount': '{done}/{total}',
 
   // Tin nhắn gõ trong lúc trợ lý còn đang chạy, chờ phía trên khung soạn cho

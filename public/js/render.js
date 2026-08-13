@@ -90,6 +90,119 @@ export function summariseToolInput(name, input = {}) {
   }
 }
 
+/**
+ * A tool call, in words somebody would use.
+ *
+ * `summariseToolInput` above answers "what were the arguments"; this answers
+ * "what happened", which is a different question and the one anybody watching is
+ * actually asking. A run of ten browser calls used to read as ten lines of
+ * `browser_click {"ref":"7"}` — technically complete, and unreadable at the
+ * speed the steps go past.
+ *
+ * Anything not listed falls through to the old behaviour, so a tool added later
+ * is plain rather than broken.
+ */
+const STEP_VERBS = {
+  browser_open: 'step.browser.open',
+  browser_tabs: 'step.browser.tabs',
+  browser_switch: 'step.browser.switchTab',
+  browser_close_tab: 'step.browser.closeTab',
+  browser_look: 'step.browser.look',
+  browser_click: 'step.browser.click',
+  browser_type: 'step.browser.type',
+  browser_press: 'step.browser.press',
+  browser_back: 'step.browser.back',
+  browser_forward: 'step.browser.forward',
+  browser_select: 'step.browser.select',
+  browser_hover: 'step.browser.hover',
+  browser_scroll: 'step.browser.scroll',
+  browser_wait: 'step.browser.wait',
+  browser_close: 'step.browser.close',
+  desktop_windows: 'step.desktop.windows',
+  desktop_launch: 'step.desktop.launch',
+  desktop_look: 'step.desktop.look',
+  desktop_focus: 'step.desktop.focus',
+  desktop_click: 'step.desktop.click',
+  desktop_type: 'step.desktop.type',
+  desktop_key: 'step.desktop.key',
+  desktop_scroll: 'step.desktop.scroll',
+  desktop_wait: 'step.desktop.wait',
+  desktop_close: 'step.desktop.close',
+};
+
+/** A URL as somebody would say it aloud: the host, and the path if it says anything. */
+function readableUrl(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    const host = url.host.replace(/^www\./, '');
+    const tail = url.pathname.replace(/\/$/, '');
+    return tail && tail !== '' ? `${host}${tail}` : host;
+  } catch {
+    return text;
+  }
+}
+
+const clip = (text, max = 60) => {
+  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+};
+
+export function describeStep(name, input = {}) {
+  const key = STEP_VERBS[name];
+  if (!key) return { verb: name, detail: summariseToolInput(name, input) };
+
+  const seconds = (n) => t('step.seconds').replace('{n}', String(Number(n) || 0));
+
+  switch (name) {
+    case 'browser_open':
+      return { verb: t(key), detail: readableUrl(input.url) };
+    case 'browser_click':
+    case 'browser_hover':
+      // The model's own description of what it is clicking beats a reference
+      // number, which means nothing to the person reading.
+      return { verb: t(key), detail: clip(input.description || (input.ref != null ? `[${input.ref}]` : '')) };
+    case 'browser_type':
+    case 'desktop_type':
+      return { verb: t(key), detail: clip(input.text, 48) };
+    case 'browser_press':
+    case 'desktop_key':
+      return { verb: t(key), detail: clip(input.key) };
+    case 'browser_select':
+      return { verb: t(key), detail: clip(input.value) };
+    case 'browser_scroll':
+    case 'desktop_scroll':
+      return { verb: t(key), detail: clip(input.direction || 'down') };
+    case 'browser_wait':
+    case 'desktop_wait':
+      return { verb: t(key), detail: seconds(input.seconds ?? 3) };
+    case 'browser_switch':
+    case 'browser_close_tab':
+      return { verb: t(key), detail: input.tab != null ? String(input.tab) : '' };
+    case 'desktop_launch':
+      return { verb: t(key), detail: clip(input.app || input.path || '') };
+    case 'desktop_focus':
+    case 'desktop_close':
+      return { verb: t(key), detail: clip(input.title || input.window || '') };
+    default:
+      return { verb: t(key), detail: '' };
+  }
+}
+
+/**
+ * Which run of steps this call belongs to, or null for "on its own".
+ *
+ * Only the two families that come in long runs are grouped. Grouping everything
+ * would fold a single `read_file` into a card you have to open to see, which
+ * costs a click to learn something that was already on screen.
+ */
+export function stepFamily(name) {
+  if (/^browser_/.test(name)) return 'browser';
+  if (/^desktop_/.test(name)) return 'desktop';
+  return null;
+}
+
 /** A file's extension, upper-cased, as the stand-in for a thumbnail. */
 const extensionBadge = (name) => String(name || 'file').split('.').pop().slice(0, 4).toUpperCase();
 
@@ -315,6 +428,141 @@ export function assistantMessage() {
   let prose = null;
   let rawText = '';
 
+  /**
+   * A run of steps in one family, drawn as a single card.
+   *
+   * Held open while it is being added to, so you watch the work happen, and
+   * collapsed the moment the run ends — at which point it is history, and eight
+   * expanded browser actions between you and the answer are eight things to
+   * scroll past. `closeGroup` is what "the run ended" means, and it is called
+   * from exactly two places: prose arriving, and a step of a different family.
+   */
+  let group = null;
+
+  function closeGroup() {
+    if (!group) return;
+    group.node.querySelector('.spinner')?.remove();
+    group.node.open = false;
+    group = null;
+  }
+
+  /** Redraw the one line somebody reads without opening the card. */
+  function paintGroupSummary() {
+    if (!group) return;
+    const label = group.family === 'desktop' ? t('steps.desktop') : t('steps.browser');
+    const count = t('steps.count').replace('{n}', String(group.count));
+    group.title.textContent = label;
+    group.tally.textContent = count;
+    if (group.failed) group.node.classList.add('steps--error');
+  }
+
+  /**
+   * One step inside a run.
+   *
+   * A row rather than a card: the verb, what it acted on, how long it took, and
+   * — once it finishes — a thumbnail of what the screen looked like. The raw
+   * tool output is still there, behind a disclosure, because when something goes
+   * wrong that text is the only thing that explains it.
+   */
+  function startStep(call, family) {
+    const run = groupFor(family);
+    run.count += 1;
+    paintGroupSummary();
+
+    const { verb, detail } = describeStep(call.name, call.input);
+
+    const item = el('li', 'step');
+    const mark = el('span', 'step__mark', '<span class="spinner"></span>');
+    const label = el('span', 'step__label');
+    const verbNode = el('span', 'step__verb');
+    verbNode.textContent = verb;
+    label.append(verbNode);
+    if (detail) {
+      const detailNode = el('span', 'step__detail');
+      detailNode.textContent = detail;
+      label.append(detailNode);
+    }
+    const time = el('span', 'step__time');
+    item.append(mark, label, time);
+    run.list.append(item);
+
+    return {
+      complete(result) {
+        item.classList.toggle('step--error', !!result.isError);
+        mark.innerHTML = '';
+        mark.textContent = result.isError ? '✗' : '✓';
+        if (result.ms != null) time.textContent = ms(result.ms);
+        if (result.isError) {
+          run.failed = true;
+          paintGroupSummary();
+        }
+
+        /**
+         * What the screen looked like when this step finished.
+         *
+         * The single most useful thing in the whole card, and the reason it is
+         * a thumbnail rather than a full frame: eight full-width screenshots
+         * turn a run into a scroll, while eight thumbnails read as a strip you
+         * can take in at once. Clicking one opens it properly.
+         */
+        if (result.shot?.id) {
+          const shot = el('button', 'step__shot');
+          shot.type = 'button';
+          shot.dataset.file = result.shot.id;
+          const img = el('img');
+          img.src = `/api/attachments/${result.shot.id}`;
+          img.alt = `${verb}${detail ? ` — ${detail}` : ''}`;
+          img.loading = 'lazy';
+          shot.append(img);
+          item.append(shot);
+        }
+
+        // Errors are opened, successes are not. A failed step is the one thing
+        // in the run somebody needs to read, and making them find and click it
+        // is making them work for information the interface already has.
+        const out = el('details', 'step__out');
+        out.open = !!result.isError;
+        out.append(el('summary', null, escapeHtml(t('step.output'))));
+        const pre = el('pre');
+        pre.textContent = result.content || '(no output)';
+        out.append(pre);
+        item.append(out);
+
+        if (result.file?.id) {
+          const card = fileCard(result.file);
+          const existing = [...body.querySelectorAll('.filecard')].find(
+            (node) => node.dataset.file === result.file.id,
+          );
+          if (existing) existing.replaceWith(card);
+          else body.append(card);
+        }
+        if (result.widget?.markup) body.append(widgetFrame(result.widget));
+      },
+    };
+  }
+
+  /** The card this call belongs in, opening a new one if the run just started. */
+  function groupFor(family) {
+    if (group && group.family === family) return group;
+    closeGroup();
+
+    const node = el('details', 'block steps');
+    node.open = true;
+    const summary = el('summary');
+    summary.innerHTML = '<span class="spinner"></span>';
+    const title = el('span', 'steps__title');
+    const tally = el('span', 'steps__tally');
+    summary.append(title, tally);
+    node.append(summary);
+
+    const list = el('ol', 'steps__list');
+    node.append(list);
+    body.append(node);
+
+    group = { family, node, list, title, tally, count: 0, failed: false };
+    return group;
+  }
+
   const api = {
     node: wrap,
 
@@ -339,6 +587,10 @@ export function assistantMessage() {
     appendText(delta) {
       rawText += delta;
       if (!prose) {
+        // Prose is the natural boundary between two pieces of work: the
+        // assistant stopped acting and said something. Folding the steps either
+        // side of that into one card would claim a structure the turn does not have.
+        closeGroup();
         prose = el('div', 'prose');
         body.append(prose);
       }
@@ -384,6 +636,13 @@ export function assistantMessage() {
 
     /** Start a collapsed card for a tool call; returns a handle to complete it. */
     startTool(call) {
+      const family = stepFamily(call.name);
+      if (family) return startStep(call, family);
+
+      // A call that is not part of a run ends whatever run was in progress:
+      // `read_file` between two browser actions really is a change of activity.
+      closeGroup();
+
       const block = el('details', 'block tool');
       const summary = el('summary');
       summary.innerHTML =
@@ -450,7 +709,19 @@ export function assistantMessage() {
         handle.complete(result || { content: '(no result recorded)', isError: false });
       }
       if (message.text) api.appendText(message.text);
+      api.finish();
       return api;
+    },
+
+    /**
+     * The turn is over.
+     *
+     * A run of steps that is never closed keeps its spinner and stays expanded
+     * for the rest of the conversation — a turn that finished an hour ago still
+     * drawn as though it were working.
+     */
+    finish() {
+      closeGroup();
     },
   };
 

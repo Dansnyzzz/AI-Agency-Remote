@@ -23,6 +23,11 @@ process.env.SESSION_SECRET ||= 'devices-test-session-secret';
 // server — gets the in-process tools and never consults a paired device at all,
 // which is correct behaviour and the wrong thing to be testing here.
 process.env.WORKER_MODE = 'remote';
+// Ask for the idle behaviour explicitly. It is off by default on a local server
+// — where holding a connection costs nothing — and on by default on a
+// deployment, where it is billed execution time. Naming it here tests the
+// mechanism without having to pretend to be Vercel.
+process.env.WORKER_IDLE_SLEEP_MS = '1500';
 process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-devices-test-${process.pid}`);
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
@@ -409,6 +414,152 @@ section('the working folder is changed from the app');
 
   const theirs = await bob.call('PUT', `/api/devices/${laptopId}/workspace`, { path: 'D:\\mine' });
   check("another account cannot move somebody else's computer", theirs.status === 400, `got ${theirs.status}`);
+}
+
+// ── which browser a computer drives ─────────────────────────────────
+//
+// Three genuinely different browsers — a clean sandbox, a profile that stays
+// signed in, and the person's own running Chrome — chosen per machine and
+// carried down the one channel that exists, the heartbeat reply.
+section('the browser is chosen per computer');
+{
+  const auth = { Authorization: `Bearer ${laptopToken}` };
+
+  const before = (await alice.call('GET', '/api/devices')).json.devices[0];
+  check('a fresh device has made no choice', before.browserMode === null, String(before.browserMode));
+
+  // Null has to read as "sandbox" on the machine. Every computer paired before
+  // this setting existed has null, and they must not all lose their browser.
+  const first = await anon.call('POST', '/api/worker/heartbeat', { info: { platform: 'win32 x64' } }, auth);
+  check(
+    'and is told nothing, which the worker reads as the sandbox',
+    first.json?.config?.browserMode === null,
+    JSON.stringify(first.json?.config),
+  );
+
+  const nonsense = await alice.call('PUT', `/api/devices/${laptopId}/browser`, { mode: 'firefox' });
+  check('a browser that does not exist is refused', nonsense.status === 400, `got ${nonsense.status}`);
+  // Refused at the API rather than stored and ignored on the machine: a setting
+  // that saves and then does nothing is worse than one that says no.
+  check('and says so', /not a browser/i.test(nonsense.json?.error || ''), nonsense.json?.error);
+
+  for (const mode of ['profile', 'attach', 'sandbox']) {
+    const set = await alice.call('PUT', `/api/devices/${laptopId}/browser`, { mode });
+    check(`"${mode}" is accepted`, set.status === 200, JSON.stringify(set.json));
+    check('and remembered', set.json?.device?.browserMode === mode, set.json?.device?.browserMode);
+
+    const beat = await anon.call('POST', '/api/worker/heartbeat', { info: { platform: 'win32 x64' } }, auth);
+    check(
+      'and reaches the machine on its next heartbeat',
+      beat.json?.config?.browserMode === mode,
+      JSON.stringify(beat.json?.config),
+    );
+  }
+
+  // What the machine can actually offer, so the picker can say "nothing is
+  // listening on that port" where the choice is made rather than failing later
+  // inside a conversation.
+  await anon.call('POST', '/api/worker/heartbeat', {
+    info: { platform: 'win32 x64', browser: { mode: 'sandbox', channels: ['chrome'], attachable: false, cdpPort: 9222 } },
+  }, auth);
+  const reported = (await alice.call('GET', '/api/devices')).json.devices[0];
+  check('the machine reports what it has', reported.browser?.channels?.[0] === 'chrome', JSON.stringify(reported.browser));
+  check('including whether anything is attachable', reported.browser?.attachable === false, JSON.stringify(reported.browser));
+  // Chosen and adopted are different facts, exactly as with the workspace: the
+  // app must not draw a machine as having switched when it has not.
+  check('and what it is really running', reported.browser?.mode === 'sandbox', reported.browser?.mode);
+
+  const stolen = await bob.call('PUT', `/api/devices/${laptopId}/browser`, { mode: 'attach' });
+  check("another account cannot change somebody else's browser", stolen.status === 400, `got ${stolen.status}`);
+}
+
+// ── how long the job poll is held open ──────────────────────────────
+//
+// The long poll is what makes a tool call feel instant, and on a deployment it
+// is also billed execution time — a worker left running overnight would spend a
+// whole free tier waiting for nothing. So an idle account is answered at once
+// and told how long to sleep; a busy one gets the full hold.
+section('the job poll holds only while somebody is waiting');
+{
+  // A fresh account with no history, because "has this account had work
+  // recently" is the whole question — and Alice has been queueing jobs
+  // throughout this file, which would make her permanently busy.
+  const cara = jar();
+  await cara.call('POST', '/api/register', {
+    email: 'cara@example.com',
+    password: 'caras-long-enough-password',
+    name: 'Cara',
+  });
+  const started = await anon.call('POST', '/api/pair/start', { name: "Cara's box" });
+  await cara.call('POST', '/api/devices/pair', { code: started.json.code });
+  const collected = await anon.call('GET', `/api/pair/poll?id=${started.json.id}`);
+  const auth = { Authorization: `Bearer ${collected.json.token}` };
+  const caraDeviceId = collected.json.deviceId;
+
+  const at = Date.now();
+  const idle = await anon.call('GET', '/api/worker/jobs', null, auth);
+  const idleMs = Date.now() - at;
+
+  check('an idle account is answered immediately', idleMs < 3000, `${idleMs}ms`);
+  check('with no job', idle.json?.job === null, JSON.stringify(idle.json));
+  check('and told how long to sleep', idle.json?.sleepMs === 1500, JSON.stringify(idle.json));
+
+  // Queue something, and the account is busy: the hold comes back, because now
+  // there is a person on the other end watching a spinner.
+  const caraId = (await store.getUserByEmail('cara@example.com')).id;
+  await store.enqueueJob(caraId, {
+    id: 'job-poll-test',
+    chatId: null,
+    tool: 'read_file',
+    input: { path: 'x.txt' },
+    deviceId: caraDeviceId,
+  });
+
+  const claimed = await anon.call('GET', '/api/worker/jobs', null, auth);
+  check('a queued job is handed over', claimed.json?.job?.id === 'job-poll-test', JSON.stringify(claimed.json));
+  check('and no sleep is suggested alongside it', claimed.json?.sleepMs === undefined, JSON.stringify(claimed.json));
+
+  // Recent work means the next poll is a real long poll rather than an instant
+  // "go away". Not waited out in full here — the point is only that it does not
+  // come back at once with a sleep.
+  const busy = await Promise.race([
+    anon.call('GET', '/api/worker/jobs', null, auth),
+    new Promise((r) => setTimeout(() => r({ heldOpen: true }), 2500)),
+  ]);
+  check('and the next poll is held open rather than deflected', busy.heldOpen === true, JSON.stringify(busy));
+
+  const noToken = await anon.call('GET', '/api/worker/jobs');
+  check('the queue still needs a device token', noToken.status === 401, `got ${noToken.status}`);
+}
+
+// ── the picture a step comes back with ──────────────────────────────
+section('a step thumbnail is stored, not inlined');
+{
+  const { keepStepShot } = await import('../server/attachments.js');
+
+  // A 1×1 JPEG is enough: what is being tested is the plumbing and the limits,
+  // not the encoder.
+  const tiny =
+    '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
+
+  const aliceUserId = (await store.getUserByEmail('alice@example.com')).id;
+  const kept = await keepStepShot(aliceUserId, { mime: 'image/jpeg', data: tiny });
+  check('a thumbnail is kept', !!kept?.id, JSON.stringify(kept));
+  // Only the id travels on. Inlining base64 would put megabytes into every
+  // transcript that gets read back on load.
+  check('and only its id travels on', Object.keys(kept).join(',') === 'id', Object.keys(kept).join(','));
+
+  const fetched = await alice.call('GET', `/api/attachments/${kept.id}`);
+  check('it is fetchable by its owner', fetched.status === 200, `got ${fetched.status}`);
+  const notTheirs = await bob.call('GET', `/api/attachments/${kept.id}`);
+  check('and by nobody else', notTheirs.status === 404 || notTheirs.status === 403, `got ${notTheirs.status}`);
+
+  const huge = await keepStepShot(aliceUserId, { mime: 'image/jpeg', data: 'A'.repeat(200_000) });
+  check('an oversized one is dropped rather than stored', huge === null, JSON.stringify(huge));
+  // Dropped, never thrown: the step itself succeeded, and failing a completed
+  // browser action over a missing illustration would make the assistant redo
+  // work it has already done.
+  check('and a missing one is not an error', (await keepStepShot(aliceUserId, null)) === null);
 }
 
 section('set_workspace asks first');

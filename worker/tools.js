@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveInWorkspace, workspace, moveWorkspace, rel, fullDiskAccess } from './paths.js';
-import { BROWSER_IMPLEMENTATIONS, browserIsOpen, renderPdf, renderImage } from './browser.js';
+import { BROWSER_IMPLEMENTATIONS, browserIsOpen, browserSnapshot, renderPdf, renderImage } from './browser.js';
 import { BACKGROUND_IMPLEMENTATIONS } from './background.js';
 import { safeFetch } from '../server/util/safeFetch.js';
 import { DESKTOP_IMPLEMENTATIONS, desktopAllowed } from './desktop.js';
@@ -1056,6 +1056,11 @@ export function workerInfo() {
     shell: process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/sh',
     hostname: process.env.COMPUTERNAME || process.env.HOSTNAME || 'unknown',
     browserOpen: browserIsOpen(),
+    // Which browser the assistant drives here, and what this machine could
+    // offer instead. Reported so the picker in the app can say "Chrome is not
+    // installed" or "nothing is listening on the debugging port" rather than
+    // showing a choice that will fail the moment it is used.
+    browser: browserSnapshot(),
     // Whether this machine has agreed to be driven directly. The server uses it
     // to decide whether the desktop tools exist at all for this account.
     desktop: desktopAllowed(),

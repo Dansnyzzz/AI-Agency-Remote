@@ -18,26 +18,172 @@
 const VIEWPORT = { width: 1280, height: 800 };
 const NAV_TIMEOUT = 45_000;
 
+import net from 'node:net';
+import fs from 'node:fs';
+import path from 'node:path';
 import { claim, publishFrame, release, watcherPreference } from './screen.js';
+import { dataDir } from './paths.js';
 
 let browser = null;
 let context = null;
 let page = null;
 let screencast = null;
 
-export const browserIsOpen = () => !!page && !page.isClosed();
+/**
+ * Which browser the assistant drives — chosen per computer, from the app.
+ *
+ * `sandbox`  A fresh Chrome with an empty profile. No cookies, no logins,
+ *            nothing of yours. The safe default, and useless for anything
+ *            behind a sign-in wall.
+ *
+ * `profile`  A persistent profile of the worker's own, kept on this machine.
+ *            You sign in once — through the live panel, watching it happen —
+ *            and it is still signed in next week.
+ *
+ *            Note what this is *not*: your own Chrome profile directory.
+ *            Chrome holds an exclusive lock on `User Data` while it is running,
+ *            so pointing Playwright at it fails whenever your browser is open,
+ *            which is nearly always, and the error says nothing about why. A
+ *            separate directory gives almost all of the benefit and cannot
+ *            corrupt the profile you actually browse with.
+ *
+ * `attach`   Your real Chrome, already running, already signed in to
+ *            everything — reached over its remote-debugging port. This is the
+ *            closest thing here to an extension driving the browser you use,
+ *            and the price is that Chrome has to have been started with
+ *            `--remote-debugging-port`.
+ */
+export const BROWSER_MODES = ['sandbox', 'profile', 'attach'];
 
-async function launch() {
+const DEFAULT_MODE = BROWSER_MODES.includes(process.env.BROWSER_MODE || '')
+  ? process.env.BROWSER_MODE
+  : 'sandbox';
+
+let mode = DEFAULT_MODE;
+
+/** Where a persistent profile lives. One per machine, beside the other worker state. */
+const profileDir = () => path.join(dataDir(), 'browser-profile');
+
+/** The debugging endpoint `attach` dials. */
+const CDP_PORT = Number(process.env.BROWSER_CDP_PORT) || 9222;
+const cdpEndpoint = () => process.env.BROWSER_CDP_URL || `http://127.0.0.1:${CDP_PORT}`;
+
+export const browserMode = () => mode;
+
+/**
+ * Adopt a mode chosen in the app.
+ *
+ * The browser in hand is closed rather than kept, and that is the point: a
+ * session opened as a sandbox is *not* the signed-in profile somebody just
+ * asked for, and carrying on with it would quietly do the work in the wrong
+ * browser while the interface said otherwise. The next tool call reopens in the
+ * new mode.
+ */
+export async function setBrowserMode(next) {
+  const wanted = BROWSER_MODES.includes(next) ? next : 'sandbox';
+  if (wanted === mode) return mode;
+  mode = wanted;
+  await closeBrowser().catch(() => {});
+  // Re-probe: "is a browser listening on the debugging port" is exactly the
+  // question somebody has just made relevant by choosing `attach`, and the
+  // answer they need is the one from now, not from start-up.
+  await refreshBrowserCapabilities().catch(() => {});
+  return mode;
+}
+
+/**
+ * Is there a live context to act in?
+ *
+ * Not `browser?.isConnected()`, which was the old test and is wrong for two of
+ * the three modes: a persistent context has no `Browser` object at all
+ * (`launchPersistentContext` returns the context itself), so that test reports
+ * "nothing is open" while tabs sit open in front of you.
+ */
+const contextIsLive = () => !!context && (mode === 'profile' || !!browser?.isConnected());
+
+export const browserIsOpen = () => !!page && !page.isClosed() && contextIsLive();
+
+/** Whether something is listening on a TCP port here, without connecting to it twice. */
+function portOpen(port, host = '127.0.0.1', timeoutMs = 350) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const done = (answer) => {
+      socket.destroy();
+      resolve(answer);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, host);
+  });
+}
+
+/**
+ * What this machine can offer, for the picker in the app.
+ *
+ * Probed on demand rather than on every heartbeat: the answer changes when
+ * somebody installs a browser or restarts Chrome with a debugging port, which is
+ * rare, and opening a socket every fifteen seconds to re-learn a constant is
+ * waste with a battery cost.
+ */
+let capabilities = { channels: [], profileExists: false, attachable: false, cdpPort: CDP_PORT };
+
+/**
+ * The last probe's answer, without doing another one.
+ *
+ * `workerInfo()` is synchronous and runs on every fifteen-second heartbeat, so
+ * it cannot open a socket — and should not: whether Chrome is installed is a
+ * constant, and whether a debugging port is open changes when somebody restarts
+ * their browser, not between heartbeats.
+ */
+export const browserSnapshot = () => ({ ...capabilities, mode });
+
+/** Probe again. Called at startup and whenever the chosen mode changes. */
+export async function refreshBrowserCapabilities() {
+  capabilities = await browserCapabilities().catch(() => capabilities);
+  return browserSnapshot();
+}
+
+export async function browserCapabilities() {
   const { chromium } = await import('playwright-core');
 
-  // Use a browser the user already has rather than downloading 400MB. Chrome
-  // first, then Edge, then whatever Playwright bundled if someone installed it.
-  const attempts = [
-    { channel: 'chrome' },
-    { channel: 'msedge' },
-    {},
-  ];
+  const channels = [];
+  for (const channel of ['chrome', 'msedge']) {
+    try {
+      // `executablePath` throws for a channel that is not installed, and
+      // answers without launching anything for one that is.
+      if (chromium.executablePath({ channel })) channels.push(channel);
+    } catch {
+      /* not installed */
+    }
+  }
 
+  let profileExists = false;
+  try {
+    profileExists = fs.existsSync(profileDir());
+  } catch {
+    /* an unreadable data dir is the same as no profile for this purpose */
+  }
+
+  return {
+    mode,
+    channels,
+    profileExists,
+    attachable: await portOpen(CDP_PORT),
+    cdpPort: CDP_PORT,
+  };
+}
+
+/**
+ * The flags every mode wants, in one place.
+ *
+ * Shared rather than duplicated because `launch` and `launchPersistentContext`
+ * take the same options, and a window that is parked off-screen in one mode and
+ * on top of your work in the other is the kind of difference nobody can explain
+ * afterwards.
+ */
+function launchOptions() {
   /**
    * Headed by default, and unmuted.
    *
@@ -83,17 +229,117 @@ async function launch() {
     args.push(`--window-position=${-VIEWPORT.width - 400},0`, `--window-size=${VIEWPORT.width},${VIEWPORT.height}`);
   }
 
+  return { headless, args };
+}
+
+const USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+/**
+ * Use a browser the user already has rather than downloading 400MB. Chrome
+ * first, then Edge, then whatever Playwright bundled if someone installed it.
+ */
+const CHANNELS = [{ channel: 'chrome' }, { channel: 'msedge' }, {}];
+
+const noBrowser = (err) =>
+  new Error(
+    `Could not start a browser. Install Google Chrome or Microsoft Edge. (${err?.message?.split('\n')[0]})`,
+  );
+
+/** `sandbox` — a fresh browser with nothing of yours in it. */
+async function openSandbox() {
+  const { chromium } = await import('playwright-core');
+  const { headless, args } = launchOptions();
+
   let lastError;
-  for (const options of attempts) {
+  for (const options of CHANNELS) {
     try {
-      return await chromium.launch({ ...options, headless, args });
+      browser = await chromium.launch({ ...options, headless, args });
+      context = await browser.newContext({ viewport: VIEWPORT, userAgent: USER_AGENT });
+      return context;
     } catch (err) {
       lastError = err;
     }
   }
-  throw new Error(
-    `Could not start a browser. Install Google Chrome or Microsoft Edge. (${lastError?.message?.split('\n')[0]})`,
-  );
+  throw noBrowser(lastError);
+}
+
+/**
+ * `profile` — a browser of the worker's own that stays signed in.
+ *
+ * `launchPersistentContext` returns the **context**, not a browser: there is no
+ * `Browser` object to ask, which is why `contextIsLive` exists rather than the
+ * `browser?.isConnected()` test this file used everywhere before.
+ *
+ * The viewport is set to null so the page fills the real window; a persistent
+ * profile is one somebody signs into by hand through the live panel, and a page
+ * letterboxed inside its own window is awkward to use that way.
+ */
+async function openProfile() {
+  const { chromium } = await import('playwright-core');
+  const { headless, args } = launchOptions();
+  const dir = profileDir();
+  fs.mkdirSync(dir, { recursive: true });
+
+  let lastError;
+  for (const options of CHANNELS) {
+    try {
+      browser = null;
+      context = await chromium.launchPersistentContext(dir, {
+        ...options,
+        headless,
+        args,
+        viewport: VIEWPORT,
+        userAgent: USER_AGENT,
+      });
+      return context;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw noBrowser(lastError);
+}
+
+/**
+ * `attach` — your own Chrome, already running and already signed in.
+ *
+ * Three things here would each break somebody's browser if done the obvious way:
+ *
+ *   **No `newContext()`.** On a CDP connection that opens an *incognito* context
+ *   — no cookies, no sessions — which throws away the only reason to attach.
+ *   The existing context is used instead.
+ *
+ *   **No `newPage()` into a fresh context**, for the same reason.
+ *
+ *   **Nothing is closed on the way out.** See `closeBrowser`: these are the
+ *   user's tabs and the user's browser, and this code borrowed them.
+ */
+async function openAttached() {
+  const { chromium } = await import('playwright-core');
+  const endpoint = cdpEndpoint();
+
+  try {
+    browser = await chromium.connectOverCDP(endpoint);
+  } catch (err) {
+    throw new Error(
+      `No browser is listening on ${endpoint}. Start Chrome with --remote-debugging-port=${CDP_PORT} ` +
+        `(quit it completely first, or the flag is ignored), or switch this computer to the ` +
+        `"profile" or "sandbox" browser in Settings → Computers. (${err?.message?.split('\n')[0]})`,
+    );
+  }
+
+  const existing = browser.contexts();
+  if (!existing.length) {
+    // A Chrome with a debugging port but no context is one that is shutting
+    // down. Say so, rather than opening an incognito window and calling it
+    // the user's browser.
+    await browser.close().catch(() => {});
+    browser = null;
+    throw new Error(`Chrome at ${endpoint} has no open window to work in. Open a tab and try again.`);
+  }
+
+  context = existing[0];
+  return context;
 }
 
 /**
@@ -105,20 +351,41 @@ async function launch() {
  * music was playing used to navigate the only tab there was, killing the audio.
  */
 async function ensureContext() {
-  if (context && browser?.isConnected()) return context;
+  if (contextIsLive()) return context;
 
-  if (!browser || !browser.isConnected()) browser = await launch();
-  context = await browser.newContext({
-    viewport: VIEWPORT,
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  });
+  context = null;
+  browser = null;
+
+  if (mode === 'profile') await openProfile();
+  else if (mode === 'attach') await openAttached();
+  else await openSandbox();
 
   // A page opened by the site itself — target="_blank", window.open — is a tab
   // the user would see appear, so treat it as one and follow it.
   context.on('page', (opened) => {
     opened.setDefaultTimeout(20_000);
   });
+
+  /**
+   * Adopt a tab that is already there rather than opening another one.
+   *
+   * Both non-sandbox modes start with pages in hand, for different reasons, and
+   * both were leaving a stray tab behind without this.
+   *
+   *   `attach`   the person's own tabs, and acting on one of them is the entire
+   *              point — opening a new window in front of what they were
+   *              reading is the opposite of what was asked for.
+   *
+   *   `profile`  a persistent context always opens with one `about:blank`. The
+   *              first `browser_open` would make a second tab and leave the
+   *              blank one sitting in `browser_tabs` forever, where the model
+   *              has to reason about a tab that means nothing.
+   */
+  if (mode !== 'sandbox' && !browserIsOpen()) {
+    const open = context.pages().filter((p) => !p.isClosed());
+    if (open.length) await focusPage(open[0]);
+  }
+
   return context;
 }
 
@@ -159,7 +426,7 @@ async function focusPage(next) {
 
 /** Every open tab, in the order Chrome has them. */
 function tabs() {
-  if (!context || !browser?.isConnected()) return [];
+  if (!contextIsLive()) return [];
   return context.pages().filter((p) => !p.isClosed());
 }
 
@@ -183,22 +450,48 @@ function tabSummary() {
   });
 }
 
+/**
+ * Let go of the browser.
+ *
+ * **In `attach` mode this must not close anything.** The context holds the
+ * user's tabs and the browser is the one they are using; closing either would
+ * take down their work because a tool call finished. Attached means borrowed —
+ * the screencast stops, the connection is dropped, and their Chrome carries on
+ * exactly as it was.
+ */
 export async function closeBrowser() {
   await stopScreencast();
   release('browser');
-  try {
-    await context?.close();
-  } catch {
-    /* already gone */
-  }
+
+  const borrowed = mode === 'attach';
+  const held = { browser, context };
   context = null;
   page = null;
+  browser = null;
+
+  if (borrowed) {
+    // `close()` on a CDP connection disconnects this client without touching
+    // the browser it was talking to — the tabs stay open, which is the point.
+    try {
+      await held.browser?.close();
+    } catch {
+      /* already disconnected */
+    }
+    return;
+  }
+
   try {
-    await browser?.close();
+    await held.context?.close();
   } catch {
     /* already gone */
   }
-  browser = null;
+  try {
+    // Null in `profile` mode: a persistent context *is* the browser, and closing
+    // it above has already shut the process down.
+    await held.browser?.close();
+  } catch {
+    /* already gone */
+  }
 }
 
 // ── frames ────────────────────────────────────────────────────────────
@@ -553,6 +846,68 @@ function describe(snapshot, note) {
 }
 
 /** Snapshot, capture a frame, and describe the result to the model. */
+/**
+ * A small picture of the page as this step left it.
+ *
+ * Separate from `pushStill` above, which feeds the live panel and is thrown away
+ * the instant the next frame arrives. This one is kept: it goes back with the
+ * tool result, is stored, and is still there when somebody scrolls up tomorrow
+ * to see what happened.
+ *
+ * Small on purpose. A run of a dozen browser steps is a dozen of these, and the
+ * point is a strip you can take in at a glance rather than a dozen full-width
+ * screenshots to scroll past — with the storage cost that would imply.
+ *
+ * Never worth failing a step over: a missing illustration is a smaller problem
+ * than an action that reports an error it did not have.
+ */
+const SHOT_WIDTH = 320;
+const SHOT_MAX_BYTES = 40 * 1024;
+
+async function thumbnail() {
+  if (!browserIsOpen()) return null;
+
+  let cdp = null;
+  try {
+    /**
+     * Through CDP rather than `page.screenshot`, for one reason: `clip.scale`.
+     * Playwright does not expose it, so its screenshot comes back at full
+     * viewport size and would have to be resized afterwards — which here would
+     * mean opening a canvas page in the user's own browser, in `attach` mode, to
+     * shrink a picture. Chrome will simply render it small if asked.
+     */
+    cdp = await page.context().newCDPSession(page);
+    const { data } = await cdp.send('Page.captureScreenshot', {
+      format: 'jpeg',
+      quality: Math.min(Math.max(Number(process.env.STEP_SHOT_QUALITY) || 45, 10), 90),
+      captureBeyondViewport: false,
+      clip: {
+        x: 0,
+        y: 0,
+        width: VIEWPORT.width,
+        height: VIEWPORT.height,
+        scale: SHOT_WIDTH / VIEWPORT.width,
+      },
+    });
+
+    if (!data) return null;
+    // base64 carries 3 bytes in every 4 characters.
+    if ((data.length * 3) / 4 > SHOT_MAX_BYTES) return null;
+    return { mime: 'image/jpeg', data };
+  } catch {
+    return null;
+  } finally {
+    await cdp?.detach().catch(() => {});
+  }
+}
+
+/**
+ * What the model reads, plus what the person watching sees.
+ *
+ * Returns an object rather than a string. The worker's job runner understands
+ * both shapes — see `runJob` — so tools that have nothing to illustrate carry on
+ * returning plain text.
+ */
 async function report(note) {
   // A moment for the page to settle after an action before we look at it.
   await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
@@ -561,7 +916,7 @@ async function report(note) {
   const snapshot = await snapshotAll();
   lastTitle = snapshot.title || '';
   await pushStill();
-  return describe(snapshot, note);
+  return { text: describe(snapshot, note), shot: await thumbnail() };
 }
 
 /**
@@ -610,7 +965,17 @@ async function browserOpen({ url, replace_tab: replaceTab, new_tab: newTab }) {
   // half-filled form vanished to look something up — and the model had to
   // remember to prevent it every time. `new_tab` is still honoured so an older
   // habit does not become an error.
-  const reuse = replaceTab === true || newTab === false;
+  /**
+   * A blank tab is not a tab worth keeping.
+   *
+   * A persistent profile always opens with one `about:blank`, and an attached
+   * Chrome often has one too. Without this, the first `browser_open` puts a
+   * page beside it and the blank one stays in `browser_tabs` for the rest of
+   * the session — a tab the model has to reason about that means nothing, and
+   * one the user watches accumulate.
+   */
+  const blankHere = browserIsOpen() && /^about:blank$|^chrome:\/\/newtab/.test(page.url());
+  const reuse = replaceTab === true || newTab === false || blankHere;
   if (!reuse || !browserIsOpen()) await focusPage(await ctx.newPage());
 
   await page.goto(target, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
@@ -646,6 +1011,16 @@ async function browserCloseTab({ tab }) {
   const index = tab == null ? open.indexOf(page) + 1 : Number(tab);
   if (!Number.isInteger(index) || index < 1 || index > open.length) {
     throw new Error(`There is no tab ${tab}. Call browser_tabs to see what is open.`);
+  }
+
+  // Attached to the user's own Chrome, the last tab is not ours to close: on
+  // most platforms closing it takes the whole browser with it, and everything
+  // they had open goes too.
+  if (mode === 'attach' && open.length === 1) {
+    throw new Error(
+      'That is the only tab open in the user\'s own browser, and closing it would quit their ' +
+        'browser. Leave it open, or ask them to close it themselves.',
+    );
   }
 
   const closing = open[index - 1];
@@ -797,8 +1172,12 @@ async function browserClose() {
       'to close that window for them if they would rather you did it.'
     );
   }
+  const borrowed = mode === 'attach';
   await closeBrowser();
-  return 'Closed the sandbox browser. The screen panel will stop updating.';
+  return borrowed
+    ? 'Let go of the user\'s browser. Their tabs are untouched and still open — this only stopped ' +
+        'driving them, and the screen panel will stop updating.'
+    : 'Closed the sandbox browser. The screen panel will stop updating.';
 }
 
 /**

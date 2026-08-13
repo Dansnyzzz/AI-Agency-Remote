@@ -82,8 +82,11 @@ export function createPgStore(connectionString) {
    *      asking every model for 32000 tokens it may not produce
    *  12  mcp_servers — the Model Context Protocol servers an account plugs in,
    *      which is what makes the tool list open rather than fixed
+   *  13  devices.browser_mode — which browser the assistant drives on each
+   *      computer: a clean sandbox, a profile that stays signed in, or the
+   *      person's own running Chrome
    */
-  const SCHEMA_VERSION = 12;
+  const SCHEMA_VERSION = 13;
 
   let schemaReady = null;
   async function ready() {
@@ -813,6 +816,27 @@ export function createPgStore(connectionString) {
       const r = rows[0];
       return r ? { id: r.id, chatId: r.chat_id, tool: r.tool, input: r.input } : null;
     },
+    /**
+     * When this account last had work for a computer.
+     *
+     * Read once per poll to decide how long to hold the request open. On a
+     * machine you own, holding a connection for 25 seconds costs nothing. On a
+     * serverless deployment it is 25 seconds of billed execution, repeated
+     * around the clock by a worker that is doing nothing — which is how a free
+     * tier gets spent on an idle laptop. Recent work means somebody is waiting
+     * and latency matters; no recent work means nobody is.
+     *
+     * Deliberately not filtered by device: what is being asked is whether the
+     * *account* is active, and a second computer's job is just as good a sign
+     * that the person is at their desk.
+     */
+    async recentJobAt(userId) {
+      const rows = await q(
+        `SELECT created_at FROM tool_jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      );
+      return rows[0]?.created_at ? new Date(rows[0].created_at) : null;
+    },
     async completeJob(userId, id, { status, result }) {
       await q(
         `UPDATE tool_jobs SET status = $3, result = $4, done_at = NOW()
@@ -1503,7 +1527,7 @@ export function createPgStore(connectionString) {
     /** Never the token hash: the browser has no use for it. */
     async listDevices(userId) {
       return q(
-        `SELECT d.id, d.name, d.info, d.workspace, d.created_at, d.last_seen, d.revoked_at,
+        `SELECT d.id, d.name, d.info, d.workspace, d.browser_mode, d.created_at, d.last_seen, d.revoked_at,
                 (d.last_seen > NOW() - INTERVAL '45 seconds') AS online
            FROM devices d
           WHERE d.user_id = $1 AND d.revoked_at IS NULL
@@ -1513,7 +1537,7 @@ export function createPgStore(connectionString) {
     },
     async getDevice(userId, deviceId) {
       const rows = await q(
-        'SELECT id, name, info, workspace FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL',
+        'SELECT id, name, info, workspace, browser_mode FROM devices WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL',
         [deviceId, userId],
       );
       return rows[0] ?? null;
@@ -1531,6 +1555,20 @@ export function createPgStore(connectionString) {
           WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
       RETURNING id, name, workspace`,
         [deviceId, userId, workspace ?? null],
+      );
+      return rows[0] ?? null;
+    },
+    /**
+     * Which browser this computer drives. Validated by the caller — the column
+     * is deliberately plain text so a mode added later needs no migration, and
+     * a worker that does not recognise a value falls back to the sandbox.
+     */
+    async setDeviceBrowserMode(userId, deviceId, browserMode) {
+      const rows = await q(
+        `UPDATE devices SET browser_mode = $3
+          WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+      RETURNING id, name, browser_mode`,
+        [deviceId, userId, browserMode ?? null],
       );
       return rows[0] ?? null;
     },

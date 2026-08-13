@@ -108,6 +108,7 @@ export const api = {
   pairDevice: (code, name) => request('POST', '/api/devices/pair', { code, name }),
   unpairDevice: (id) => request('DELETE', `/api/devices/${id}`),
   setDeviceWorkspace: (id, path) => request('PUT', `/api/devices/${id}/workspace`, { path }),
+  setDeviceBrowser: (id, mode) => request('PUT', `/api/devices/${id}/browser`, { mode }),
 
   modelNews: () => request('GET', '/api/models/news'),
   decideModelNews: (id, action) => request('POST', '/api/models/news', { id, action }),

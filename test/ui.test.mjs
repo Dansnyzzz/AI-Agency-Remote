@@ -3077,6 +3077,88 @@ section('the guide does not come back after a mid-way reload');
   await page.waitForTimeout(300);
 }
 
+/**
+ * A run of steps, drawn the way somebody reads it.
+ *
+ * Exercised in a real browser because that is the only honest way to check DOM
+ * that is built by hand: the module is imported into the live page and driven
+ * directly, so what is asserted is what would actually be on screen.
+ *
+ * Every check here is a mistake that is easy to make and invisible in review —
+ * a run that never collapses keeps a spinner forever; a run that swallows the
+ * prose between two activities claims a structure the turn does not have.
+ */
+section('a run of browser steps reads as one piece of work');
+{
+  const run = await page.evaluate(async () => {
+    const { assistantMessage } = await import('/js/render.js');
+    const turn = assistantMessage();
+    document.body.append(turn.node);
+
+    const step = (name, input, result) => turn.startTool({ id: name, name, input }).complete(result);
+
+    step('browser_open', { url: 'https://vercel.com/dashboard' }, { content: 'ok', ms: 900 });
+    step('browser_click', { ref: 7, description: 'Deploy' }, { content: 'ok', ms: 120 });
+    step('browser_wait', { seconds: 3 }, { content: 'ok', ms: 3000 });
+
+    const card = turn.node.querySelector('.steps');
+    const first = card.querySelector('.step');
+
+    const snapshot = {
+      grouped: turn.node.querySelectorAll('.steps').length,
+      steps: card.querySelectorAll('.step').length,
+      title: card.querySelector('.steps__title').textContent,
+      tally: card.querySelector('.steps__tally').textContent,
+      firstVerb: first.querySelector('.step__verb').textContent,
+      firstDetail: first.querySelector('.step__detail').textContent,
+      openWhileWorking: card.open,
+      // A raw tool name anywhere in the summary means a verb is missing.
+      noRawNames: !/browser_/.test(card.querySelector('summary').textContent),
+    };
+
+    // Prose is the boundary between two activities. Steps after it belong to a
+    // new run, and the old one is finished.
+    turn.appendText('Deployed it.');
+    step('browser_look', {}, { content: 'ok', ms: 40 });
+
+    snapshot.afterProse = turn.node.querySelectorAll('.steps').length;
+    snapshot.firstCollapsed = !card.open;
+    snapshot.firstSpinnerGone = !card.querySelector('.spinner');
+
+    // A tool from outside the family also ends the run — `read_file` between two
+    // browser actions really is a change of activity.
+    step('read_file', { path: 'a.txt' }, { content: 'ok', ms: 10 });
+    snapshot.afterOutsider = turn.node.querySelectorAll('.steps').length;
+    snapshot.plainToolStillACard = turn.node.querySelectorAll('.tool').length;
+
+    turn.finish();
+    snapshot.allCollapsed = [...turn.node.querySelectorAll('.steps')].every((n) => !n.open);
+    snapshot.noSpinnersLeft = turn.node.querySelectorAll('.steps .spinner').length === 0;
+
+    turn.node.remove();
+    return snapshot;
+  });
+
+  check('three browser calls make one card', run.grouped === 1, `${run.grouped}`);
+  check('holding all three steps', run.steps === 3, `${run.steps}`);
+  check('labelled as a run', /browser|trình duyệt/i.test(run.title), run.title);
+  check('with a count', /3/.test(run.tally), run.tally);
+  check('and no raw tool names in it', run.noRawNames);
+  check('the first step reads as a sentence', !!run.firstVerb && !/_/.test(run.firstVerb), run.firstVerb);
+  check('naming what it acted on', run.firstDetail === 'vercel.com/dashboard', run.firstDetail);
+  check('the run is open while it works', run.openWhileWorking === true);
+
+  check('prose starts a new run', run.afterProse === 2, `${run.afterProse}`);
+  check('and collapses the finished one', run.firstCollapsed === true);
+  check('taking its spinner with it', run.firstSpinnerGone === true);
+
+  check('a tool from outside the family ends the run too', run.afterOutsider === 2, `${run.afterOutsider}`);
+  check('and is still drawn as its own card', run.plainToolStillACard === 1, `${run.plainToolStillACard}`);
+
+  check('finishing the turn closes everything', run.allCollapsed === true);
+  check('and leaves nothing spinning', run.noSpinnersLeft === true);
+}
+
 await browser.close();
 server.close();
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });

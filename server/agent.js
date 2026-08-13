@@ -366,7 +366,7 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal }) {
     toolCalls.map(async (call) => {
       const started = Date.now();
       emit('tool_call', { id: call.id, name: call.name, input: call.input });
-      const { content, isError, file, widget } = await executeTool({
+      const { content, isError, file, widget, shot } = await executeTool({
         user,
         name: call.name,
         input: call.input,
@@ -387,6 +387,12 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal }) {
         // reason as `file`: reopening the conversation rebuilds it from here
         // rather than needing somewhere else to have remembered it.
         ...(widget ? { widget } : {}),
+        // A thumbnail of what the screen looked like when this step finished.
+        // An id, never the bytes — see `keepStepShot`. Stored on the result for
+        // the same reason as the two above: scrolling back through a browsing
+        // session should show the pictures, and the transcript is the only
+        // place that could remember them.
+        ...(shot ? { shot } : {}),
       };
       emit('tool_result', result);
       if (call.name === 'update_plan' && !isError) {

@@ -37,6 +37,68 @@ export const en = {
   // The checklist drawn inside a message by `update_plan`, and the count beside
   // the same steps in the progress rail.
   'chat.plan': 'Plan',
+
+  /* ── a run of steps ──────────────────────────────────────────────
+   *
+   * The verbs a run of browser or desktop actions is drawn with. Written as
+   * what happened rather than what was called: `browser_click {"ref":"7"}` is
+   * complete and unreadable at the speed the steps go past.
+   */
+  'steps.browser': 'Used the browser',
+  'steps.desktop': 'Used the desktop',
+  'steps.count': '{n} steps',
+  'step.output': 'Output',
+  'step.seconds': '{n} seconds',
+  'step.browser.open': 'Opened',
+  'step.browser.tabs': 'Listed the tabs',
+  'step.browser.switchTab': 'Switched to tab',
+  'step.browser.closeTab': 'Closed tab',
+  'step.browser.look': 'Read the page',
+  'step.browser.click': 'Clicked',
+  'step.browser.type': 'Typed',
+  'step.browser.press': 'Pressed',
+  'step.browser.back': 'Went back',
+  'step.browser.forward': 'Went forward',
+  'step.browser.select': 'Chose',
+  'step.browser.hover': 'Hovered over',
+  'step.browser.scroll': 'Scrolled',
+  'step.browser.wait': 'Waited',
+  'step.browser.close': 'Closed the browser',
+  'step.desktop.windows': 'Listed the windows',
+  'step.desktop.launch': 'Opened',
+  'step.desktop.look': 'Looked at the screen',
+  'step.desktop.focus': 'Switched to',
+  'step.desktop.click': 'Clicked',
+  'step.desktop.type': 'Typed',
+  'step.desktop.key': 'Pressed',
+  'step.desktop.scroll': 'Scrolled',
+  'step.desktop.wait': 'Waited',
+  'step.desktop.close': 'Closed',
+
+  /* ── connecting a computer ───────────────────────────────────────── */
+  'worker.copy': 'Copy',
+  'worker.copied': 'Copied',
+
+  /* ── which browser a computer drives ──────────────────────────────
+   *
+   * Each option is labelled with what it costs, not what it is called:
+   * "signed in to nothing" is the fact that decides whether the sandbox is any
+   * use for the job in hand.
+   */
+  'browser.label': 'Browser',
+  'browser.sandbox': 'Sandbox — a clean browser, signed in to nothing',
+  'browser.profile': 'Saved profile — stays signed in between sessions',
+  'browser.attach': 'Your own Chrome — the one you are already using',
+  'browser.sandboxHint':
+    'A fresh browser with an empty profile. Nothing of yours is in it, and nothing it does is saved.',
+  'browser.profileHint':
+    'A profile of its own on that computer. Sign in once through the live view and it stays signed in. The cookies are real, and they sit on that machine.',
+  'browser.attachHint':
+    'Drives the Chrome you already have open, with everything you are signed in to. Chrome must have been started with --remote-debugging-port={port}.',
+  'browser.attachMissing':
+    'Nothing is listening on port {port} on that computer. Quit Chrome completely, then start it with --remote-debugging-port={port} — or choose another browser here.',
+  'browser.pending': 'Waiting for that computer to pick up the change.',
+  'browser.saved': 'Saved. That computer will switch within about fifteen seconds.',
   'chat.planCount': '{done} of {total}',
 
   // A message typed while the assistant is still working, waiting above the

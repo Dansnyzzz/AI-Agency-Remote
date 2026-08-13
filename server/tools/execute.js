@@ -5,6 +5,7 @@ import { getPrefs } from '../settings.js';
 import { TOOLS_BY_NAME } from './definitions.js';
 import { CLOUD_IMPLEMENTATIONS } from './cloud.js';
 import { isMcpTool, callMcpTool } from '../mcp/registry.js';
+import { keepStepShot } from '../attachments.js';
 
 const POLL_MS = 400;
 const DEFAULT_LOCAL_TIMEOUT_MS = 180_000;
@@ -68,7 +69,10 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
         .catch(() => {});
     }
 
-    return { isError: false, content: String(result.output ?? '') };
+    // `shot` is a reference to an attachment the worker's result endpoint has
+    // already stored — see `keepStepShot`. It rides out to the browser beside
+    // the text, the same way `file` and `widget` do for cloud tools.
+    return { isError: false, content: String(result.output ?? ''), shot: result.shot || undefined };
   }
 
   await store.completeJob(userId, id, { status: 'error', result: { error: 'Timed out.' } });
@@ -132,7 +136,25 @@ export async function executeTool({ user, name, input, chatId, signal }) {
     if (usesInProcessTools(user)) {
       const impl = (await inProcessImplementations(user))[name];
       if (!impl) return { isError: true, content: `Tool "${name}" has no implementation.` };
-      return { isError: false, content: String((await impl(input || {})) ?? '') };
+      const output = await impl(input || {});
+
+      /**
+       * The same two result shapes the worker's job runner handles.
+       *
+       * This branch is easy to forget and expensive to get wrong: the browser
+       * tools return `{ text, shot }` now, and stringifying that object gives
+       * the model "[object Object]" as its view of the page. The failure is
+       * silent — the tool call succeeds — and it happens only on a locally-run
+       * server, which is the configuration most people develop against.
+       */
+      if (output && typeof output === 'object' && !Array.isArray(output)) {
+        return {
+          isError: false,
+          content: String(output.text ?? ''),
+          shot: output.shot ? await keepStepShot(userId, output.shot) : undefined,
+        };
+      }
+      return { isError: false, content: String(output ?? '') };
     }
 
     const timeoutMs = Math.min(Number(input?.timeout_ms) || DEFAULT_LOCAL_TIMEOUT_MS, 600_000);

@@ -379,6 +379,131 @@ section('the deployed app answers');
   await new Promise((r) => server.once('close', r));
 }
 
+// ── connecting a computer to a deployment ───────────────────────────
+//
+// The failure this exists to remove: `npm start` brings up a *local* app and
+// points the worker at it, so the pairing code it prints lands in a database
+// the deployment cannot see. Somebody follows the instructions on their own
+// deployment and is told their code is invalid — which it is, on that server.
+section('a computer can be pointed at a deployment');
+{
+  const { parseLaunchArgs, planWorkerEnv, normaliseServerUrl, isLocalServer } = await import(
+    '../scripts/lib/workerLink.js'
+  );
+
+  const url = 'https://ai-remote-amber.vercel.app';
+
+  // Three spellings, because all three are what people type. A parser that
+  // understands only one spends its life rejecting correct intent.
+  check('--server <url> is understood', parseLaunchArgs(['--server', url]).server === url);
+  check('--server=<url> is understood', parseLaunchArgs([`--server=${url}`]).server === url);
+  check('a bare URL is understood', parseLaunchArgs([url]).server === url);
+
+  check('a trailing slash is dropped', normaliseServerUrl(`${url}/`) === url, normaliseServerUrl(`${url}/`));
+
+  // Rejected rather than coerced: quietly rewriting these produces a worker
+  // that polls somewhere unexpected, which is worse than being told no.
+  const refuses = (argv) => {
+    try {
+      parseLaunchArgs(argv);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  check('a non-web address is refused', refuses(['--server', 'file:///tmp/x']));
+  check('nonsense is refused', refuses(['--server', 'not a url']));
+  check('a missing address is refused', refuses(['--server']));
+  check('an unknown option is refused', refuses(['--sever', url]));
+
+  // `--pair` means "connect this machine to a server elsewhere", so bringing up
+  // a second app here is not merely redundant — it is the source of the exact
+  // confusion above: two apps, two databases, one code that belongs to one.
+  const paired = parseLaunchArgs(['--pair', url]);
+  check('--pair does not also start a local app', paired.wantServer === false);
+  check('but does start the worker', paired.wantWorker === true);
+  check('a plain start still runs both', parseLaunchArgs([]).wantServer && parseLaunchArgs([]).wantWorker);
+
+  check('a deployment is not mistaken for this machine', isLocalServer(url) === false);
+  check('and localhost is', isLocalServer('http://localhost:5173') === true);
+
+  // The address is remembered, so the next run needs no argument. Pairing once
+  // and having your computer simply be there is the promise; retyping a URL
+  // every start is not that.
+  const fresh = planWorkerEnv('', url);
+  check('a new file records the address', /^SERVER_URL=https:\/\/ai-remote-amber\.vercel\.app$/m.test(fresh.text), fresh.text);
+  check('and says something changed', fresh.changed === true);
+
+  const same = planWorkerEnv(`SERVER_URL=${url}\nWORKER_TOKEN=abc123\n`, url);
+  check('re-running with the same address changes nothing', same.changed === false);
+  check('and keeps the token', /WORKER_TOKEN=abc123/.test(same.text), same.text);
+
+  /**
+   * A token is only worth anything on the server that minted it. Carrying one
+   * across a change of address gives HTTP 401, and the worker's reaction to a
+   * 401 is to announce "This computer is no longer paired" — which is wrong and
+   * alarming. It is still paired; just to somewhere else.
+   */
+  const moved = planWorkerEnv(`SERVER_URL=https://old.example.com\nWORKER_TOKEN=abc123\n`, url);
+  check('moving to another server drops the old token', moved.droppedToken === true);
+  check('and it really is gone', !/WORKER_TOKEN/.test(moved.text), moved.text);
+  check('while the new address is written', /SERVER_URL=https:\/\/ai-remote-amber/.test(moved.text), moved.text);
+  check('and the old one is reported, so the reason can be explained', moved.previous === 'https://old.example.com', moved.previous);
+
+  // Nothing is known about where a token with no recorded address came from, so
+  // it is left alone rather than thrown away on a guess.
+  const unknownOrigin = planWorkerEnv('WORKER_TOKEN=abc123\n', url);
+  check('a token of unknown origin is kept', unknownOrigin.droppedToken === false);
+
+  // It is somebody's configuration file, not scratch space.
+  const withExtras = planWorkerEnv('# my notes\nDEVICE_NAME=studio\nSERVER_URL=http://localhost:5173\n', url);
+  check('comments survive', /# my notes/.test(withExtras.text), withExtras.text);
+  check('and unrelated settings do too', /DEVICE_NAME=studio/.test(withExtras.text), withExtras.text);
+  check('while the address is replaced, not appended twice',
+    (withExtras.text.match(/^SERVER_URL=/gm) || []).length === 1, withExtras.text);
+}
+
+// The instruction in the interface has to be generated, because it names this
+// deployment's own address — the hard-coded `npm start` it replaced was the
+// visible half of the bug above.
+section('the interface can name this deployment');
+{
+  const { publicUrlFor } = await import('../server/util/net.js');
+
+  const stated = process.env.PUBLIC_URL;
+  process.env.PUBLIC_URL = 'https://stated.example.com/';
+  check('PUBLIC_URL wins when set', publicUrlFor({ headers: {} }) === 'https://stated.example.com');
+
+  delete process.env.PUBLIC_URL;
+  // Without honouring the proxy headers the scheme reads as http behind
+  // Vercel's TLS terminator, and the printed command points at a redirect.
+  check(
+    'otherwise the proxy headers decide',
+    publicUrlFor({ headers: { 'x-forwarded-proto': 'https', host: 'app.vercel.app' } }) === 'https://app.vercel.app',
+  );
+  check(
+    'a forwarded host wins over the raw one',
+    publicUrlFor({ headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'real.app', host: 'internal' } }) ===
+      'https://real.app',
+  );
+  check('and nothing at all is admitted rather than guessed', publicUrlFor({ headers: {} }) === null);
+
+  const html = read('public/index.html');
+  check(
+    'the misleading hard-coded instruction is gone',
+    !/clone this repo.*npm start/s.test(html),
+    'public/index.html still tells everyone to run npm start',
+  );
+  check('and the steps are filled in from script', /id="connect-steps"/.test(html));
+
+  const pkg = json('package.json');
+  check('there is a command to run on the other machine', typeof pkg.scripts?.connect === 'string', pkg.scripts?.connect);
+  check('and it does not start a second app', /--pair/.test(pkg.scripts?.connect || ''), pkg.scripts?.connect);
+
+  if (stated == null) delete process.env.PUBLIC_URL;
+  else process.env.PUBLIC_URL = stated;
+}
+
 fs.rmSync(dataDir, { recursive: true, force: true });
 delete process.env.VERCEL;
 

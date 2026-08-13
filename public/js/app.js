@@ -1699,10 +1699,14 @@ async function streamOnce(decision) {
         },
         error: ({ message }) => {
           outcome = 'done';
+          state.turn?.finish();
           toast(message, 'error');
         },
         done: () => {
           outcome = 'done';
+          // Collapse any run of steps still drawn as in progress. Without this a
+          // finished turn keeps a spinner for the rest of the conversation.
+          state.turn?.finish();
         },
       },
     });
@@ -1852,8 +1856,69 @@ async function refreshWorker() {
   }
 }
 
+/** Whether an address points back at the machine the browser is running on. */
+const LOOPBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i;
+
+/**
+ * How to connect a computer to *this* app, with the address already filled in.
+ *
+ * This used to be two hard-coded lines of markup ending in `npm start`, and on a
+ * deployment that instruction was wrong in a way nobody could see. `npm start`
+ * brings up a second copy of the app on the other machine and points the worker
+ * at it, so the pairing code shown lands in that machine's own database — while
+ * the person types it into a deployment backed by an entirely different one. The
+ * code is rejected, correctly, and the message says the code is invalid, which
+ * sends everybody looking in the wrong place.
+ *
+ * So the command is generated, it names this deployment, and it is copyable —
+ * because retyping a URL by hand is the other half of the same failure.
+ */
+function renderConnectSteps() {
+  const host = $('connect-steps');
+  if (!host) return;
+
+  const url = state.boot.runtime?.publicUrl || '';
+  // Serverless is the certain case. A local server reached over a tunnel or a
+  // LAN address is the same situation for anyone adding a *different* machine,
+  // so it gets the same instruction.
+  const remote = !!state.boot.runtime?.serverless || (!!url && !LOOPBACK.test(url));
+  const command = remote && url ? `npm run connect -- ${url}` : 'npm start';
+
+  const step = (html) => `<li>${html}</li>`;
+  const code = `<code class="connect__cmd">${escapeText(command)}</code>`;
+
+  host.innerHTML = [
+    step(`On that computer: clone this repo, then <code>npm install</code>.`),
+    step(
+      `Run ${code} <button class="btn btn--ghost btn--tiny" id="copy-connect" type="button" ` +
+        `data-command="${escapeText(command)}">${escapeText(t('worker.copy'))}</button>`,
+    ),
+    step(
+      remote
+        ? `It shows a pairing code. Enter it below, or from the <strong>Computers</strong> button in the header.`
+        : `It shows a pairing code — unless this is the same machine, in which case it is already connected. ` +
+          `To add a <em>different</em> computer, run <code>npm run connect -- &lt;this app's address&gt;</code> there instead.`,
+    ),
+  ].join('');
+}
+
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('#copy-connect');
+  if (!button) return;
+  try {
+    await navigator.clipboard.writeText(button.dataset.command || '');
+    button.textContent = t('worker.copied');
+    setTimeout(() => {
+      button.textContent = t('worker.copy');
+    }, 1400);
+  } catch {
+    toast('Could not reach the clipboard — select the text and press Ctrl+C.', 'error');
+  }
+});
+
 function renderWorker() {
   const { worker } = state.boot;
+  renderConnectSteps();
   // One place says whether a computer is connected: the chip in the header. The
   // sidebar used to say it too, which meant two things to keep in step and a
   // status nobody could see without opening the menu.
@@ -3069,6 +3134,64 @@ $('pair-copy').addEventListener('click', async () => {
   }
 });
 
+/**
+ * Which browser the assistant drives on one computer.
+ *
+ * The three choices are genuinely different tools, not settings, so each is
+ * labelled with what it *costs* rather than what it is called — "signed in to
+ * nothing" is the fact that decides whether `sandbox` is any use for the job in
+ * hand. And a choice that cannot work on this machine says so where it is made:
+ * offering `attach` with no debugging port open produces a tool call that fails
+ * a minute later, in a conversation, where nobody can connect it back to this
+ * dropdown.
+ */
+function browserPicker(device) {
+  const id = escapeText(device.id);
+  const chosen = device.browserMode || 'sandbox';
+  const caps = device.browser || null;
+
+  // The machine's own report, when it has made one. Before the first heartbeat
+  // there is nothing, and claiming to know would be worse than admitting we do not.
+  const attachable = caps ? !!caps.attachable : null;
+  const port = caps?.cdpPort || 9222;
+  const running = caps?.mode || null;
+
+  const options = [
+    ['sandbox', t('browser.sandbox')],
+    ['profile', t('browser.profile')],
+    ['attach', t('browser.attach')],
+  ]
+    .map(
+      ([value, label]) =>
+        `<option value="${value}"${value === chosen ? ' selected' : ''}>${escapeText(label)}</option>`,
+    )
+    .join('');
+
+  let note;
+  if (chosen === 'attach' && attachable === false) {
+    note = `<span class="warn-text">${escapeText(t('browser.attachMissing').replace('{port}', port))}</span>`;
+  } else if (chosen === 'attach') {
+    note = escapeText(t('browser.attachHint').replace('{port}', port));
+  } else if (chosen === 'profile') {
+    note = escapeText(t('browser.profileHint'));
+  } else {
+    note = escapeText(t('browser.sandboxHint'));
+  }
+
+  // Chosen here, adopted there. Same honesty as the workspace row above: a
+  // machine that has been offline since the change should not be drawn as
+  // though it had already obeyed.
+  if (running && running !== chosen) {
+    note += ` <span class="hint">${escapeText(t('browser.pending'))}</span>`;
+  }
+
+  return `<label class="device__label" for="br-${id}">${escapeText(t('browser.label'))}</label>
+    <div class="provider__row">
+      <select id="br-${id}" data-browser="${id}">${options}</select>
+    </div>
+    <p class="hint" data-browser-status="${id}">${note}</p>`;
+}
+
 async function loadDevices() {
   const { devices, localCode } = await api.devices();
   renderLocalCode(localCode);
@@ -3129,6 +3252,8 @@ async function loadDevices() {
                 : 'It will report where it is working once it connects.'
         }</p>
 
+        ${browserPicker(d)}
+
         <div class="row">
           ${
             d.online && d.id !== activeId
@@ -3165,6 +3290,31 @@ async function loadDevices() {
         btn.disabled = false;
       }
     });
+  }
+
+  for (const select of host.querySelectorAll('[data-browser]')) {
+    select.addEventListener('change', async () => {
+      const id = select.dataset.browser;
+      const status = host.querySelector(`[data-browser-status="${id}"]`);
+      const previous = select.dataset.previous || 'sandbox';
+      select.disabled = true;
+      try {
+        await api.setDeviceBrowser(id, select.value);
+        status.textContent = t('browser.saved');
+        select.dataset.previous = select.value;
+        // Long enough for a heartbeat to land, so the note stops saying
+        // "waiting" once the machine has actually switched.
+        setTimeout(loadDevices, 16_000);
+      } catch (err) {
+        // Put the control back where it was. Leaving it showing a choice the
+        // server refused is the interface telling a lie about the machine.
+        select.value = previous;
+        status.textContent = err.message;
+      } finally {
+        select.disabled = false;
+      }
+    });
+    select.dataset.previous = select.value;
   }
 
   for (const btn of host.querySelectorAll('[data-use-device]')) {

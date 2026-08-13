@@ -146,6 +146,44 @@ export async function saveGenerated(userId, { name, mime, kind, data, source, ch
 }
 
 /**
+ * Keep the picture a browser or desktop step came back with.
+ *
+ * Its own function rather than a call to `saveGenerated` at the call site,
+ * because the limits are different and the failure handling is the opposite.
+ *
+ * **Different limits.** These arrive a dozen to a browsing session, not one to a
+ * document, so an oversized one is dropped rather than stored: they are
+ * illustrations, and a 2MB illustration is a bug in whatever produced it.
+ *
+ * **Opposite failure handling.** A document that fails to save has to be an
+ * error — somebody asked for it and it does not exist. A step thumbnail that
+ * fails to save must not be, because the step itself succeeded, and turning a
+ * completed browser action into a failed tool call over a missing picture would
+ * make the assistant retry work it has already done.
+ */
+const MAX_SHOT_BYTES = 80 * 1024;
+
+export async function keepStepShot(userId, shot) {
+  const data = String(shot?.data || '');
+  if (!data) return null;
+  if ((data.length * 3) / 4 > MAX_SHOT_BYTES) return null;
+
+  try {
+    const row = await saveGenerated(userId, {
+      name: `step-${Date.now()}.jpg`,
+      mime: String(shot.mime || 'image/jpeg'),
+      kind: 'image',
+      data,
+    });
+    // Only the id travels on: the transcript should reference the picture, never
+    // carry it.
+    return { id: row.id };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Check a list of ids belongs to this account, and cap how many ride along.
  *
  * Ownership is the point: the id comes from the browser, and an id is a thing

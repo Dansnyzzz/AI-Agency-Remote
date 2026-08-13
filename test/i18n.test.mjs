@@ -86,6 +86,48 @@ section('the strings the script builds are defined too');
   check('and every one of them is defined', unknown.length === 0, unknown.join(', '));
 }
 
+/**
+ * Every browser and desktop action has a sentence.
+ *
+ * These are drawn as a run of steps in the transcript, and a tool with no entry
+ * falls back to its raw name — so one added later reads as `browser_hover` in
+ * the middle of a list of plain sentences. Nothing else would catch that: the
+ * fallback is deliberate, so it does not throw, and it looks fine to whoever
+ * added the tool because they know what it means.
+ */
+section('every browser and desktop step reads as a sentence');
+{
+  const render = fs.readFileSync(path.join(import.meta.dirname, '..', 'public', 'js', 'render.js'), 'utf8');
+  const definitions = fs.readFileSync(
+    path.join(import.meta.dirname, '..', 'server', 'tools', 'definitions.js'),
+    'utf8',
+  );
+
+  const described = new Set(
+    [...render.matchAll(/^\s{2}(browser_\w+|desktop_\w+):\s*'([^']+)'/gm)].map((m) => m[1]),
+  );
+  const tools = [...definitions.matchAll(/name: '((?:browser|desktop)_\w+)'/g)].map((m) => m[1]);
+
+  check('the tools were found at all', tools.length > 10, `${tools.length} tools`);
+
+  const undescribed = tools.filter((name) => !described.has(name));
+  check('every one of them has a verb', undescribed.length === 0, undescribed.join(', '));
+
+  // And the verbs themselves are real strings in both languages. Covered by the
+  // sweep above too, but named here so a failure says which half is missing.
+  const keys = [...render.matchAll(/'(step\.(?:browser|desktop)\.\w+)'/g)].map((m) => m[1]);
+  const untranslated = [...new Set(keys)].filter((k) => !(k in vi) || !(k in en));
+  check('and a translation on both sides', untranslated.length === 0, untranslated.join(', '));
+
+  for (const key of ['steps.browser', 'steps.desktop', 'steps.count', 'step.output', 'step.seconds']) {
+    check(`the run itself is labelled: ${key}`, !!vi[key] && !!en[key]);
+  }
+  // The count and the wait both interpolate a number; a dropped placeholder
+  // renders as "{n} steps" to a reader.
+  check('the step count names its number', /\{n\}/.test(vi['steps.count']) && /\{n\}/.test(en['steps.count']));
+  check('and so does the wait', /\{n\}/.test(vi['step.seconds']) && /\{n\}/.test(en['step.seconds']));
+}
+
 section('the onboarding steps are all present');
 {
   // Five steps, and each one has a title. A step that renders an empty panel is

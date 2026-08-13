@@ -1,5 +1,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Where the worker keeps state of its own — as distinct from the workspace,
+ * which holds the user's work.
+ *
+ * The two must not be the same folder. A persistent browser profile written
+ * into somebody's project directory is a surprise at best and a committed
+ * 300MB of Chrome cache at worst.
+ *
+ * Deliberately does not create the directory: this is also called by probes
+ * that only want to know whether something is there, and a read that creates a
+ * folder as a side effect is a read that lies.
+ */
+export const dataDir = () => path.resolve(process.env.DATA_DIR || path.join(here, '..', 'data'));
 
 let workspaceRoot = null;
 

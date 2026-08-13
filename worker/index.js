@@ -305,7 +305,21 @@ async function runJob(job) {
   }
   try {
     const output = await impl(job.input || {});
-    await post(`/api/worker/jobs/${job.id}/result`, { output: String(output ?? '') });
+
+    /**
+     * Two shapes, and the second one is new.
+     *
+     * Most tools answer with a string. The browser and desktop tools answer with
+     * `{ text, shot }`: the text is what the model reads, and the shot is a small
+     * picture of what the screen looked like when the step finished, for the
+     * person watching. Kept optional so a tool that has nothing to illustrate —
+     * which is most of them — needs no changes at all.
+     */
+    const structured = output && typeof output === 'object' && !Array.isArray(output);
+    await post(`/api/worker/jobs/${job.id}/result`, {
+      output: String((structured ? output.text : output) ?? ''),
+      ...(structured && output.shot ? { shot: output.shot } : {}),
+    });
     console.log(`  ✓ ${job.tool}`);
   } catch (err) {
     // Reporting the failure can itself fail — the server may have gone away
@@ -336,8 +350,28 @@ let online = false;
  */
 let appliedWorkspace = null;
 let workspaceComplaint = '';
+let appliedBrowserMode = null;
+
+/**
+ * Which browser this computer drives, chosen in the app and arriving the same
+ * way the workspace does. Applying it closes whatever browser is open — see
+ * `setBrowserMode` for why carrying the old one over would be a lie.
+ */
+async function applyBrowserMode(wanted) {
+  const next = wanted || 'sandbox';
+  if (next === appliedBrowserMode) return;
+  appliedBrowserMode = next;
+
+  const { setBrowserMode } = await import('./browser.js');
+  const applied = await setBrowserMode(next);
+  console.log(`  Browser is now "${applied}".`);
+}
 
 function applyConfig(config) {
+  applyBrowserMode(config?.browserMode).catch((err) => {
+    console.error(`  Could not switch browser: ${err?.message || err}`);
+  });
+
   const wanted = config?.workspace || null;
   if (wanted === appliedWorkspace) return;
 
@@ -431,7 +465,22 @@ async function pollLoop() {
       }
       unauthorised = false;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { job } = await res.json();
+      const { job, sleepMs } = await res.json();
+
+      /**
+       * The server can ask to be left alone for a moment.
+       *
+       * It does that when this account has had no work for a while, and it is
+       * asking for a concrete reason: on a hosted deployment the long poll is
+       * billed execution time, and a worker idling overnight would spend a whole
+       * free tier on nothing. Honoured rather than ignored, because the server
+       * is the only side that can see whether anybody is waiting.
+       */
+      if (!job && sleepMs > 0) {
+        await new Promise((r) => setTimeout(r, Math.min(Number(sleepMs) || 0, 30_000)));
+        continue;
+      }
+
       if (job) {
         // Not awaited: the point is to go straight back for the next job while
         // this one runs. `runJob` reports its own outcome and never throws.
@@ -487,6 +536,16 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     shutdown(signal);
   });
 }
+
+/**
+ * Learn what browsers this machine has before the first heartbeat, so the
+ * picker in the app is populated the moment the computer appears rather than
+ * fifteen seconds later. Never fatal: not being able to answer the question is
+ * a smaller problem than not starting.
+ */
+await import('./browser.js')
+  .then((m) => m.refreshBrowserCapabilities())
+  .catch(() => {});
 
 await heartbeat();
 setInterval(heartbeat, 15_000);
