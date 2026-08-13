@@ -185,6 +185,70 @@ function clearToken() {
   fs.writeFileSync(file, kept, { mode: 0o600 });
 }
 
+/**
+ * One worker per computer, and no more.
+ *
+ * This became necessary the moment starting at login existed: somebody runs
+ * `npm run connect` in a terminal, logs out, logs back in, and now two processes
+ * hold the *same* device token and both poll the same queue. Nothing corrupts —
+ * they share the same disk and the same workspace, so either can answer any job
+ * — but every browser tool fights over one browser, both stream frames to the
+ * same panel, and `run_background` leaves servers in two processes nobody can
+ * account for.
+ *
+ * A pid file rather than a port or a mutex: it is inspectable, it survives
+ * nothing (which is the point), and a pid from a process that has since died is
+ * ignored rather than requiring somebody to clean up after a crash.
+ */
+const LOCK_FILE = path.resolve(
+  process.env.DATA_DIR || path.join(here, '..', 'data'),
+  'worker.pid',
+);
+
+function alreadyRunning() {
+  try {
+    const pid = Number(JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'))?.pid);
+    if (!pid || pid === process.pid) return null;
+    // Signal 0 asks "does this process exist and may I signal it" without
+    // touching it. EPERM means it exists and belongs to somebody else, which
+    // still counts as running.
+    try {
+      process.kill(pid, 0);
+      return pid;
+    } catch (err) {
+      return err.code === 'EPERM' ? pid : null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+const running = alreadyRunning();
+if (running && !/^(1|true|yes)$/i.test(process.env.WORKER_ALLOW_MULTIPLE ?? '')) {
+  console.error(`\n  A worker for this computer is already running (process ${running}).`);
+  console.error('  Two of them would fight over the same browser and the same job queue.\n');
+  console.error('  Stop that one first, or set WORKER_ALLOW_MULTIPLE=true if you really mean it.\n');
+  process.exit(0);
+}
+
+try {
+  fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
+  fs.writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+  // Best effort: a lock file left behind by a killed process is already handled
+  // by the liveness check above, so failing to remove it is not worth reporting.
+  process.on('exit', () => {
+    try {
+      const held = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
+      if (held?.pid === process.pid) fs.rmSync(LOCK_FILE, { force: true });
+    } catch {
+      /* nothing to clean up */
+    }
+  });
+} catch {
+  // An unwritable data directory should not stop the worker doing its job; it
+  // only means the next one cannot tell that this one is here.
+}
+
 let TOKEN = process.env.WORKER_TOKEN || '';
 let WORKER_ID = process.env.WORKER_ID || `${os.hostname()}-${crypto.randomBytes(3).toString('hex')}`;
 
@@ -335,6 +399,9 @@ async function runJob(job) {
 
 let online = false;
 
+/** Whether the server has told us which device row this token belongs to. */
+let identityConfirmed = false;
+
 /**
  * Adopt settings chosen in the app.
  *
@@ -405,6 +472,21 @@ async function heartbeat() {
       // where the assistant really is rather than where it was asked to be.
       info: { ...workerInfo(), workspaceError: workspaceComplaint || undefined },
     });
+    /**
+     * Learn which device row this token belongs to.
+     *
+     * A machine that starts with a token already saved never goes through
+     * pairing, so `WORKER_ID` keeps the random placeholder generated at boot —
+     * and that placeholder is what the local identity endpoint was handing to
+     * the browser. It matched no device on the account, so the whole "act on the
+     * computer I am sitting at" feature silently did nothing on every machine
+     * except one that had *just* been paired.
+     */
+    if (res?.deviceId) {
+      WORKER_ID = res.deviceId;
+      identityConfirmed = true;
+    }
+
     applyConfig(res?.config);
 
     if (!online) {
@@ -543,6 +625,86 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
  * fifteen seconds later. Never fatal: not being able to answer the question is
  * a smaller problem than not starting.
  */
+/**
+ * Tell the page in front of you which computer it is sitting at.
+ *
+ * The problem this solves: with a laptop and a desktop both paired and both
+ * online, the assistant picked whichever had the most recent heartbeat — so you
+ * would sit at the laptop, say "open that file", and watch nothing happen
+ * because it opened on the machine at home.
+ *
+ * A browser cannot learn which computer it is running on. It can, however, ask
+ * `127.0.0.1`, and the only thing that answers there is a worker on this very
+ * machine. So the worker answers with its device id and the page passes it along
+ * with each message.
+ *
+ * Three constraints, each closing a hole, and none of them optional:
+ *
+ *   **Loopback only.** Bound to 127.0.0.1, not 0.0.0.0 — nothing else on the
+ *   network can ask, which matters on cafe wifi.
+ *
+ *   **It cannot be told to do anything.** One route, GET, returning an
+ *   identifier. There is no verb here to abuse even if something did reach it.
+ *
+ *   **CORS names one origin: the deployment this worker answers to.** With `*`,
+ *   every site on the internet could quietly learn that you run AI Remote and
+ *   what your machine is called — a fingerprinting signal handed out for free.
+ *
+ * If the port is taken or the browser refuses the request, nothing breaks: the
+ * page simply does not send a hint and the old behaviour stands.
+ */
+async function startLocalIdentity() {
+  if (/^(0|false|no)$/i.test(process.env.WORKER_LOCAL_PORT ?? '')) return;
+  const port = Number(process.env.WORKER_LOCAL_PORT) || 8765;
+
+  const { createServer } = await import('node:http');
+
+  const server = createServer((req, res) => {
+    const origin = req.headers.origin || '';
+    // One origin, matched exactly. Not a prefix test: `https://evil.com/?x=`
+    // starting with the right characters is exactly the trick a prefix invites.
+    if (origin && origin === SERVER_URL) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      // Chrome blocks a public page reaching loopback unless the preflight is
+      // answered with this. Without it the whole feature silently does nothing.
+      if (req.headers['access-control-request-private-network']) {
+        res.setHeader('Access-Control-Allow-Private-Network', 'true');
+      }
+    }
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Cache-Control', 'no-store');
+
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'GET');
+      res.statusCode = 204;
+      return res.end();
+    }
+    if (req.method !== 'GET' || !req.url.startsWith('/whoami')) {
+      res.statusCode = 404;
+      return res.end();
+    }
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    // Null until the server has confirmed which row this token belongs to. An
+    // unconfirmed id is the boot-time placeholder, which matches no device on
+    // the account — and a hint that matches nothing is worse than no hint,
+    // because it looks like the feature working.
+    res.end(JSON.stringify({ deviceId: identityConfirmed ? WORKER_ID : null, name: DEVICE_NAME }));
+  });
+
+  server.on('error', (err) => {
+    // Almost always EADDRINUSE, and almost always a second worker or another
+    // program on the port. Worth one line, never worth stopping over.
+    console.log(`  Local identity is off (${err.code || err.message}). The app will still work.`);
+  });
+
+  server.listen(port, '127.0.0.1', () => {
+    console.log(`  This computer identifies itself at http://127.0.0.1:${port}`);
+  });
+}
+
+await startLocalIdentity().catch(() => {});
+
 await import('./browser.js')
   .then((m) => m.refreshBrowserCapabilities())
   .catch(() => {});

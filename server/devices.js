@@ -136,6 +136,69 @@ export async function collectPairing(id) {
   return { status: 'paired', token, deviceId: pairing.id, name: collected.device_name };
 }
 
+/**
+ * Enrolment — pairing, run the other way round.
+ *
+ * A pairing code is minted by a computer and typed by whoever owns the account.
+ * An enrolment token is minted by a signed-in person and carried *to* a
+ * computer, so nobody types anything: the installer redeems it.
+ *
+ * **The direction is the security property, and reversing it costs something.**
+ * A code cannot be phished, because it travels from the machine to its owner. A
+ * token travels the other way, so it can be handed to somebody — "paste this to
+ * activate your trial" — and the machine that pastes it belongs to whoever
+ * minted the token. On a deployment anybody can register on, that is a malware
+ * distribution channel wearing the app as a costume.
+ *
+ * So redeeming happens in two steps, and the first one is not optional:
+ * `previewEnrolment` says which account is about to be given the files, the
+ * shell and the screen of this computer, and the installer refuses to continue
+ * until a human types YES. Somebody can still be talked into typing it — but
+ * that is an informed decision rather than a paste that looked harmless.
+ *
+ * The token is a secret in a command line, and command lines end up in shell
+ * history. Ten minutes and one use each; that bounds it rather than fixing it.
+ */
+const ENROLMENT_TTL_MS = 10 * 60 * 1000;
+
+export async function startEnrolment(userId) {
+  const id = crypto.randomUUID();
+  const token = randomToken(24);
+
+  await getStore().createEnrolment({
+    id,
+    codeHash: sha256(token),
+    userId,
+    expiresAt: new Date(Date.now() + ENROLMENT_TTL_MS).toISOString(),
+  });
+
+  return { token, expiresInSec: Math.floor(ENROLMENT_TTL_MS / 1000) };
+}
+
+/** Whose account is this? Answered without spending the token. */
+export async function previewEnrolment(rawToken) {
+  const row = await getStore().peekEnrolment(sha256(String(rawToken || '')));
+  if (!row) throw new Error('That setup link has expired or has already been used. Get a new one from the app.');
+  return { account: row.email };
+}
+
+/** Spend it, and hand back the token this computer will authenticate with. */
+export async function redeemEnrolment(rawToken, { name, info } = {}) {
+  const store = getStore();
+  const row = await store.consumeEnrolment(sha256(String(rawToken || '')));
+  if (!row) throw new Error('That setup link has expired or has already been used. Get a new one from the app.');
+
+  const token = randomToken(24);
+  const device = await store.createDevice(row.user_id, {
+    id: row.id,
+    tokenHash: sha256(token),
+    name: cleanName(name, 'A computer'),
+    info: info || {},
+  });
+
+  return { device, token };
+}
+
 export async function listDevices(userId) {
   const rows = await getStore().listDevices(userId);
   return rows.map((d) => ({

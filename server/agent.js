@@ -361,7 +361,7 @@ export function needsApproval(toolCalls, policy) {
   });
 }
 
-async function runToolCalls({ user, toolCalls, chatId, emit, signal }) {
+async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint }) {
   const results = await Promise.all(
     toolCalls.map(async (call) => {
       const started = Date.now();
@@ -372,6 +372,7 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal }) {
         input: call.input,
         chatId,
         signal,
+        deviceHint,
       });
       const result = {
         toolCallId: call.id,
@@ -417,7 +418,7 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal }) {
  *
  * @param decision  'allow' | 'deny' when resuming from an approval prompt
  */
-export async function runAgent({ userId, user, chatId, modelId, decision, emit, signal }) {
+export async function runAgent({ userId, user, chatId, modelId, decision, emit, signal, deviceHint }) {
   const store = getStore();
   const prefs = await getPrefs(userId);
 
@@ -533,7 +534,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       };
       for (const r of toolMessage.results) emit('tool_result', r);
     } else {
-      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal });
+      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint });
     }
     await store.appendMessage(userId, chatId, toolMessage);
     messages.push(toolMessage);
@@ -683,7 +684,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       return; // The client resumes by calling back with a decision.
     }
 
-    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal });
+    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint });
     await store.appendMessage(userId, chatId, toolMessage);
     messages.push(toolMessage);
   }

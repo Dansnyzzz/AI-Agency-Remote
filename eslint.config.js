@@ -50,6 +50,9 @@ const BROWSER_GLOBALS = {
   history: 'readonly',
   navigator: 'readonly',
   localStorage: 'readonly',
+  // Which computer this browser is on is a fact about the tab, not the account:
+  // a laptop's answer must never be restored on a desktop from a synced profile.
+  sessionStorage: 'readonly',
   console: 'readonly',
   fetch: 'readonly',
   Headers: 'readonly',

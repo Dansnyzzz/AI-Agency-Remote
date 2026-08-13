@@ -78,6 +78,15 @@ export const vi = {
   /* ── kết nối một máy tính ────────────────────────────────────────── */
   'worker.copy': 'Sao chép',
   'worker.copied': 'Đã sao chép',
+  'setup.warning':
+    'Dòng lệnh này trao cho người chạy nó toàn quyền trên máy đó — tệp, shell, và điều khiển màn hình. Chỉ chạy trên máy của chính bạn, và đừng bao giờ dán một dòng do người khác gửi.',
+  'setup.expires': 'Dùng được trong {n} phút, và chỉ một lần.',
+
+  /* ── máy tính mà trợ lý thao tác ─────────────────────────────────── */
+  'devices.followsYou': 'Trợ lý thao tác trên máy bạn đang mở trang này.',
+  'devices.pinned': 'Đang ghim vào một máy, bất kể bạn ngồi ở đâu.',
+  'devices.unpin': 'Theo máy tôi đang ngồi',
+  'devices.unpinned': 'Sẽ dùng máy bạn đang ngồi.',
 
   /* ── trình duyệt mà máy tính đó điều khiển ───────────────────────── */
   'browser.label': 'Trình duyệt',

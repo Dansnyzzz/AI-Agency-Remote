@@ -19,7 +19,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * rendezvous point. Both the enqueue and the claim are scoped by `userId`,
  * which is what guarantees a job can only ever run on its own owner's computer.
  */
-async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, signal }) {
+async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, signal, deviceHint }) {
   const store = getStore();
 
   // Addressed to one machine rather than left for whoever polls first. With two
@@ -27,7 +27,7 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
   // landing on the wrong laptop is a confusing failure at best and the wrong
   // file at worst.
   const prefs = await getPrefs(userId);
-  const status = await workerStatus(user || { id: userId }, prefs);
+  const status = await workerStatus(user || { id: userId }, prefs, deviceHint);
   if (!status.online) {
     return {
       isError: true,
@@ -87,7 +87,7 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
  * thrown error would break the agent loop where the model could otherwise read
  * the failure and adjust.
  */
-export async function executeTool({ user, name, input, chatId, signal }) {
+export async function executeTool({ user, name, input, chatId, signal, deviceHint }) {
   const userId = user.id;
 
   /**
@@ -158,7 +158,7 @@ export async function executeTool({ user, name, input, chatId, signal }) {
     }
 
     const timeoutMs = Math.min(Number(input?.timeout_ms) || DEFAULT_LOCAL_TIMEOUT_MS, 600_000);
-    return await runViaWorker({ user, userId, name, input: input || {}, chatId, timeoutMs, signal });
+    return await runViaWorker({ user, userId, name, input: input || {}, chatId, timeoutMs, signal, deviceHint });
   } catch (err) {
     return { isError: true, content: `${name} failed: ${err?.message || String(err)}` };
   }

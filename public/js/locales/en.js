@@ -79,6 +79,22 @@ export const en = {
   'worker.copy': 'Copy',
   'worker.copied': 'Copied',
 
+  /**
+   * The warning is not decoration. A setup token travels toward a machine, so it
+   * can be handed to somebody who was told it does something else — and saying
+   * so plainly is the only defence. The installer repeats it with the account
+   * named and will not continue without a typed YES.
+   */
+  'setup.warning':
+    'This gives whoever runs it full access to that computer — its files, a shell, and control of the screen. Only run it on a computer you own, and never paste a line somebody else sent you.',
+  'setup.expires': 'Good for {n} minutes, and only once.',
+
+  /* ── which computer the assistant works on ────────────────────────── */
+  'devices.followsYou': 'The assistant works on the computer you have this open on.',
+  'devices.pinned': 'Pinned to one computer, whichever you are sitting at.',
+  'devices.unpin': 'Follow me instead',
+  'devices.unpinned': 'It will use the computer you are on.',
+
   /* ── which browser a computer drives ──────────────────────────────
    *
    * Each option is labelled with what it costs, not what it is called:

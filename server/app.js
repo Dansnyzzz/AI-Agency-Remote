@@ -69,6 +69,9 @@ import {
   setDeviceWorkspace,
   setDeviceBrowserMode,
   localPairingCode,
+  startEnrolment,
+  previewEnrolment,
+  redeemEnrolment,
 } from './devices.js';
 import { pendingAnnouncement, decideAnnouncement } from './modelNews.js';
 import {
@@ -374,6 +377,17 @@ export function createApp() {
         ok: true,
         account: req.workerUser.email,
         device: req.workerDevice?.name || null,
+        /**
+         * Which row this token belongs to.
+         *
+         * The worker cannot know: it only learns an id during pairing, and a
+         * machine that starts with a token already saved skips pairing entirely
+         * and keeps the random placeholder it generated at boot. That
+         * placeholder was then what it told the browser it was — an id matching
+         * no device on the account, so "work on the computer I am sitting at"
+         * matched nothing and quietly did nothing at all.
+         */
+        deviceId: req.workerDevice?.id || null,
         config: {
           workspace: device?.workspace ?? null,
           // Null reads as "sandbox" on the worker, which is the right default
@@ -514,6 +528,35 @@ export function createApp() {
       // The token is in here exactly once, on the one poll that follows the
       // claim. After that the pairing row is gone and this answers 'unknown'.
       res.json(outcome);
+    }),
+  );
+
+  /**
+   * Redeem a setup link. Unauthenticated because the token *is* the credential —
+   * the same reasoning as the two routes above, and the same rate limit.
+   *
+   * Two phases through one endpoint, and the split is the security design rather
+   * than an API convenience. Without `confirm` it answers "this token belongs to
+   * someone@example.com" and spends nothing, so the installer can put that name
+   * in front of a human before anything happens. An enrolment token travels
+   * *toward* a machine, which means it can be handed to somebody who was told it
+   * does something else — and the only defence against that is making sure the
+   * person at the keyboard is told exactly whose account is about to be given
+   * the run of their computer. Answering "no" must not cost them the token.
+   */
+  app.post(
+    '/api/pair/enrol',
+    rateLimit('pair'),
+    wrap(async (req, res) => {
+      const { token, confirm, name, info } = req.body || {};
+      try {
+        if (!confirm) return res.json(await previewEnrolment(token));
+
+        const { device, token: deviceToken } = await redeemEnrolment(token, { name, info });
+        res.status(201).json({ token: deviceToken, deviceId: device.id, name: device.name });
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
     }),
   );
 
@@ -979,6 +1022,41 @@ export function createApp() {
       } catch (err) {
         res.status(400).json({ error: err.message });
       }
+    }),
+  );
+
+  /**
+   * A setup link for a computer that is not paired yet.
+   *
+   * Returns the whole command rather than just the token, because the command is
+   * what somebody actually needs — it contains this deployment's address, and
+   * asking a person to assemble it from parts is how the old instructions went
+   * wrong in the first place.
+   *
+   * The token goes in an environment variable, never interpolated into the
+   * script body. A script assembled by string-joining a parameter and then piped
+   * into `iex` runs whatever that parameter contains.
+   */
+  api.post(
+    '/devices/enrolment',
+    rateLimit('pair'),
+    wrap(async (req, res) => {
+      const { token, expiresInSec } = await startEnrolment(req.user.id);
+      const base = publicUrlFor(req);
+      // Where the machine gets the code from. Deployments are forks, so this is
+      // a setting rather than a constant — but it is the operator's setting, not
+      // anything a request can influence.
+      const repo = process.env.REPO_URL || 'https://github.com/Dansnyzzz/AI-remote.git';
+
+      res.status(201).json({
+        expiresInSec,
+        windows:
+          `$env:AIR_TOKEN='${token}'; $env:AIR_SERVER='${base}'; $env:AIR_REPO='${repo}'; ` +
+          `irm ${base}/setup.ps1 | iex`,
+        unix:
+          `AIR_TOKEN='${token}' AIR_SERVER='${base}' AIR_REPO='${repo}' ` +
+          `bash -c "$(curl -fsSL ${base}/setup.sh)"`,
+      });
     }),
   );
 
@@ -2274,6 +2352,12 @@ export function createApp() {
           chatId,
           modelId: req.body?.model,
           decision: req.body?.decision,
+          // Which computer the browser is sitting at, learned from the worker on
+          // that machine. Per request rather than stored: preferences belong to
+          // the account, so two machines with the app open would take turns
+          // overwriting each other's answer, and both would be wrong half the
+          // time. Verified against this account's machines before it is used.
+          deviceHint: req.body?.deviceHint,
           emit,
           signal: controller.signal,
         });

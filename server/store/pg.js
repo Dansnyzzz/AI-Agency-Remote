@@ -1630,6 +1630,52 @@ export function createPgStore(connectionString) {
       );
       return rows[0] ?? null;
     },
+    /**
+     * An enrolment: the same rendezvous, running the other way.
+     *
+     * A pairing code is minted by a computer and typed by a person. An enrolment
+     * token is minted by a signed-in person and carried to a computer, so the
+     * account is known from the start — that is the whole difference, and it is
+     * why `user_id` is set here rather than at claim time.
+     */
+    async createEnrolment({ id, codeHash, userId, expiresAt }) {
+      await q(
+        `INSERT INTO pairings (id, code_hash, user_id, device_name, info, expires_at)
+         VALUES ($1, $2, $3, $4, '{}'::jsonb, $5)`,
+        [id, codeHash, userId, '(enrolling)', expiresAt],
+      );
+      return { id };
+    },
+    /**
+     * Look up an enrolment without spending it.
+     *
+     * The installer has to say *whose* account is about to be given the run of
+     * this computer before anybody agrees to it, and asking that question must
+     * not be the thing that consumes the token — otherwise answering "no" would
+     * still have used it up.
+     */
+    async peekEnrolment(codeHash) {
+      const rows = await q(
+        `SELECT p.id, p.user_id, u.email
+           FROM pairings p JOIN users u ON u.id = p.user_id
+          WHERE p.code_hash = $1 AND p.expires_at > NOW()`,
+        [codeHash],
+      );
+      return rows[0] ?? null;
+    },
+    /**
+     * Spend it. One statement, so two machines racing on the same token cannot
+     * both win — the row is gone with the first.
+     */
+    async consumeEnrolment(codeHash) {
+      const rows = await q(
+        `DELETE FROM pairings
+          WHERE code_hash = $1 AND expires_at > NOW()
+      RETURNING id, user_id`,
+        [codeHash],
+      );
+      return rows[0] ?? null;
+    },
     async prunePairings() {
       await q("DELETE FROM pairings WHERE expires_at < NOW() - INTERVAL '1 hour'");
     },

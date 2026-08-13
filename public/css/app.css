@@ -2193,6 +2193,23 @@ details.block pre {
 }
 .connect__cmd { user-select: all; }
 
+/* The setup command carries a live token, so it is shown to be copied rather
+   than read — select-all on click, and wrapping instead of a scrollbar, because
+   a line that runs off the edge is one people copy half of. */
+.setup__cmd {
+  margin: 4px 0 6px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0d1216;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
 .spinner {
   width: 11px;
   height: 11px;

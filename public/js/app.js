@@ -1902,7 +1902,62 @@ function renderConnectSteps() {
   ].join('');
 }
 
+/**
+ * A one-line setup command for a computer that is not paired yet.
+ *
+ * Generated on demand rather than shown by default: it carries a live token for
+ * this account, and a secret sitting on screen behind a settings tab is a secret
+ * somebody will screenshot. It expires, and the panel says when.
+ *
+ * The warning is not decoration. This token flows *toward* a machine, so it can
+ * be passed to somebody who was told it does something else — and the honest
+ * thing is to say plainly that pasting it hands the machine over. The installer
+ * repeats the same warning with the account named, and refuses to go on without
+ * a typed YES.
+ */
+$('make-setup-link').addEventListener('click', async (event) => {
+  const button = event.target;
+  const host = $('setup-link');
+  button.disabled = true;
+  try {
+    const link = await api.enrolmentLink();
+    const minutes = Math.max(1, Math.round((link.expiresInSec || 600) / 60));
+    const windows = escapeText(link.windows);
+    const unix = escapeText(link.unix);
+
+    host.hidden = false;
+    host.innerHTML =
+      `<p class="hint warn-text">${escapeText(t('setup.warning'))}</p>` +
+      `<label class="device__label">Windows (PowerShell)</label>` +
+      `<pre class="setup__cmd" data-copy="${windows}">${windows}</pre>` +
+      `<button class="btn btn--ghost btn--tiny" data-copy-setup="windows">${escapeText(t('worker.copy'))}</button>` +
+      `<label class="device__label">macOS / Linux</label>` +
+      `<pre class="setup__cmd" data-copy="${unix}">${unix}</pre>` +
+      `<button class="btn btn--ghost btn--tiny" data-copy-setup="unix">${escapeText(t('worker.copy'))}</button>` +
+      `<p class="hint">${escapeText(t('setup.expires').replace('{n}', String(minutes)))}</p>`;
+  } catch (err) {
+    toast(err.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
 document.addEventListener('click', async (event) => {
+  const copySetup = event.target.closest('[data-copy-setup]');
+  if (copySetup) {
+    const pre = copySetup.previousElementSibling;
+    try {
+      await navigator.clipboard.writeText(pre?.dataset.copy || pre?.textContent || '');
+      copySetup.textContent = t('worker.copied');
+      setTimeout(() => {
+        copySetup.textContent = t('worker.copy');
+      }, 1400);
+    } catch {
+      toast('Could not reach the clipboard — select the text and press Ctrl+C.', 'error');
+    }
+    return;
+  }
+
   const button = event.target.closest('#copy-connect');
   if (!button) return;
   try {
@@ -3266,9 +3321,21 @@ async function loadDevices() {
     })
     .join('')}
     ${
-      devices.filter((d) => d.online).length > 1
-        ? '<p class="hint">More than one is online. The assistant works on the one marked <em>in use</em>.</p>'
-        : ''
+      /**
+       * Say which rule is deciding, and offer the way back.
+       *
+       * Pinning a machine is deliberate and has to stick — software that quietly
+       * overrides an explicit choice is a worse bug than choosing the wrong
+       * machine. But a pin made last month is invisible, and the symptom is a
+       * file opening on a computer in another building. So the state is stated,
+       * and clearing it is one button.
+       */
+      state.boot.prefs?.activeDevice
+        ? `<p class="hint">${escapeText(t('devices.pinned'))}
+             <button class="btn btn--ghost btn--tiny" id="unpin-device" type="button">${escapeText(t('devices.unpin'))}</button></p>`
+        : devices.filter((d) => d.online).length > 1
+          ? `<p class="hint">${escapeText(t('devices.followsYou'))}</p>`
+          : ''
     }`;
 
   for (const btn of host.querySelectorAll('[data-ws-save]')) {
@@ -3316,6 +3383,17 @@ async function loadDevices() {
     });
     select.dataset.previous = select.value;
   }
+
+  host.querySelector('#unpin-device')?.addEventListener('click', async () => {
+    try {
+      state.boot.prefs = await api.savePrefs({ activeDevice: null });
+      await refreshWorker();
+      await loadDevices();
+      toast(t('devices.unpinned'));
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 
   for (const btn of host.querySelectorAll('[data-use-device]')) {
     btn.addEventListener('click', async () => {

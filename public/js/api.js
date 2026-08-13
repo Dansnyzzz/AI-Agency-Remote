@@ -109,6 +109,7 @@ export const api = {
   unpairDevice: (id) => request('DELETE', `/api/devices/${id}`),
   setDeviceWorkspace: (id, path) => request('PUT', `/api/devices/${id}/workspace`, { path }),
   setDeviceBrowser: (id, mode) => request('PUT', `/api/devices/${id}/browser`, { mode }),
+  enrolmentLink: () => request('POST', '/api/devices/enrolment'),
 
   modelNews: () => request('GET', '/api/models/news'),
   decideModelNews: (id, action) => request('POST', '/api/models/news', { id, action }),
@@ -174,14 +175,61 @@ export const api = {
  * Uses fetch + a stream reader rather than EventSource so the request can be a
  * POST (carrying the model and any approval decision) and can be aborted.
  */
+/**
+ * Which computer this browser is sitting at.
+ *
+ * A page cannot know what machine it is running on — but it can ask
+ * `127.0.0.1`, and the only thing answering there is a worker on this very
+ * machine. Sent with each message so the assistant acts on the computer in
+ * front of you rather than whichever of your machines checked in most recently.
+ *
+ * Asked once per tab and remembered, because the answer cannot change while the
+ * page is open. Everything about it is best-effort: no worker, a different port,
+ * or a browser that refuses the request all mean the same thing — no hint, and
+ * the server falls back to what it did before.
+ */
+const LOCAL_PORT = 8765;
+let localDevice;
+
+export async function localDeviceId() {
+  if (localDevice !== undefined) return localDevice;
+
+  // Cached for the tab. `sessionStorage` rather than `localStorage`: it is a
+  // fact about this machine, and a laptop's answer must never be restored on a
+  // desktop from a synced profile.
+  const remembered = sessionStorage.getItem('ai-remote-local-device');
+  if (remembered) {
+    localDevice = remembered || null;
+    return localDevice;
+  }
+
+  // Short: this runs before the first message and must never be what somebody
+  // waits on. A worker on this machine answers in single-digit milliseconds.
+  const stop = AbortSignal.timeout(600);
+  try {
+    const res = await fetch(`http://127.0.0.1:${LOCAL_PORT}/whoami`, {
+      signal: stop,
+      cache: 'no-store',
+    });
+    const { deviceId } = await res.json();
+    localDevice = deviceId || null;
+  } catch {
+    localDevice = null;
+  }
+  if (localDevice) sessionStorage.setItem('ai-remote-local-device', localDevice);
+  return localDevice;
+}
+
 export async function runAgent({ chatId, model, decision, runId, signal, handlers }) {
+  const deviceHint = await localDeviceId().catch(() => null);
+
   const res = await fetch(`/api/chats/${chatId}/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     // `runId` stays the same across every reconnect of one run, so resuming a
     // turn the host cut short re-enters its own lock instead of being refused by
     // it. A different tab generates a different id and is still kept out.
-    body: JSON.stringify({ model, decision, runId }),
+    body: JSON.stringify({ model, decision, runId, deviceHint }),
     signal,
   });
 

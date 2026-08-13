@@ -473,6 +473,132 @@ section('the browser is chosen per computer');
   check("another account cannot change somebody else's browser", stolen.status === 400, `got ${stolen.status}`);
 }
 
+// ── setting a computer up from a link ───────────────────────────────
+//
+// Pairing, run the other way: the token is minted by a signed-in person and
+// carried to a machine, so nobody types an eight-character code. The direction
+// is also what makes it dangerous — see the confirmation step below.
+section('a computer can be set up from a one-line link');
+{
+  const noSession = await anon.call('POST', '/api/devices/enrolment');
+  check('minting a setup link needs a session', noSession.status === 401, `got ${noSession.status}`);
+
+  const made = await alice.call('POST', '/api/devices/enrolment');
+  check('a signed-in person can mint one', made.status === 201, JSON.stringify(made.json).slice(0, 90));
+  check('it comes with a command for Windows', /AIR_TOKEN=/.test(made.json?.windows || ''), made.json?.windows);
+  check('and one for everything else', /AIR_TOKEN=/.test(made.json?.unix || ''), made.json?.unix);
+  check('and says how long it lasts', made.json?.expiresInSec > 0, `${made.json?.expiresInSec}`);
+
+  /**
+   * The token is passed in the environment, never joined into the script body.
+   * A script assembled by string-joining a parameter and then piped into `iex`
+   * runs whatever that parameter contains.
+   */
+  check(
+    'the token rides in an environment variable, not the script',
+    /\$env:AIR_TOKEN='[^']+';/.test(made.json?.windows || ''),
+    made.json?.windows,
+  );
+
+  const token = /AIR_TOKEN='([^']+)'/.exec(made.json.windows)[1];
+
+  // Phase one: say whose account this is, and spend nothing. Somebody who
+  // answers "no" must not have lost their token by asking the question.
+  const preview = await anon.call('POST', '/api/pair/enrol', { token });
+  check('asking whose account it is works without a session', preview.status === 200, `got ${preview.status}`);
+  check('and names the account', preview.json?.account === 'alice@example.com', preview.json?.account);
+  check('and hands out no token', !preview.json?.token, JSON.stringify(preview.json));
+
+  const again = await anon.call('POST', '/api/pair/enrol', { token });
+  check('asking twice is still allowed — it spends nothing', again.json?.account === 'alice@example.com');
+
+  // Phase two: spend it.
+  const redeemed = await anon.call('POST', '/api/pair/enrol', {
+    token,
+    confirm: true,
+    name: 'Set-up box',
+    info: { platform: 'linux x64' },
+  });
+  check('confirming pairs the computer', redeemed.status === 201, JSON.stringify(redeemed.json).slice(0, 90));
+  check('and hands over a device token', (redeemed.json?.token || '').length > 20);
+  check('named as the machine asked', redeemed.json?.name === 'Set-up box', redeemed.json?.name);
+
+  const replay = await anon.call('POST', '/api/pair/enrol', { token, confirm: true });
+  check('a token cannot be spent twice', replay.status === 400, `got ${replay.status}`);
+  const stale = await anon.call('POST', '/api/pair/enrol', { token });
+  check('and is gone even for the question', stale.status === 400, `got ${stale.status}`);
+
+  const invented = await anon.call('POST', '/api/pair/enrol', { token: 'not-a-real-token', confirm: true });
+  check('an invented token gets nothing', invented.status === 400, `got ${invented.status}`);
+
+  // The machine it created belongs to the account that minted the link, and to
+  // nobody else — the same boundary as every other route here.
+  const mine = (await alice.call('GET', '/api/devices')).json.devices.find((d) => d.name === 'Set-up box');
+  check('the computer lands on the right account', !!mine, mine ? mine.name : 'it is not in the list');
+  const theirs = (await bob.call('GET', '/api/devices')).json.devices.find((d) => d.name === 'Set-up box');
+  check("and on nobody else's", !theirs);
+
+  if (mine) await alice.call('DELETE', `/api/devices/${mine.id}`);
+}
+
+// ── which computer the assistant acts on ────────────────────────────
+section('the assistant works on the computer you are sitting at');
+{
+  const { workerStatus } = await import('../server/localTools.js');
+  const aliceRow = await store.getUserByEmail('alice@example.com');
+  const user = { id: aliceRow.id, role: 'user' };
+
+  // Two machines, both answering. Without a hint this is a coin toss dressed up
+  // as "most recent", which is how a file opens on the computer at home.
+  await anon.call('POST', '/api/worker/heartbeat', { info: { platform: 'win32 x64' } }, {
+    Authorization: `Bearer ${laptopToken}`,
+  });
+  const both = await workerStatus(user, {});
+  check('at least one machine is online for this', both.online === true, JSON.stringify(both.machines));
+
+  const hinted = await workerStatus(user, {}, laptopId);
+  check('a hint picks that machine', hinted.activeId === laptopId, hinted.activeId);
+
+  // An explicit choice is not something software may quietly override. "Always
+  // use the one at home" is a real thing to want, and losing it silently is a
+  // worse bug than picking the wrong machine.
+  const pinned = await workerStatus(user, { activeDevice: laptopId }, 'some-other-machine');
+  check('a pinned machine beats the hint', pinned.activeId === laptopId, pinned.activeId);
+
+  // The hint arrives from a browser, and everything from a browser is something
+  // somebody can type. It may only ever name a machine this account already owns.
+  /**
+   * The worker has to be *told* which row it is.
+   *
+   * It only ever learns a device id during pairing, so a machine that starts
+   * with a token already saved keeps the random placeholder it generated at
+   * boot — and that placeholder was what it handed to the browser as its
+   * identity. It matched no device on the account, so the hint matched nothing
+   * and the whole feature silently did nothing on every machine except one that
+   * had *just* been paired. Found by curling the endpoint on a real worker.
+   */
+  const beat = await anon.call('POST', '/api/worker/heartbeat', { info: { platform: 'win32 x64' } }, {
+    Authorization: `Bearer ${laptopToken}`,
+  });
+  check('a heartbeat tells the machine which device it is', beat.json?.deviceId === laptopId, beat.json?.deviceId);
+
+  const workerSource = fs.readFileSync(new URL('../worker/index.js', import.meta.url), 'utf8');
+  check('and the worker adopts it', /if \(res\?\.deviceId\)/.test(workerSource));
+  check(
+    'reporting nothing until it is confirmed',
+    /identityConfirmed \? WORKER_ID : null/.test(workerSource),
+    'an id that matches no device looks like the feature working while doing nothing',
+  );
+
+  const forged = await workerStatus(user, {}, 'a-device-belonging-to-someone-else');
+  check(
+    'a hint naming a machine on another account is ignored',
+    forged.activeId !== 'a-device-belonging-to-someone-else',
+    forged.activeId,
+  );
+  check('and it falls back rather than refusing to work', both.online === true);
+}
+
 // ── two things attaching to a real browser got wrong ────────────────
 //
 // Both were found by attaching to an actual Chrome started with

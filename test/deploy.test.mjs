@@ -463,6 +463,82 @@ section('a computer can be pointed at a deployment');
     (withExtras.text.match(/^SERVER_URL=/gm) || []).length === 1, withExtras.text);
 }
 
+/**
+ * The one-line installer, which is a script strangers paste into a shell.
+ *
+ * Two properties matter more than anything else it does, and both are checked
+ * by reading the file rather than by running it:
+ *
+ *   **It is static.** Every variable arrives in the environment. The moment a
+ *   server builds this text by joining a parameter into it, whatever was joined
+ *   in becomes code — the caller pipes the result straight into `iex` or `bash`.
+ *
+ *   **It refuses to continue without a typed YES**, after naming the account.
+ *   An enrolment token travels *toward* a machine, so it can be handed to
+ *   somebody who was told it does something else. Nothing else in the flow
+ *   stands between that and a stranger owning their computer.
+ */
+section('the one-line installer');
+{
+  for (const [name, text] of [
+    ['setup.ps1', read('public/setup.ps1')],
+    ['setup.sh', read('public/setup.sh')],
+  ]) {
+    // A placeholder means somebody intended to substitute at serve time, which
+    // is the injection this design exists to avoid.
+    check(`${name} has no placeholder to substitute`, !/__[A-Z_]+__/.test(text), (/__[A-Z_]+__/.exec(text) || [])[0]);
+    check(`${name} takes the token from the environment`, /AIR_TOKEN/.test(text));
+    check(`${name} takes the server from the environment`, /AIR_SERVER/.test(text));
+
+    check(`${name} asks the server whose account this is first`, /api\/pair\/enrol/.test(text));
+    check(`${name} shows the account before anything else happens`, /full access to this computer/.test(text));
+    check(`${name} refuses to continue without YES`, /YES/.test(text));
+    // Confirming must come after the question, or the token is spent before
+    // anybody is asked — and answering "no" would still have cost it.
+    check(
+      `${name} only confirms after asking`,
+      text.indexOf('YES') < text.lastIndexOf('confirm'),
+      `YES at ${text.indexOf('YES')}, confirm at ${text.lastIndexOf('confirm')}`,
+    );
+    check(`${name} does not ask for administrator rights`, !/RunAs|sudo /.test(text));
+  }
+
+  // Served from the app's own origin, without a session: the machine running it
+  // has none yet, and that is the entire point.
+  const files = fs.readdirSync(path.join(root, 'public'));
+  check('both are in public/, so the app serves them', files.includes('setup.ps1') && files.includes('setup.sh'));
+}
+
+section('starting at login');
+{
+  const text = read('scripts/autostart.js');
+
+  /**
+   * Not a service, and not Task Scheduler.
+   *
+   * A Windows service runs in session 0, which has no desktop — every
+   * `desktop_*` tool would fail on a machine that looked perfectly connected.
+   * And `schtasks /SC ONLOGON` fails with "Access is denied" for an ordinary
+   * account, which is fatal for a setup a stranger pastes: a one-liner that
+   * demands administrator is a one-liner nobody should agree to.
+   */
+  check('Windows uses the per-user Run key', /HKCU\\\\Software\\\\Microsoft/.test(text));
+  // The word appears in a comment explaining why it was rejected; what must not
+  // appear is a call to it.
+  check('and never calls schtasks, which needs elevation', !/execFileSync\('schtasks'/.test(text));
+  check('the window is hidden through a shim', /autostart\.vbs/.test(text));
+  // wscript reads a .vbs in the system code page, so one non-ASCII character
+  // silently breaks the line it is on.
+  check('written as ASCII, because wscript reads the code page', /'ascii'/.test(text));
+
+  check('there is a way to undo it', /--uninstall/.test(text));
+  check('and it says so after installing', /Remove it with/.test(text));
+  check('macOS and Linux are handled too', /LaunchAgents/.test(text) && /systemd/.test(text));
+  // Said out loud rather than implied: a green tick for a code path that has
+  // never run is worse than an admitted gap.
+  check('and are marked as untested', /NOT tested/.test(text));
+}
+
 // The instruction in the interface has to be generated, because it names this
 // deployment's own address — the hard-coded `npm start` it replaced was the
 // visible half of the bug above.

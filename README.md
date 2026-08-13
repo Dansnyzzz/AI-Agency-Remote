@@ -277,6 +277,55 @@ own screencast, so frames arrive when the page actually repaints — measured at
 continuously animating page, against about 2 for a screenshot timer, and costing nothing at all while
 the page sits still. `SCREEN_EVERY_NTH` (default 1) trades smoothness for bandwidth.
 
+### It works on the computer you are sitting at
+
+With a laptop and a desktop both paired and both online, the assistant used to act on whichever had
+checked in most recently — so you would sit at the laptop, say "open that file", and watch nothing
+happen because it opened on the machine at home.
+
+The worker answers one question on `127.0.0.1:8765`: *which computer is this?* A browser cannot know
+what machine it is running on, but it can ask loopback, and the only thing answering there is a
+worker on that very machine. The page passes the answer along with each message.
+
+Three constraints on that endpoint, each closing a hole:
+
+- **Bound to `127.0.0.1`**, not `0.0.0.0` — nothing else on the network can ask, which matters on
+  cafe wifi.
+- **It cannot be told to do anything.** One route, GET only, returning an identifier. There is no
+  verb there to abuse.
+- **CORS names exactly one origin**: the deployment that worker answers to, matched in full rather
+  than by prefix. With `*`, every site you visit could quietly learn that you run AI Remote and what
+  your machine is called.
+
+Order of precedence when choosing a machine:
+
+1. **One you pinned** with *Work on this one* — an explicit choice is not something software may
+   quietly override, and "always use the one at home" is a real thing to want. *Follow me instead*
+   clears it.
+2. **The computer this browser is on.**
+3. **Whichever answered most recently** — the old behaviour.
+
+If the worker is not running, the port is taken, or the browser refuses the request, nothing breaks:
+no hint is sent and the old behaviour stands. `WORKER_LOCAL_PORT=false` turns the endpoint off.
+
+### Starting at login
+
+`node scripts/autostart.js --install` — done for you by the one-line setup. The worker starts when
+you log in, with no window, so the computer is simply there rather than there until the next reboot.
+
+On Windows it is a per-user `Run` entry, **not** a scheduled task and **not** a service. A service
+runs in session 0, which has no desktop for the `desktop_*` tools to act on; and
+`schtasks /SC ONLOGON` fails with "Access is denied" for an ordinary account, which is fatal for a
+setup line a stranger is asked to paste. The `Run` entry needs no elevation and shows up in Task
+Manager → Startup, where somebody who has forgotten what it is can switch it off.
+
+`--uninstall` removes it, `--status` says whether it is there. macOS (LaunchAgent) and Linux (systemd
+user unit) are implemented but **have not been run** — there is no Mac or Linux box here to try them
+on, and a tick for a code path that never executed would be worth less than this sentence.
+
+Only one worker runs per computer. The second one exits with an explanation rather than quietly
+fighting the first over the same browser and the same job queue.
+
 ### Watching it work
 
 A run of browser or desktop actions is drawn as **one card, not one card per call** — "Used the
@@ -1255,6 +1304,37 @@ account, or remove one. Set `ALLOW_SIGNUP=false` to close registration once ever
 Each person does this for their own machines, and only their own conversations can reach them.
 
 On the computer you want the assistant to work on:
+
+Press **Set up a computer** in Settings → Computers. It gives you one line to paste on the machine
+you want to use — it already contains this deployment's address and a setup token for your account:
+
+```powershell
+$env:AIR_TOKEN='…'; $env:AIR_SERVER='https://your-app.vercel.app'; $env:AIR_REPO='…'; irm https://your-app.vercel.app/setup.ps1 | iex
+```
+
+That downloads the code, installs it, pairs the machine, and sets it to start at login. No code to
+read off a terminal and type back.
+
+**It stops and asks first, and that is deliberate.** Before anything is installed it prints the
+account the machine is about to be given to, and refuses to continue without a typed `YES`:
+
+```
+  This will give  you@example.com  full access to this computer:
+  its files, a shell, and control of your screen.
+
+  Type YES to continue:
+```
+
+The reason is the direction. A pairing code travels *from* the machine *to* its owner, so nobody can
+be tricked into typing somebody else's code. A setup token travels the other way, which means it can
+be handed to a person along with a plausible story — "paste this to activate your trial" — and the
+machine that pastes it belongs to whoever minted the token. Naming the account turns that from a
+paste that looks harmless into a decision somebody made. Never paste a setup line another person
+sent you.
+
+The token lasts ten minutes and works once.
+
+### Or do it by hand
 
 ```bash
 git clone <your-repo-url> ai-remote

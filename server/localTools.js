@@ -72,7 +72,7 @@ export async function handleIndexPayload(userId, payload) {
  * decide whether to advertise the filesystem and shell tools at all — and the
  * per-account scoping is what stops one account reaching another's computer.
  */
-export async function workerStatus(user, prefs = null) {
+export async function workerStatus(user, prefs = null, deviceHint = null) {
   if (usesInProcessTools(user)) {
     const { info } = await loadRuntime();
     return { online: true, local: true, info, machines: [], activeId: null };
@@ -81,11 +81,29 @@ export async function workerStatus(user, prefs = null) {
   const machines = await getStore().activeWorkers(user.id);
 
   if (machines.length) {
-    // Which one the assistant acts on. An explicit choice wins as long as that
-    // machine is actually answering; otherwise the most recently seen, which for
-    // the overwhelmingly common case of one computer is simply "the computer".
+    /**
+     * Which one the assistant acts on, in order:
+     *
+     *   1. **A machine you picked.** An explicit choice that software quietly
+     *      overrides is a worse bug than picking the wrong machine, so this wins
+     *      until it is cleared — including over the computer you are sitting at,
+     *      because "always use the one at home" is a real thing to want.
+     *
+     *   2. **The computer the browser is running on.** Asked of `127.0.0.1` by
+     *      the page and passed along with the message. It is the answer people
+     *      mean when they say "open that file": the machine in front of them.
+     *
+     *   3. **Whichever answered most recently** — the old behaviour, and for the
+     *      overwhelmingly common case of one computer it is simply "the computer".
+     *
+     * The hint comes from a browser, so it is checked against this account's own
+     * machines rather than trusted. An id somebody types by hand can name only a
+     * computer they already own.
+     */
     const chosen =
-      machines.find((m) => m.id === prefs?.activeDevice) || machines[0];
+      machines.find((m) => m.id === prefs?.activeDevice) ||
+      machines.find((m) => m.id === deviceHint) ||
+      machines[0];
 
     return {
       online: true,

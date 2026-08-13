@@ -1168,13 +1168,21 @@
             eight-character code — enter it and that computer is yours from any device you sign in
             on, for good. Nothing on the internet connects inward: the computer polls outward.
           </p>
-          <!-- Filled from script, because the third step contains this
+          <!-- One line, generated per request, because it carries a setup token
+               for this account. The alternative — read an eight-character code
+               off a terminal and type it into a browser — still exists below for
+               anyone who would rather not paste a script. -->
+          <button class="btn btn--primary" id="make-setup-link" type="button">Set up a computer</button>
+          <div id="setup-link" hidden></div>
+
+          <h4>Or do it by hand</h4>
+          <!-- Filled from script, because the second step contains this
                deployment's own address and a hard-coded `npm start` was the
                reason a deployed app could never be connected to a computer:
                `npm start` points the worker at localhost, so the pairing code
                went into a database the deployment cannot see. -->
           <ol class="steps" id="connect-steps"></ol>
-          <button class="btn btn--primary" id="open-pair" type="button">Enter a pairing code</button>
+          <button class="btn btn--ghost" id="open-pair" type="button">Enter a pairing code</button>
         </section>
 
         <section class="panel" data-panel="account">
