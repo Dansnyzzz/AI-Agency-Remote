@@ -292,6 +292,11 @@ Thumbnails are stored as attachments and referenced by id, never inlined into th
 browsing session would otherwise put megabytes of base64 into a conversation that gets read back on
 every load.
 
+Desktop steps carry a picture as well, and it is the **live camera frame** rather than a capture of
+its own — about 61KB against the browser's 4KB. That is a measurement, not an oversight: starting the
+desktop capture host for a one-off shot takes **1516ms** on Windows, and paying that on every action
+somebody is watching is a worse trade than 57KB.
+
 ### The sandbox is not your browser
 
 Two different browsers, and confusing them is the single easiest way to be surprised by this app:
@@ -382,7 +387,14 @@ actually browse with.
 
 **Attaching borrows your browser; it never closes it.** Ending a session drops the connection and
 leaves every tab exactly where it was, and the assistant is refused if it tries to close the last tab
-— on most platforms that would quit Chrome and take everything you had open with it.
+— on most platforms that would quit Chrome and take everything you had open with it. Verified against
+a live Chrome: after the assistant let go, the browser was still serving with every tab intact.
+
+**Attached, "what is open?" answers about your tabs.** `browser_tabs` and `browser_look` connect
+before answering, so the assistant sees the pages you already have rather than being told nothing is
+open and helpfully opening a new tab — which was the first thing this mode got wrong. In the other
+two modes nothing is open until the assistant opens it, and neither tool launches a browser just to
+answer a question.
 
 `BROWSER_MODE` sets the default for a machine before it has ever been paired; `BROWSER_CDP_PORT`
 changes the port attaching looks at.

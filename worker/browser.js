@@ -983,7 +983,28 @@ async function browserOpen({ url, replace_tab: replaceTab, new_tab: newTab }) {
   return report(`Opened ${target}${count > 1 ? ` in a new tab (${count} open)` : ''}.`);
 }
 
+/**
+ * Connect first when the browser is somebody else's.
+ *
+ * In `sandbox` and `profile` modes, "nothing is open" is the truth until the
+ * assistant opens something, and launching a browser merely to answer *"what is
+ * open?"* would be a surprising side effect of a read.
+ *
+ * `attach` is the opposite case, and getting this wrong made the mode look
+ * broken: the tabs exist already — they are the reason the mode exists — but
+ * nothing had connected to Chrome yet, so `browser_tabs` answered "No tabs are
+ * open" and `browser_look` answered "No page is open. Use browser_open first."
+ * against a browser with a dozen tabs in front of the user. The model would
+ * then dutifully open a *new* tab, which is precisely what attaching is meant
+ * to avoid.
+ */
+async function ensureAttached() {
+  if (mode !== 'attach' || contextIsLive()) return;
+  await ensureContext();
+}
+
 async function browserTabs() {
+  await ensureAttached();
   const open = tabs();
   if (!open.length) return 'No tabs are open.';
 
@@ -1035,6 +1056,7 @@ async function browserCloseTab({ tab }) {
 }
 
 async function browserLook() {
+  await ensureAttached();
   if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
   return report('Current page:');
 }

@@ -236,6 +236,11 @@ function startCamera() {
         continue;
       }
 
+      // Kept so a finished step can carry a picture of the screen into the
+      // transcript. See `stepShot` for why this is the frame rather than a
+      // capture of its own.
+      latestFrame = { data: payload.frame, at: Date.now() };
+
       const watched = await publishFrame({
         frame: payload.frame,
         source: 'desktop',
@@ -273,6 +278,48 @@ function stopCamera() {
   }
   camera.kill();
   camera = null;
+}
+
+/**
+ * The most recent frame the camera produced, kept for the transcript.
+ *
+ * **Why the live frame rather than a capture of its own.** A dedicated small
+ * screenshot would be neater — the browser tools take one at 320px and it costs
+ * about 4KB — but there is no warm process to ask for it here, and the desktop
+ * capture host is not cheap to start: measured at **1516ms** for a one-off
+ * spawn on Windows, which would be added to every desktop step. The camera is
+ * already running (every desktop tool calls `takeScreen`), and its frames are
+ * about 61KB at the streaming defaults. Reusing one costs nothing.
+ *
+ * So desktop thumbnails are larger than browser ones. That is the trade, and it
+ * is the right way round: an extra 55KB on a step is cheaper than an extra
+ * second and a half on every action somebody is watching.
+ */
+let latestFrame = null;
+
+/** How stale a frame may be and still describe the step that just finished. */
+const SHOT_MAX_AGE_MS = 1500;
+const SHOT_WAIT_MS = 800;
+
+/**
+ * A picture of the screen as this step left it.
+ *
+ * Waits briefly for a frame *newer than the moment the action finished*, so the
+ * transcript does not show the screen as it was before the click. `wake()` has
+ * already resumed the camera by the time this runs, so one is normally along
+ * within a frame interval. Gives up rather than delaying the result — a missing
+ * illustration is a far smaller problem than a step that feels slow.
+ */
+async function stepShot() {
+  const since = Date.now();
+  const deadline = since + SHOT_WAIT_MS;
+
+  while (Date.now() < deadline) {
+    if (latestFrame && latestFrame.at >= since) break;
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  if (!latestFrame || Date.now() - latestFrame.at > SHOT_MAX_AGE_MS) return null;
+  return { mime: 'image/jpeg', data: latestFrame.data };
 }
 
 /**
@@ -348,7 +395,13 @@ function describe(snapshot, note) {
   return lines.join('\n');
 }
 
-/** Every action ends by re-reading the window, so the model is never acting blind. */
+/**
+ * Every action ends by re-reading the window, so the model is never acting blind.
+ *
+ * Returns `{ text, shot }` — the text is what the model reads, the shot is what
+ * the person scrolling the transcript tomorrow sees. The worker's job runner
+ * understands both this shape and a plain string, so nothing else had to change.
+ */
 async function reportOn(window, note) {
   let snapshot;
   try {
@@ -362,11 +415,16 @@ async function reportOn(window, note) {
       snapshot = remember(await call('look', {}));
     } catch {
       wake();
-      return `${note}\n\nThat window has closed. Call desktop_windows to see what is still open.`;
+      return {
+        text: `${note}\n\nThat window has closed. Call desktop_windows to see what is still open.`,
+        // Still worth a picture: "which window closed" is exactly the question
+        // somebody reading this back will have.
+        shot: await stepShot(),
+      };
     }
   }
   wake();
-  return describe(snapshot, note);
+  return { text: describe(snapshot, note), shot: await stepShot() };
 }
 
 // ── the tools ─────────────────────────────────────────────────────────
@@ -378,7 +436,7 @@ async function desktopList() {
   wake();
   // Listing is a survey, not a move — it does not change what we are working on.
 
-  if (!list.length) return 'No application windows are open.';
+  if (!list.length) return { text: 'No application windows are open.', shot: await stepShot() };
 
   const lines = ['Open windows — pass a title fragment as `window` to act on one:', ''];
   for (const w of list) {
@@ -387,7 +445,7 @@ async function desktopList() {
       .join(', ');
     lines.push(`  ${w.title}${tags ? `  (${tags})` : ''}`);
   }
-  return lines.join('\n');
+  return { text: lines.join('\n'), shot: await stepShot() };
 }
 
 async function desktopLook({ window }) {
@@ -402,7 +460,7 @@ async function desktopFocus({ window }) {
   await takeScreen();
   const snapshot = remember(await call('focus', { window }));
   wake();
-  return describe(snapshot, `Brought "${snapshot.window}" to the front.`);
+  return { text: describe(snapshot, `Brought "${snapshot.window}" to the front.`), shot: await stepShot() };
 }
 
 async function desktopLaunch({ app, args }) {
@@ -410,8 +468,8 @@ async function desktopLaunch({ app, args }) {
   await takeScreen();
   const result = await call('launch', { app, args });
   wake();
-  if (result.note) return `Launched ${app}. ${result.note}`;
-  return describe(remember(result), `Launched ${app}.`);
+  if (result.note) return { text: `Launched ${app}. ${result.note}`, shot: await stepShot() };
+  return { text: describe(remember(result), `Launched ${app}.`), shot: await stepShot() };
 }
 
 async function desktopClick({ ref, x, y, button, double, description, window }) {
@@ -451,7 +509,10 @@ async function desktopClose({ window }) {
   const result = await call('close', { window });
   working = null;
   wake();
-  return `Closed "${result.title}". Anything unsaved in it was not saved by this action.`;
+  return {
+    text: `Closed "${result.title}". Anything unsaved in it was not saved by this action.`,
+    shot: await stepShot(),
+  };
 }
 
 async function desktopWait({ seconds = 3, window }) {

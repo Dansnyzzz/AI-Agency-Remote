@@ -473,6 +473,77 @@ section('the browser is chosen per computer');
   check("another account cannot change somebody else's browser", stolen.status === 400, `got ${stolen.status}`);
 }
 
+// ── two things attaching to a real browser got wrong ────────────────
+//
+// Both were found by attaching to an actual Chrome started with
+// --remote-debugging-port, and neither could have been found any other way:
+// every mode looks fine until something is genuinely already open.
+section('attaching to a browser that is already running');
+{
+  const source = fs.readFileSync(new URL('../worker/browser.js', import.meta.url), 'utf8');
+
+  /**
+   * **Reading must connect first.** `browser_tabs` and `browser_look` only
+   * consulted whatever was already connected — which, in attach mode, was
+   * nothing, because connecting used to happen inside `browser_open`. So the
+   * two tools whose entire job is "tell me what is already open" answered "No
+   * tabs are open" and "No page is open. Use browser_open first." against a
+   * Chrome with a dozen tabs in front of the user. The model would then open a
+   * new tab, which is exactly what attaching exists to avoid.
+   */
+  const body = (name) => {
+    const at = source.indexOf(`async function ${name}(`);
+    return at < 0 ? '' : source.slice(at, source.indexOf('\n}', at));
+  };
+  check('browser_tabs connects before answering', /ensureAttached\(\)/.test(body('browserTabs')));
+  check('and so does browser_look', /ensureAttached\(\)/.test(body('browserLook')));
+  check(
+    'and only in attach mode — launching a browser to answer a question is a surprise',
+    /mode !== 'attach'/.test(body('ensureAttached')),
+  );
+
+  /**
+   * **Nothing of the user's is ever closed.** Verified against a live Chrome:
+   * after `closeBrowser()` the browser was still serving on its debugging port
+   * with every tab intact. These pin the three lines that make that true.
+   */
+  const closing = body('closeBrowser');
+  check('closing in attach mode disconnects rather than closes', /const borrowed = mode === 'attach'/.test(closing));
+  check('and never closes the context holding their tabs', /if \(borrowed\)/.test(closing));
+  check(
+    'and the last tab is refused outright',
+    /mode === 'attach' && open\.length === 1/.test(body('browserCloseTab')),
+  );
+}
+
+// ── a picture with every step, on both kinds of machine ─────────────
+section('desktop steps carry a picture too');
+{
+  const desktop = fs.readFileSync(new URL('../worker/desktop.js', import.meta.url), 'utf8');
+
+  // `reportOn` is the funnel every desktop action ends in, so this one line is
+  // what puts a thumbnail on click, type, key, scroll, wait and close.
+  check('every desktop action reports a shot', /return \{ text: describe\(snapshot, note\), shot: await stepShot\(\) \}/.test(desktop));
+
+  // The tools that bypass `reportOn` because they describe a launch or a list.
+  for (const name of ['desktopList', 'desktopFocus', 'desktopLaunch', 'desktopClose']) {
+    const at = desktop.indexOf(`async function ${name}(`);
+    const fn = at < 0 ? '' : desktop.slice(at, desktop.indexOf('\n}', at));
+    check(`${name} does too`, /shot: await stepShot\(\)/.test(fn));
+  }
+
+  /**
+   * The frame is reused rather than captured fresh, and that is a measurement,
+   * not laziness: a one-off spawn of the capture host took 1516ms on Windows,
+   * which would be added to every desktop action somebody is watching. The
+   * camera is already running — every desktop tool calls `takeScreen` — and its
+   * frames cost nothing to reuse.
+   */
+  check('the shot comes from the running camera', /latestFrame = \{ data: payload\.frame/.test(desktop));
+  check('and is only used if it is newer than the action', /latestFrame\.at >= since/.test(desktop));
+  check('with a bound on how long it will wait', /SHOT_WAIT_MS/.test(desktop));
+}
+
 // ── how long the job poll is held open ──────────────────────────────
 //
 // The long poll is what makes a tool call feel instant, and on a deployment it
