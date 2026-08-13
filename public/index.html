@@ -1,0 +1,1231 @@
+<!doctype html>
+<!-- No `data-theme` here: absent means "follow the operating system", which is
+     what somebody who has never touched the toggle wants. app.js stamps an
+     explicit value on this element only once they choose one. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0B0E11" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F7F9FB" media="(prefers-color-scheme: light)" />
+    <meta name="description" content="AI Remote — drive an agentic AI workspace from any device." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>AI Remote</title>
+    <link rel="icon" href="/logo.png" />
+    <!--
+      No web fonts.
+
+      This is a self-hosted app whose whole pitch is that your things stay on
+      your machine, and it was announcing every page load to a third party to
+      fetch two typefaces. It also made the interface render-blocked on a network
+      request, and blank on a plane. The stacks in app.css fall through to the
+      system UI font, which on every platform this runs on is a good one.
+
+      Want Space Grotesk back? Drop the .woff2 files in public/fonts/, add an
+      @font-face block to app.css, and it is served from here like everything
+      else — no CDN, and no exception needed in the Content-Security-Policy.
+    -->
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <!-- ── Gate ─────────────────────────────────────────────────────── -->
+    <div id="gate" class="gate" hidden>
+      <form class="gate__card" id="gate-form" autocomplete="on">
+        <div class="gate__mark" aria-hidden="true">
+          <img src="/logo.png" width="52" height="52" alt="" decoding="async" />
+        </div>
+        <h1 class="gate__title">AI Remote</h1>
+        <p class="gate__sub" id="gate-sub">Sign in to continue.</p>
+
+        <div id="gate-accounts">
+          <input id="gate-name" class="gate__input gate__input--text" type="text" placeholder="Your name" autocomplete="name" hidden />
+          <input id="gate-email" class="gate__input gate__input--text" type="email" placeholder="you@example.com" autocomplete="email" />
+          <div class="gate__field" id="gate-password-field">
+            <input id="gate-password" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="Password" autocomplete="current-password" />
+            <button class="gate__reveal" type="button" data-reveal="gate-password" aria-controls="gate-password" aria-pressed="false" aria-label="Show password" title="Show password">
+              <svg class="gate__eye gate__eye--shown" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+                <circle cx="12" cy="12" r="2.7" />
+              </svg>
+              <svg class="gate__eye gate__eye--hidden" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+                <circle cx="12" cy="12" r="2.7" />
+                <path d="M4 20L20 4" />
+              </svg>
+            </button>
+          </div>
+          <input id="gate-totp" class="gate__input" type="text" inputmode="numeric" placeholder="Authenticator code" autocomplete="one-time-code" hidden />
+        </div>
+
+        <!-- Choosing a new password, from either an emailed link or a code. -->
+        <div id="gate-newpass" hidden>
+          <input id="gate-resetcode" class="gate__input" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" />
+          <div class="gate__field">
+            <input id="gate-newpassword" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="New password" autocomplete="new-password" />
+            <button class="gate__reveal" type="button" data-reveal="gate-newpassword" aria-controls="gate-newpassword" aria-pressed="false" aria-label="Show password" title="Show password">
+              <svg class="gate__eye gate__eye--shown" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+                <circle cx="12" cy="12" r="2.7" />
+              </svg>
+              <svg class="gate__eye gate__eye--hidden" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
+                <circle cx="12" cy="12" r="2.7" />
+                <path d="M4 20L20 4" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Sign-in only: a persistent cookie plus a remembered address. -->
+        <label class="gate__remember" id="gate-remember-row" hidden>
+          <input type="checkbox" id="gate-remember" checked />
+          <span>Remember me</span>
+        </label>
+
+        <button class="btn btn--primary btn--block" type="submit" id="gate-submit">Sign in</button>
+        <p class="gate__error" id="gate-error" role="alert" hidden></p>
+        <p class="gate__note" id="gate-note" hidden></p>
+        <div class="gate__links">
+          <button class="gate__switch" type="button" id="gate-switch" hidden>
+            Need an account? Sign up
+          </button>
+          <button class="gate__switch" type="button" id="gate-forgot" hidden>
+            Forgot your password?
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <!-- ── App ──────────────────────────────────────────────────────── -->
+    <div id="app" class="app" hidden>
+      <!-- The sky an empty conversation sits under. Purely decorative, inert to
+           the pointer, and it fades out the moment there is something to read —
+           a drifting nebula behind a transcript is just noise.
+
+           Behind the whole shell rather than inside the conversation column.
+           The rail and the progress panel have no background of their own, so
+           a backdrop that stopped at their edges left them showing flat page
+           black — transparent, but with nothing to be transparent *to*. Every
+           cloud below is already measured in viewport units, so widening the
+           layer moves nothing; it only lets the colour reach the two edges it
+           was being clipped away from. -->
+      <div class="galaxy" id="galaxy" aria-hidden="true">
+        <div class="galaxy__cloud galaxy__cloud--a"></div>
+        <div class="galaxy__cloud galaxy__cloud--b"></div>
+        <div class="galaxy__cloud galaxy__cloud--c"></div>
+        <div class="galaxy__stars galaxy__stars--far"></div>
+        <div class="galaxy__stars galaxy__stars--near"></div>
+      </div>
+
+      <div class="scrim" id="scrim" hidden></div>
+
+      <aside class="sidebar" id="sidebar">
+        <header class="sidebar__head">
+          <!-- Open, the logo is only a logo and the control that closes the menu
+               sits at the far right of its own header, where every panel puts
+               one. Collapsed, there is no far right: the rail is a column of
+               icons and the logo would be the only one that does nothing, while
+               the button to bring the menu back sat underneath it needing a
+               tooltip. So in *that* state the logo becomes the button — hover it
+               and the panel glyph takes its place, in the same square. One
+               control each way round, never two. -->
+          <button class="brand" id="sidebar-toggle" type="button" aria-controls="sidebar">
+            <img class="brand__mark" src="/logo.png" width="26" height="26" alt="" aria-hidden="true" decoding="async" />
+            <svg class="brand__toggle" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6">
+              <rect x="2.5" y="3.5" width="15" height="13" rx="2.5" />
+              <line x1="8" y1="3.5" x2="8" y2="16.5" />
+            </svg>
+            <span class="rail__label">AI Remote</span>
+          </button>
+          <button class="icon-btn sidebar__collapse" id="sidebar-collapse" type="button" aria-label="Collapse menu" aria-expanded="true" aria-controls="sidebar" title="Collapse menu">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6">
+              <rect x="2.5" y="3.5" width="15" height="13" rx="2.5" />
+              <line x1="8" y1="3.5" x2="8" y2="16.5" />
+            </svg>
+          </button>
+          <button class="icon-btn sidebar__close" id="sidebar-close" aria-label="Close menu">✕</button>
+        </header>
+
+        <nav class="rail" aria-label="Main">
+          <button class="rail__item rail__item--primary" id="new-chat" type="button" title="New chat">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13.5 2.9a1.9 1.9 0 0 1 2.7 2.7L7.8 14 4 15l1-3.8Z" />
+            </svg>
+            <span class="rail__label" data-i18n="nav.newChat">New chat</span>
+          </button>
+          <button class="rail__item" id="open-search" type="button" title="Search conversations">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <circle cx="9" cy="9" r="5.5" />
+              <line x1="13.2" y1="13.2" x2="17" y2="17" />
+            </svg>
+            <span class="rail__label" data-i18n="nav.search">Search conversations</span>
+          </button>
+          <!-- This was the model library. The model picker is one press away on
+               the header chip and in Settings → Models, so the sidebar slot goes
+               to the thing you come back to across days: your projects. -->
+          <button class="rail__item" id="open-projects" type="button" title="Projects">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+              <path d="M2.5 5.4a1.6 1.6 0 0 1 1.6-1.6h3.1l1.6 1.9h5.6a1.6 1.6 0 0 1 1.6 1.6v7.3a1.6 1.6 0 0 1-1.6 1.6H4.1a1.6 1.6 0 0 1-1.6-1.6Z" />
+            </svg>
+            <span class="rail__label" data-i18n="nav.projects">Projects</span>
+          </button>
+
+          <!-- Everything the assistant has made, across every conversation.
+               A file is born in the chat it was asked for and needed again a
+               week later, when nobody remembers which chat that was. -->
+          <button class="rail__item" id="open-artifacts" type="button" title="Artifacts">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+              <path d="M11.4 2.5H5.6A1.6 1.6 0 0 0 4 4.1v11.8a1.6 1.6 0 0 0 1.6 1.6h8.8a1.6 1.6 0 0 0 1.6-1.6V7Z" />
+              <path d="M11.4 2.5V7H16" />
+              <path d="M7.6 11.4 6.2 12.8l1.4 1.4M12.4 11.4l1.4 1.4-1.4 1.4" stroke-linecap="round" />
+            </svg>
+            <span class="rail__label" data-i18n="nav.artifacts">Artifacts</span>
+          </button>
+
+          <!-- Work that runs on a clock, or on demand. -->
+          <button class="rail__item" id="open-scheduled" type="button" title="Scheduled tasks">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <circle cx="10" cy="10.6" r="6.4" />
+              <path d="M10 7.2v3.6l2.3 1.4M7.6 2.6 5.2 4.2M12.4 2.6l2.4 1.6" />
+            </svg>
+            <span class="rail__label" data-i18n="nav.scheduled">Scheduled</span>
+          </button>
+
+          <!-- The folder on the machine the assistant works in. The assistant
+               has been able to read and write it from the beginning; this is
+               the same thing for the person sitting in front of it. -->
+          <button class="rail__item" id="open-workspace" type="button" title="Workspace files">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+              <path d="M2.5 5.4a1.6 1.6 0 0 1 1.6-1.6h3.1l1.6 1.9h5.6a1.6 1.6 0 0 1 1.6 1.6v7.3a1.6 1.6 0 0 1-1.6 1.6H4.1a1.6 1.6 0 0 1-1.6-1.6Z" />
+              <path d="M8 11.6 6.6 13l1.4 1.4M12 11.6 13.4 13 12 14.4" stroke-linecap="round" />
+            </svg>
+            <span class="rail__label" data-i18n="nav.workspace">Workspace</span>
+          </button>
+        </nav>
+
+        <nav class="chats scroll-quiet" id="chat-list" aria-label="Conversations"></nav>
+
+        <!-- No computer status here. It is in the header beside the model and
+             policy chips, where it is visible without opening the menu — saying
+             the same thing twice only invites the two to disagree. -->
+        <footer class="sidebar__foot">
+          <button class="rail__item" id="open-settings" type="button" title="Settings">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="10" cy="10" r="2.6" />
+              <path d="M10 2.4v2M10 15.6v2M2.4 10h2M15.6 10h2M4.6 4.6l1.4 1.4M14 14l1.4 1.4M15.4 4.6L14 6M6 14l-1.4 1.4" stroke-linecap="round" />
+            </svg>
+            <span class="rail__label" data-i18n="nav.settings">Settings</span>
+          </button>
+        </footer>
+      </aside>
+
+      <main class="main" id="main">
+        <header class="topbar">
+          <button class="icon-btn topbar__menu" id="sidebar-open" aria-label="Open menu">☰</button>
+          <div class="topbar__title" id="chat-title">New chat</div>
+          <div class="topbar__right">
+            <!-- Ahead of the policy and model chips, because connecting a
+                 computer is the thing somebody does once and cannot find. -->
+            <button class="chip chip--pair" id="pair-chip" title="Pair a computer">
+              <span class="dot" id="pair-dot"></span>
+              <span id="pair-chip-label" data-i18n="topbar.computers">Computers</span>
+            </button>
+            <!-- Only present when this conversation belongs to a project: the
+                 difference between an answer from documents and an answer from
+                 memory is worth being able to see. Behind the pairing chip,
+                 which keeps the front of the row — connecting a computer is the
+                 thing somebody does once and cannot find. -->
+            <button class="chip chip--project" id="project-chip" type="button" hidden></button>
+            <!-- What was made here. Hidden until there is something in it, so
+                 an ordinary conversation carries no extra furniture. -->
+            <button class="chip chip--files" id="files-chip" type="button" hidden></button>
+            <button class="chip chip--model" id="model-chip"></button>
+            <button class="icon-btn" id="detail-toggle" type="button" data-i18n-title="topbar.panel" title="Progress and screen" aria-label="Progress and screen">
+              <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6">
+                <rect x="2.5" y="3.5" width="15" height="13" rx="2.5" />
+                <line x1="12.5" y1="3.5" x2="12.5" y2="16.5" />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- ── A full page, in the place the conversation normally is ──────
+             Projects, Artifacts and Scheduled are shelves, not asides: you go
+             to them, look through what is there, and pick one. A dialog over
+             the transcript is the wrong shape for that — it is small, it is
+             temporary, and it implies you were in the middle of something.
+
+             One shell for all three, because the header is the same in each:
+             a title, a way to search, a way to order, and the one button that
+             makes a new thing. Three copies of that would drift apart. -->
+        <section class="page scroll-quiet" id="page" hidden>
+          <header class="page__head">
+            <h1 class="page__title" id="page-title">Projects</h1>
+            <div class="page__tools">
+              <!-- The magnifier becomes the field, rather than sitting beside
+                   it: two search affordances in one row is one too many, and
+                   the icon has nothing to say once the box is open. -->
+              <button class="page__icon" id="page-search-open" type="button" aria-label="Search">
+                <svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                  <circle cx="9" cy="9" r="5.5" /><path d="m13.2 13.2 3.3 3.3" />
+                </svg>
+              </button>
+              <div class="find" id="page-search-box" hidden>
+                <svg class="find__mark" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                  <circle cx="9" cy="9" r="5.5" /><path d="m13.2 13.2 3.3 3.3" />
+                </svg>
+                <input id="page-search" type="text" placeholder="Search projects…" autocomplete="off" />
+                <button class="find__clear" id="page-search-clear" type="button" aria-label="Clear search">✕</button>
+              </div>
+              <button class="pill" id="page-sort" type="button" hidden></button>
+              <div class="page__menu" id="page-sort-menu" role="menu" hidden></div>
+              <button class="btn btn--primary page__new" id="page-new" type="button"></button>
+              <div class="page__menu" id="page-new-menu" role="menu" hidden></div>
+            </div>
+          </header>
+          <p class="page__lede" id="page-lede" hidden></p>
+          <div class="page__body" id="page-body"></div>
+        </section>
+
+        <!-- ── One project, opened ────────────────────────────────────────
+             Its own page rather than a row on the shelf, because a project is
+             a place you work from: you start conversations here, and what the
+             assistant knows while you are here is set here. The left column is
+             the work, the right column is what the work reads from. -->
+        <section class="page scroll-quiet" id="project-page" hidden>
+          <nav class="crumb" aria-label="Breadcrumb">
+            <button id="project-page-back" type="button">Projects</button>
+            <span aria-hidden="true">/</span>
+            <span id="project-page-crumb"></span>
+          </nav>
+
+          <header class="project__head">
+            <h1 class="project__name" id="project-page-name"></h1>
+            <button class="page__icon" id="project-page-pin" type="button" aria-pressed="false" aria-label="Pin project">
+              <svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+                <path d="M12.4 2.6 17.4 7.6 15 8.4l-1.2 4.4-6.6-6.6L11.6 5Z" /><path d="M7.2 12.8 3 17" stroke-linecap="round" />
+              </svg>
+            </button>
+            <button class="page__icon" id="project-page-more" type="button" aria-haspopup="menu" aria-label="Project options">⋮</button>
+          </header>
+
+          <div class="project__grid">
+            <div>
+              <!-- Starting a conversation is the first thing on the page,
+                   because it is the reason to come here. Nothing is created
+                   until it is sent. -->
+              <div class="starter">
+                <textarea id="project-page-ask" rows="2" placeholder="How can I help you today?"></textarea>
+                <div class="starter__row">
+                  <span class="starter__chip" id="project-page-chip"></span>
+                  <button class="starter__send" id="project-page-send" type="button" aria-label="Start conversation" disabled>↑</button>
+                </div>
+              </div>
+              <div id="project-page-chats"></div>
+            </div>
+
+            <aside class="project__side" id="project-page-side"></aside>
+          </div>
+        </section>
+
+        <div class="thread scroll-quiet" id="thread" tabindex="-1">
+          <div class="empty" id="empty-state">
+            <h2 data-i18n="empty.title">What should we work on?</h2>
+            <p data-i18n="empty.body">
+              Pick a model, ask for anything. With the worker running on your computer, the
+              assistant can read files, edit code and run commands there.
+            </p>
+            <div class="suggestions" id="suggestions"></div>
+          </div>
+          <div id="messages"></div>
+          <div id="status-host"></div>
+        </div>
+
+        <!-- Floats over the transcript rather than sitting under it, so messages
+             scroll away beneath the composer instead of stopping short of it. -->
+        <div class="dock" id="dock">
+          <div class="approval" id="approval" hidden>
+            <div class="approval__body">
+              <strong>Approve these actions?</strong>
+              <div class="approval__list" id="approval-list"></div>
+            </div>
+            <div class="approval__actions">
+              <button class="btn btn--ghost" id="deny">Deny</button>
+              <button class="btn btn--primary" id="allow">Allow &amp; run</button>
+            </div>
+          </div>
+
+          <form class="composer" id="composer">
+            <!-- What you have typed while the assistant is still working.
+                 It waits here until the current tool call finishes and then
+                 goes in — not until the whole run ends, which on a long job
+                 meant a correction arrived long after it could help. The wait
+                 is short but it is the point: it is the window in which the
+                 line can be read back, expanded or deleted. "Send now" skips
+                 it when the step in progress is a slow one. -->
+            <div class="queue" id="queue" hidden></div>
+
+            <!-- Attached files sit above the box rather than inside it: a
+                 thumbnail strip that grows sideways would fight the text for
+                 room, and the point of a preview is being able to see it. -->
+            <div class="attachments" id="attachments" hidden></div>
+
+            <!-- About half the catalogue cannot be shown a picture, and sending
+                 one anyway makes the provider reject the whole request — so this
+                 has to be said before the send, not after it fails. -->
+            <p class="composer__warn" id="vision-warning" hidden>
+              <span id="vision-warning-text"></span>
+              <button type="button" id="vision-switch">Pick one that can</button>
+            </p>
+
+            <div class="composer__box">
+              <input
+                type="file"
+                id="file-input"
+                multiple
+                accept="image/*,text/*,application/pdf,application/json,.md,.csv,.log,.yml,.yaml,.ts,.tsx,.js,.jsx,.py,.sql,.xml,.html,.css,.docx,.xlsx,.pptx,.docm,.xlsm,.pptm"
+                hidden
+              />
+              <!-- Drawn rather than typed. As the character "+" this sat
+                   visibly high in its circle: a text glyph is centred on the
+                   font's own maths axis, which is above the middle of the line
+                   box, and no amount of `place-items: center` moves it because
+                   the box is centred correctly and the ink inside it is not.
+                   Two lines through the middle of a square are centred by
+                   construction, in every font and on every platform. -->
+              <button class="icon-btn icon-btn--attach" id="attach" type="button" data-i18n-title="composer.attach" title="Attach photos or files" aria-label="Attach photos or files">
+                <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
+                  <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" fill="none" />
+                </svg>
+              </button>
+
+              <!-- How full the model's window is, beside the attach button.
+                   A ring rather than a number because the shape reads at a
+                   glance and the number only matters once it is nearly full.
+                   It sits here rather than in the header because it is about
+                   the message you are composing: what is left to say this turn,
+                   next to where you say it. -->
+              <button class="gauge" id="context-gauge" type="button" hidden>
+                <svg viewBox="0 0 32 32" width="20" height="20" aria-hidden="true">
+                  <circle class="gauge__track" cx="16" cy="16" r="13" fill="none" stroke-width="4" />
+                  <circle class="gauge__fill" cx="16" cy="16" r="13" fill="none" stroke-width="4"
+                          stroke-linecap="round" transform="rotate(-90 16 16)" />
+                </svg>
+                <span class="gauge__label" id="context-percent"></span>
+              </button>
+
+              <textarea
+                id="input"
+                rows="1"
+                data-i18n-placeholder="composer.placeholder"
+                placeholder="Ask anything…  (Enter to send, Shift+Enter for a new line)"
+                autocomplete="off"
+              ></textarea>
+
+              <div class="composer__actions">
+                <!-- The approval policy, beside the send button rather than
+                     buried in a settings tab. It decides what happens the moment
+                     you press send, so it belongs where your eyes already are. -->
+                <button class="policy" id="policy-chip" type="button" aria-haspopup="menu">
+                  <!-- Filled by renderPolicy: the glyph belongs to the mode. -->
+                  <span class="policy__icon" id="policy-icon"></span>
+                  <span id="policy-label"></span>
+                </button>
+                <button class="icon-btn icon-btn--stop" id="stop" type="button" data-i18n-title="composer.stop" title="Stop" hidden>■</button>
+                <button class="icon-btn icon-btn--send" id="send" type="submit" data-i18n-title="composer.send" title="Send">↑</button>
+              </div>
+            </div>
+            <div class="composer__meta" id="composer-meta"></div>
+          </form>
+        </div>
+      </main>
+
+      <!-- What the assistant is doing, beside the conversation rather than
+           shoved above it: the plan it is working through, and the live screen
+           when there is one. -->
+      <aside class="detail" id="detail">
+        <header class="detail__head">
+          <span class="detail__title">Progress</span>
+          <span class="detail__count" id="progress-count"></span>
+          <button class="icon-btn" id="detail-close" type="button" aria-label="Close panel">✕</button>
+        </header>
+
+        <div class="detail__body scroll-quiet">
+          <ol class="progress" id="progress-steps"></ol>
+          <p class="hint" id="progress-empty">
+            When the assistant plans a multi-step job, the steps appear here and tick off as it works.
+          </p>
+
+          <section class="screen" id="screen" hidden>
+            <header class="screen__bar">
+              <span class="screen__live" id="screen-live"></span>
+              <span class="tag" id="screen-source">sandbox</span>
+              <span class="screen__title" id="screen-title">Screen</span>
+              <button class="icon-btn" id="screen-drive" title="Take control — click and type into the page yourself" aria-pressed="false">🖰</button>
+              <button class="icon-btn" id="screen-stop" title="Close the sandbox browser">✕</button>
+              <button class="icon-btn" id="screen-expand" title="Full size">⤢</button>
+              <button class="icon-btn" id="screen-hide" title="Hide">▾</button>
+            </header>
+            <!-- A real address bar above the picture rather than a caption
+                 under it. The panel is a browser window somebody else is
+                 driving, and the thing you want when you glance at it is where
+                 it *is* — with the controls to move it in the place every
+                 browser puts them. -->
+            <!-- One row per open tab, so a second page opened for a lookup does
+                 not read as the first one vanishing. Hidden while there is only
+                 one, because a tab strip with one tab is furniture. -->
+            <div class="screen__tabs" id="screen-tabs" hidden></div>
+            <div class="screen__nav" id="screen-nav">
+              <button class="screen__navbtn" id="screen-back" type="button" title="Back" aria-label="Back">‹</button>
+              <button class="screen__navbtn" id="screen-forward" type="button" title="Forward" aria-label="Forward">›</button>
+              <button class="screen__navbtn" id="screen-reload" type="button" title="Reload" aria-label="Reload">⟳</button>
+              <span class="screen__url" id="screen-url"></span>
+            </div>
+            <div class="screen__frame">
+              <!-- tabindex so it can receive key presses once you take control. -->
+              <img id="screen-img" tabindex="0" alt="What the assistant is looking at" />
+            </div>
+          </section>
+
+          <!-- ── A file, beside the conversation ──────────────────────
+               The third thing this rail can be. A document is something you
+               read *while* you keep talking about it — a sheet covering the
+               transcript meant closing it to quote a line back, which is the
+               one thing anybody actually does with an open document.
+
+               The header is the file's: how to look at it, what it is, and
+               the one action worth a button of its own. -->
+          <section class="filepane" id="filepane" hidden>
+            <header class="filepane__bar">
+              <div class="filepane__modes" id="viewer-tabs" role="tablist"></div>
+              <div class="filepane__ident">
+                <span class="filepane__name" id="viewer-title">File</span>
+                <span class="filepane__kind" id="viewer-kind"></span>
+              </div>
+              <!-- Split: the left half does the obvious thing, the arrow opens
+                   everything else. Pressing "Open in Word" should not first
+                   require choosing it from a list. -->
+              <div class="filepane__act">
+                <button class="filepane__do" id="viewer-do" type="button">Download</button>
+                <button class="filepane__more" id="viewer-more" type="button" aria-haspopup="menu" aria-label="More actions">▾</button>
+              </div>
+              <button class="icon-btn" id="viewer-expand" type="button" title="Full size" aria-label="Full size">⤢</button>
+              <button class="icon-btn" id="viewer-close" type="button" title="Close" aria-label="Close">✕</button>
+            </header>
+
+            <!-- Which saved version is on screen. Hidden until there is more
+                 than one, because a version switcher showing "v1" is furniture. -->
+            <div class="filepane__versions" id="viewer-versions" hidden></div>
+
+            <div class="filepane__body scroll-quiet" id="viewer-body"></div>
+            <div class="viewer__sheets" id="viewer-sheets" hidden></div>
+          </section>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Row actions. One element, moved and refilled per row — a menu per
+         conversation would be hundreds of nodes for something only ever open
+         once. -->
+    <div class="menu" id="row-menu" role="menu" hidden></div>
+
+    <!-- The approval policies, opened from the composer. -->
+    <div class="menu menu--policy" id="policy-menu" role="menu" hidden></div>
+
+    <!-- What the context ring opens: how full the window is, and what to do
+         about it. -->
+    <div class="menu menu--context" id="context-menu" role="menu" hidden></div>
+
+    <!-- Every document made in this conversation, from the header chip. The
+         cards are in the transcript where they were written; this is for the
+         one you made an hour ago. -->
+    <div class="menu menu--files" id="files-menu" role="menu" hidden></div>
+
+    <!-- ── Pair a computer ─────────────────────────────────────────── -->
+    <!-- The whole job in one small sheet, reachable from the header: the code
+         this machine is offering (when there is one), a box to type somebody
+         else's, and what is already connected. -->
+    <dialog id="pair" class="sheet sheet--pair" aria-labelledby="pair-title">
+      <form method="dialog" class="sheet__head">
+        <h2 id="pair-title">Computers</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+
+      <div class="sheet__body">
+        <!-- Shown only when this browser and an unpaired worker are the same
+             machine — then the code is right here rather than in a terminal. -->
+        <section class="pair-offer" id="pair-offer" hidden>
+          <p class="hint">This computer is waiting to be added. Enter this code from any device:</p>
+          <div class="pair-code">
+            <code id="pair-offer-code">––––-––––</code>
+            <button class="btn btn--ghost" id="pair-copy" type="button" title="Copy the code">
+              <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="7" y="7" width="10" height="10" rx="2" />
+                <path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
+              </svg>
+              <span id="pair-copy-label">Copy</span>
+            </button>
+          </div>
+          <p class="hint" id="pair-offer-note"></p>
+        </section>
+
+        <h3>Add a computer</h3>
+        <p class="hint">
+          Run AI Remote on the machine you want to use. It shows an eight-character code — type it
+          here. It does not have to be your own account, and it works from a phone.
+        </p>
+        <div class="provider__row">
+          <input
+            id="pair-code"
+            type="text"
+            placeholder="ABCD-2K7M"
+            autocomplete="off"
+            autocapitalize="characters"
+            spellcheck="false"
+            maxlength="9"
+          />
+          <button class="btn btn--primary" id="pair-submit" type="button">Pair</button>
+        </div>
+        <p class="hint" id="pair-status"></p>
+
+        <h3>Your computers</h3>
+        <div id="device-list"></div>
+      </div>
+    </dialog>
+
+    <!-- ── A new model has arrived ──────────────────────────────────── -->
+    <!-- Centred and modal, because it asks a question. Shown once per account
+         per model: both answers are decisions, and neither gets asked twice. -->
+    <dialog id="model-news" class="sheet sheet--news" aria-labelledby="news-title">
+      <div class="news">
+        <div class="news__eyebrow">
+          <span class="news__badge">New model</span>
+          <span class="news__vendor" id="news-vendor"></span>
+        </div>
+
+        <h2 class="news__title" id="news-title"></h2>
+        <p class="news__id"><code id="news-id"></code></p>
+
+        <dl class="news__facts" id="news-facts"></dl>
+
+        <p class="news__body" id="news-description"></p>
+
+        <p class="hint" id="news-note"></p>
+
+        <div class="news__actions">
+          <button class="btn btn--ghost" id="news-decline" type="button">Not now</button>
+          <button class="btn btn--primary" id="news-apply" type="button">Use it by default</button>
+        </div>
+        <p class="news__small">
+          Either way you will not be asked about this model again. You can always change the
+          model per conversation from the chip in the header.
+        </p>
+      </div>
+    </dialog>
+
+    <!-- ── Getting started ─────────────────────────────────────────────
+         Five steps, shown once to a new account, in the order things
+         actually stop working: what this is, a key, which model, one real
+         question, and what the assistant may do on its own.
+
+         Skippable at every step. See onboarding.js for why each step is
+         there and why it never appears over the new-model question. -->
+    <dialog id="onboarding" class="sheet sheet--onb" aria-labelledby="onb-title">
+      <div class="onb">
+        <header class="onb__head">
+          <h2 id="onb-title" data-i18n="onb.title">Getting started with AI Remote</h2>
+          <span class="onb__count" id="onb-step"></span>
+        </header>
+
+        <div class="onb__body" id="onb-body"></div>
+
+        <footer class="onb__foot">
+          <button class="btn btn--ghost" id="onb-skip" type="button" data-i18n="action.skip">Skip</button>
+          <span class="onb__spacer"></span>
+          <button class="btn btn--ghost" id="onb-back" type="button" data-i18n="action.back" hidden>Back</button>
+          <button class="btn btn--primary" id="onb-next" type="button" data-i18n="action.next">Continue</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <!-- ── Model browser ────────────────────────────────────────────── -->
+    <dialog id="models" class="sheet sheet--tall">
+      <form method="dialog" class="sheet__head">
+        <h2>Choose a model</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+
+      <div class="browser__controls">
+        <div class="search">
+          <span class="search__icon" aria-hidden="true">⌕</span>
+          <input
+            id="model-search"
+            type="search"
+            placeholder="Search — try &quot;free claude&quot;, &quot;>200k&quot;, &quot;&lt;$1&quot;, or paste a model id"
+            autocomplete="off"
+          />
+          <button class="search__clear" id="model-search-clear" type="button" hidden aria-label="Clear">✕</button>
+        </div>
+
+        <!-- Which API the model runs on, and therefore which key pays for it. -->
+        <div class="seg seg--scroll" role="tablist" id="provider-filter">
+          <button class="seg__btn is-active" data-provider="all" type="button">All</button>
+          <button class="seg__btn" data-provider="anthropic" type="button">Anthropic</button>
+          <button class="seg__btn" data-provider="openai" type="button">OpenAI</button>
+          <button class="seg__btn" data-provider="google" type="button">Google</button>
+          <button class="seg__btn" data-provider="openrouter" type="button">OpenRouter</button>
+        </div>
+
+        <div class="seg" role="tablist" id="tier-filter">
+          <button class="seg__btn is-active" data-tier="all" type="button">All</button>
+          <button class="seg__btn" data-tier="free" type="button">Free</button>
+          <button class="seg__btn" data-tier="paid" type="button">Paid</button>
+        </div>
+
+        <div class="browser__row" id="vendor-row">
+          <div class="chips" id="family-filter"></div>
+          <select id="model-sort" class="mini-select" title="Sort order">
+            <option value="new">Newest first</option>
+            <option value="old">Oldest first</option>
+            <option value="name">Name A–Z</option>
+            <option value="cheap">Cheapest first</option>
+            <option value="context">Largest context</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="sheet__body" id="model-results"></div>
+
+      <div class="browser__foot">
+        <span class="hint" id="library-status"></span>
+        <button class="btn btn--ghost" id="refresh-library" type="button">Refresh now</button>
+      </div>
+    </dialog>
+
+    <!-- ── Search conversations ─────────────────────────────────────── -->
+    <!-- ── Artifacts ────────────────────────────────────────────────────
+         Every document, spreadsheet, deck and page the assistant has made,
+         newest first, with the conversation each came from. -->
+    <dialog id="artifacts" class="sheet sheet--tall">
+      <form method="dialog" class="sheet__head">
+        <h2>Artifacts</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+
+      <div class="sheet__body" id="artifact-list">
+        <p class="hint">Loading…</p>
+      </div>
+    </dialog>
+
+    <!-- ── Workspace files ──────────────────────────────────────────────
+         The folder the assistant works in, on the machine running the worker.
+         Browse it, open a file, edit it, save it, delete it — through the same
+         worker tools the assistant uses, so the workspace confinement and the
+         per-account scoping are the same ones. -->
+    <dialog id="workspace" class="sheet sheet--tall sheet--workspace" aria-labelledby="workspace-title">
+      <form method="dialog" class="sheet__head">
+        <div class="viewer__ident">
+          <h2 id="workspace-title">Workspace</h2>
+          <span class="viewer__meta" id="workspace-where"></span>
+        </div>
+        <div class="viewer__actions">
+          <!-- Plain text, not a pattern: somebody typing `a.b` means those
+               three characters. A real regular expression is one line away in
+               the chat, where `grep` already lives. -->
+          <input class="workspace__find" id="workspace-find" type="search"
+                 placeholder="Search in these files…  ↵" autocomplete="off" />
+          <button class="btn btn--ghost" id="workspace-new" type="button" formnovalidate>New file</button>
+          <button class="icon-btn" value="close" aria-label="Close">✕</button>
+        </div>
+      </form>
+
+      <!-- Where you are, and the way back up. -->
+      <div class="crumbs" id="workspace-crumbs"></div>
+
+      <div class="sheet__body workspace__body" id="workspace-body"></div>
+    </dialog>
+
+    <!-- ── Create a project ────────────────────────────────────────────
+         Two questions, because they are the two that make a project worth
+         having: what it is, and what it is for. The second becomes the
+         standing instructions every conversation in it starts with. -->
+    <dialog id="project-form" class="sheet sheet--form" aria-labelledby="project-form-title">
+      <form method="dialog" class="sheet__head">
+        <h2 id="project-form-title">Create a project</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+      <div class="sheet__body">
+        <div class="form__group">
+          <label class="form__label" for="project-form-name">What are you working on?</label>
+          <input id="project-form-name" type="text" placeholder="Name your project" autocomplete="off" />
+        </div>
+        <div class="form__group">
+          <label class="form__label" for="project-form-about">What are you trying to achieve?</label>
+          <textarea id="project-form-about" rows="4"
+                    placeholder="Describe your project, goals, subject…"></textarea>
+          <p class="form__aside">
+            This becomes the project's standing instructions — carried into every conversation in it,
+            so nothing is re-explained.
+          </p>
+        </div>
+        <p class="hint" id="project-form-error"></p>
+        <div class="form__foot">
+          <button class="btn btn--ghost" id="project-form-cancel" type="button">Cancel</button>
+          <button class="btn btn--primary" id="project-form-save" type="button">Create project</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- ── Paste a source in, rather than uploading one ────────────────
+         Half of what belongs on a project's shelf was never a file: a brief
+         from an email, a spec from a wiki, notes from a call. Making people
+         save those to disk first to get them in here is busywork. -->
+    <dialog id="text-source" class="sheet sheet--form" aria-labelledby="text-source-title">
+      <form method="dialog" class="sheet__head">
+        <h2 id="text-source-title">Add text content</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+      <div class="sheet__body">
+        <div class="form__group">
+          <label class="form__label" for="text-source-name">Name</label>
+          <input id="text-source-name" type="text" placeholder="Brief, meeting notes, spec…" autocomplete="off" />
+        </div>
+        <div class="form__group">
+          <label class="form__label" for="text-source-body">Content</label>
+          <textarea id="text-source-body" rows="12" placeholder="Paste it here."></textarea>
+        </div>
+        <p class="hint" id="text-source-error"></p>
+        <div class="form__foot">
+          <button class="btn btn--ghost" id="text-source-cancel" type="button">Cancel</button>
+          <button class="btn btn--primary" id="text-source-save" type="button">Add to project</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- ── Rename a project, or change what it stands for ──────────────
+         The same two fields the create form asks for, because "Edit details"
+         should not be a different, smaller idea of what a project is. -->
+    <dialog id="project-edit" class="sheet sheet--form" aria-labelledby="project-edit-title">
+      <form method="dialog" class="sheet__head">
+        <h2 id="project-edit-title">Edit project details</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+      <div class="sheet__body">
+        <div class="form__group">
+          <label class="form__label" for="project-edit-name">Name</label>
+          <input id="project-edit-name" type="text" autocomplete="off" />
+        </div>
+        <div class="form__group">
+          <label class="form__label" for="project-edit-about">What are you trying to achieve?</label>
+          <textarea id="project-edit-about" rows="4"></textarea>
+          <p class="form__aside">
+            The project's standing instructions — carried into every conversation in it.
+          </p>
+        </div>
+        <p class="hint" id="project-edit-error"></p>
+        <div class="form__foot">
+          <button class="btn btn--ghost" id="project-edit-cancel" type="button">Cancel</button>
+          <button class="btn btn--primary" id="project-edit-save" type="button">Save changes</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- ── Create a scheduled task ─────────────────────────────────────
+         A name, the prompt to run, and when. The prompt is the whole task:
+         a scheduled run is one turn of an ordinary conversation. -->
+    <dialog id="task-form" class="sheet sheet--form" aria-labelledby="task-form-title">
+      <form method="dialog" class="sheet__head">
+        <h2 id="task-form-title">Create scheduled task</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+      <div class="sheet__body">
+        <div class="form__group">
+          <label class="form__label" for="task-form-name">Name <span>*</span></label>
+          <input id="task-form-name" type="text" placeholder="morning-briefing" autocomplete="off" />
+        </div>
+        <div class="form__group">
+          <label class="form__label" for="task-form-prompt">What should it do? <span>*</span></label>
+          <textarea id="task-form-prompt" rows="6"
+                    placeholder="Search the web for what changed overnight on the topics I follow and write me a short briefing."></textarea>
+          <p class="form__aside">
+            Written as you would say it in the chat, because that is exactly what happens: each run is
+            one turn of a new conversation, with the same tools and the same permissions.
+          </p>
+        </div>
+        <div class="form__row">
+          <div class="form__group">
+            <label class="form__label" for="task-form-when">When</label>
+            <input id="task-form-when" type="text" placeholder="08:00, or fri 16:00" />
+          </div>
+          <div class="form__group">
+            <label class="form__label" for="task-form-repeat">Frequency</label>
+            <select id="task-form-repeat">
+              <option value="repeat">Every day at that time</option>
+              <option value="once">Once, then stop</option>
+            </select>
+          </div>
+        </div>
+        <p class="form__aside">
+          A weekday in front makes it weekly — <code>fri 16:00</code>. Times are read in this
+          browser's own zone.
+        </p>
+        <p class="hint" id="task-form-error"></p>
+        <div class="form__foot">
+          <button class="btn btn--ghost" id="task-form-cancel" type="button">Cancel</button>
+          <button class="btn btn--primary" id="task-form-save" type="button">Save</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="search" class="sheet sheet--tall">
+      <form method="dialog" class="sheet__head">
+        <h2>Search conversations</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+
+      <div class="browser__controls">
+        <div class="search">
+          <span class="search__icon" aria-hidden="true">⌕</span>
+          <input id="search-input" type="search" placeholder="Search titles and everything said" autocomplete="off" />
+          <button class="search__clear" id="search-clear" type="button" hidden aria-label="Clear">✕</button>
+        </div>
+      </div>
+
+      <div class="sheet__body" id="search-results"></div>
+    </dialog>
+
+    <!-- ── Settings ─────────────────────────────────────────────────── -->
+    <dialog id="settings" class="sheet">
+      <form method="dialog" class="sheet__head">
+        <h2 data-i18n="settings.title">Settings</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+
+      <div class="sheet__tabs" role="tablist">
+        <button class="tab is-active" data-tab="providers" role="tab" data-i18n="settings.tab.providers">Providers</button>
+        <button class="tab" data-tab="models" role="tab" data-i18n="settings.tab.models">Models</button>
+        <button class="tab" data-tab="behaviour" role="tab" data-i18n="settings.tab.behaviour">Behaviour</button>
+        <button class="tab" data-tab="skills" role="tab" data-i18n="settings.tab.skills">Skills</button>
+        <button class="tab" data-tab="tasks" role="tab" data-i18n="settings.tab.tasks">Scheduled</button>
+        <button class="tab" data-tab="connectors" role="tab" data-i18n="settings.tab.connectors">Connectors</button>
+        <button class="tab" data-tab="mcp" role="tab" data-i18n="settings.tab.mcp">MCP servers</button>
+        <button class="tab" data-tab="worker" role="tab" data-i18n="settings.tab.worker">Computers</button>
+        <button class="tab" data-tab="account" role="tab" data-i18n="settings.tab.account">Account</button>
+        <button class="tab" data-tab="admin" role="tab" id="tab-admin" hidden data-i18n="settings.tab.people">People</button>
+      </div>
+
+      <div class="sheet__body">
+        <section class="panel is-active" data-panel="providers">
+          <p class="hint">
+            Keys are stored on your server and never sent to the browser. Set them as environment
+            variables instead and they become read-only here.
+          </p>
+          <div id="provider-list"></div>
+        </section>
+
+        <section class="panel" data-panel="models">
+          <p class="hint">
+            The library refreshes itself from OpenRouter once a day, so free models appear without
+            anyone pressing anything. You can also add one by id — it is verified, then becomes
+            selectable for everybody on this deployment.
+          </p>
+<!-- The "Model in use" field that used to sit here has been removed. Its own
+     hint admitted what it was: "changing it here and changing it from the
+     button in the header are the same act". Two controls for one setting is
+     one more place for them to disagree, and the header chip is the one you
+     can see while you are actually choosing. -->
+          <div class="field">
+            <label for="add-model">Add a model by id</label>
+            <div class="row">
+              <input id="add-model" type="text" placeholder="inclusionai/ling-3.0-flash:free" autocomplete="off" />
+              <button class="btn btn--primary" id="add-model-btn" type="button">Add</button>
+            </div>
+          </div>
+          <div id="add-model-status" class="hint"></div>
+
+          <!-- Listing a model and being allowed to call it are different
+               questions: Google still lists gemini-2.5-flash and answers a call
+               to it with "no longer available to new users". So this calls each
+               built-in model once, with your key, and says which ones work. -->
+          <h3 class="section-head">Do the built-in models work with your keys?</h3>
+          <p class="hint">
+            Calls each one with the smallest request its provider accepts — one token in, one token
+            out. A model can be listed by a provider and still refuse to run, which is how a dead
+            model reaches you halfway through a sentence instead of here.
+          </p>
+          <div class="row">
+            <button class="btn btn--ghost" id="audit-models" type="button">Check models</button>
+            <span class="hint" id="audit-status"></span>
+          </div>
+          <div id="audit-results"></div>
+        </section>
+
+        <section class="panel" data-panel="behaviour">
+          <!-- Mode and effort used to be repeated here as two more dropdowns.
+               Two homes for one setting is two places to disagree, and the one
+               beside the send button is the one that is read at the moment it
+               matters. This says where they went rather than saying it again. -->
+          <p class="hint" id="behaviour-elsewhere">
+            <strong>Mode and reasoning effort</strong> live on the button beside
+            <em>Send</em>, where they apply the moment you press it.
+          </p>
+          <div class="field">
+            <label for="max-steps">Max tool steps per turn</label>
+            <input id="max-steps" type="number" min="1" max="100" />
+          </div>
+          <div class="field">
+            <label for="auto-compact">Long conversations</label>
+            <select id="auto-compact">
+              <option value="on">Fold older turns into a summary before the window fills</option>
+              <option value="off">Keep every word — and stop when the window is full</option>
+            </select>
+            <p class="hint">
+              Each turn re-sends the whole conversation, so a long one eventually stops fitting. The
+              ring in the header shows how full it is; you can also fold it up yourself from there.
+            </p>
+          </div>
+          <div class="field">
+            <label for="auto-preview">New documents</label>
+            <select id="auto-preview">
+              <option value="on">Open beside the conversation as soon as one is made</option>
+              <option value="off">Leave them as cards until I press one</option>
+            </select>
+            <p class="hint">
+              The reason to ask for a report is to read it. It opens once per turn and closing it
+              means closed, so it never reappears while you are working — and never on a narrow
+              screen, where the panel would cover the conversation.
+            </p>
+          </div>
+          <div class="field">
+            <label for="language" data-i18n="settings.language.label">Language</label>
+            <select id="language"></select>
+            <p class="hint" data-i18n="settings.language.hint">
+              Applies immediately, and follows your account onto every device.
+            </p>
+          </div>
+          <div class="field">
+            <label data-i18n="settings.help.label">Guide</label>
+            <div class="row">
+              <button class="btn btn--ghost" id="open-onboarding" type="button" data-i18n="onb.reopen">
+                Show the getting-started guide again
+              </button>
+            </div>
+            <p class="hint" data-i18n="settings.help.hint">
+              Show the five-step guide for people just starting out.
+            </p>
+          </div>
+          <div class="field">
+            <label for="theme">Appearance</label>
+            <select id="theme">
+              <option value="system">Follow my system</option>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+            <p class="hint">Applies immediately, and only to this browser.</p>
+          </div>
+          <div class="field">
+            <label for="system-prompt">Custom instructions</label>
+            <textarea id="system-prompt" rows="6" placeholder="How should the assistant work with you?"></textarea>
+          </div>
+          <button class="btn btn--primary" id="save-behaviour" type="button">Save</button>
+          <span class="hint" id="behaviour-status"></span>
+        </section>
+
+        <section class="panel" data-panel="skills">
+          <p class="hint">
+            A procedure taught once instead of re-explained every conversation. The assistant sees the
+            names and descriptions, and reads the full instructions when one applies — so the
+            <strong>description</strong> is what decides whether it gets used. It can also write these
+            itself when you teach it something.
+          </p>
+          <div class="field">
+            <label for="skill-name">Name</label>
+            <input type="text" id="skill-name" placeholder="Weekly freight quotation" />
+          </div>
+          <div class="field">
+            <label for="skill-description">When it applies</label>
+            <input type="text" id="skill-description" placeholder="When asked to price a container shipment" />
+          </div>
+          <div class="field">
+            <label for="skill-instructions">The procedure</label>
+            <textarea id="skill-instructions" rows="6" placeholder="1. Check the rate sheet in …"></textarea>
+          </div>
+          <div class="row">
+            <button class="btn btn--primary" id="skill-save" type="button">Save skill</button>
+            <span class="hint" id="skill-status"></span>
+          </div>
+          <h3>Saved</h3>
+          <div id="skill-list"></div>
+        </section>
+
+        <section class="panel" data-panel="tasks">
+          <p class="hint">
+            Work that runs without you watching. Each run is a fresh conversation you can open
+            afterwards — the result is waiting rather than announced. Write the prompt as if to
+            somebody with no memory of today, because that is what it is.
+          </p>
+          <div class="field">
+            <label for="task-title">Title</label>
+            <input type="text" id="task-title" placeholder="Friday campaign summary" />
+          </div>
+          <div class="field">
+            <label for="task-prompt">What to do</label>
+            <textarea id="task-prompt" rows="4" placeholder="Read the reports in D:\campaigns and summarise the week."></textarea>
+          </div>
+          <div class="row">
+            <input type="text" id="task-when" placeholder="17:00 or fri 17:00" style="max-width:12rem" />
+            <label class="row" style="gap:6px">
+              <input type="checkbox" id="task-repeat" checked /> repeat
+            </label>
+            <button class="btn btn--primary" id="task-save" type="button">Schedule</button>
+          </div>
+          <p class="hint" id="task-status"></p>
+          <h3>Scheduled</h3>
+          <div id="task-list"></div>
+        </section>
+
+        <section class="panel" data-panel="connectors">
+          <p class="hint">
+            Tokens are encrypted on the server and never sent back to the browser. Each is verified
+            with the service before it is stored, so a bad paste fails here rather than mid-task.
+            Revoke from the service's own settings whenever you like.
+          </p>
+          <div id="connector-list"></div>
+          <p class="hint">
+            Gmail, Drive and Calendar are not here: Google requires a full OAuth flow with a
+            registered application, which a token box cannot do. Absent rather than half-working.
+          </p>
+        </section>
+
+        <section class="panel" data-panel="mcp">
+          <p class="hint" data-i18n="mcp.lede">
+            MCP servers add tools from outside this app — Figma, Jira, Sentry, a database, hundreds of
+            others. Plug one in and the assistant can use it. Nothing here is chosen by the assistant:
+            you type the command, and every tool from a server stops and asks before it runs.
+          </p>
+
+          <h3 data-i18n="mcp.suggested">Suggested servers</h3>
+          <p class="hint" data-i18n="mcp.suggested.hint">
+            Press one to fill the form in. Nothing is installed or run until you press Connect.
+          </p>
+          <div id="mcp-catalogue" class="mcp-cat"></div>
+
+          <div class="field">
+            <label for="mcp-name" data-i18n="mcp.name">Name</label>
+            <input id="mcp-name" type="text" placeholder="figma" autocomplete="off" />
+          </div>
+
+          <div class="field">
+            <label for="mcp-transport" data-i18n="mcp.transport">How to reach it</label>
+            <select id="mcp-transport">
+              <option value="stdio" data-i18n="mcp.transport.stdio">A program on this computer</option>
+              <option value="http" data-i18n="mcp.transport.http">A URL</option>
+            </select>
+          </div>
+
+          <div class="field" id="mcp-stdio-field">
+            <label for="mcp-command" data-i18n="mcp.command">Command</label>
+            <input id="mcp-command" type="text" placeholder="npx -y @modelcontextprotocol/server-filesystem D:\work" autocomplete="off" spellcheck="false" />
+            <p class="hint" data-i18n="mcp.command.hint">
+              The whole command line, exactly as you would type it in a terminal. This runs a program on
+              your computer, so only paste something you trust.
+            </p>
+          </div>
+
+          <div class="field" id="mcp-http-field" hidden>
+            <label for="mcp-url" data-i18n="mcp.url">Server URL</label>
+            <input id="mcp-url" type="text" placeholder="https://example.com/mcp" autocomplete="off" spellcheck="false" />
+            <div class="field">
+              <label for="mcp-headers" data-i18n="mcp.headers">Headers</label>
+              <textarea id="mcp-headers" rows="3" placeholder="Authorization: Bearer …"></textarea>
+              <p class="hint" data-i18n="mcp.headers.hint">
+                One per line, as <code>Name: value</code>. Encrypted on the server and never sent back
+                to the browser.
+              </p>
+            </div>
+          </div>
+
+          <div class="row">
+            <button class="btn btn--primary" id="mcp-add" type="button" data-i18n="mcp.add">Connect</button>
+            <span class="hint" id="mcp-status"></span>
+          </div>
+
+          <h3 data-i18n="mcp.connected">Connected</h3>
+          <div id="mcp-list"></div>
+        </section>
+
+        <section class="panel" data-panel="worker">
+          <div id="worker-status-card"></div>
+
+          <h3>Add a computer</h3>
+          <p class="hint">
+            Run AI Remote on the machine you want the assistant to work on. It shows an
+            eight-character code — enter it and that computer is yours from any device you sign in
+            on, for good. Nothing on the internet connects inward: the computer polls outward.
+          </p>
+          <ol class="steps">
+            <li>On that computer: clone this repo, <code>npm install</code>, then <code>npm start</code>.</li>
+            <li>It shows a pairing code. Enter it here or from the <strong>Computers</strong> button in the header.</li>
+          </ol>
+          <button class="btn btn--primary" id="open-pair" type="button">Enter a pairing code</button>
+        </section>
+
+        <section class="panel" data-panel="account">
+          <div id="account-card"></div>
+
+          <div class="field">
+            <label for="account-name">Display name</label>
+            <div class="row">
+              <input id="account-name" type="text" />
+              <button class="btn btn--ghost" id="save-name" type="button">Save</button>
+            </div>
+          </div>
+
+          <!-- Not hidden. It was, for no reason anyone could point at, which made
+               the only way to change a password a password-reset email — on an
+               install where email is usually not configured at all. -->
+          <div id="password-block">
+            <h3>Change password</h3>
+            <div class="field">
+              <label for="current-password">Current password</label>
+              <input id="current-password" type="password" autocomplete="current-password" />
+            </div>
+            <div class="field">
+              <label for="new-password">New password</label>
+              <input id="new-password" type="password" autocomplete="new-password" placeholder="At least 10 characters" />
+            </div>
+            <button class="btn btn--primary" id="save-password" type="button">Update password</button>
+            <p class="hint">Changing it signs out every other device — this one stays in.</p>
+          </div>
+
+          <h3>Two-factor authentication</h3>
+          <div id="twofa-card"></div>
+
+          <h3>Usage this month</h3>
+          <div id="usage-card"></div>
+
+          <button class="btn btn--ghost" id="logout" type="button">Sign out</button>
+        </section>
+
+        <section class="panel" data-panel="admin">
+          <h3>People</h3>
+          <p class="hint">
+            Anyone can sign up with an email and a password. Each account brings its own API keys and
+            pairs its own computer — never yours. Set <code>ALLOW_SIGNUP=false</code> to close
+            registration once everyone you want is in.
+          </p>
+          <div id="user-list"></div>
+        </section>
+      </div>
+    </dialog>
+
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>

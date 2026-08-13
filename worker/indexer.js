@@ -1,0 +1,273 @@
+/**
+ * Reading the user's documents so they can be searched by meaning.
+ *
+ * This half runs on their machine. It walks a folder, pulls text out of whatever
+ * it finds, cuts it into passages, and hands those up — nothing else. The files
+ * stay where they are; what leaves is the text that was going to be searched
+ * anyway, and only from the folder somebody explicitly named.
+ *
+ * The sink is injected rather than imported for the same reason the screen
+ * frames' is: there are two ways this code gets run. In the worker it posts to
+ * the server over the paired device's token; inside a locally-run server it is
+ * called directly, with no HTTP hop at all. Neither half needs to know which.
+ */
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { resolveInWorkspace, rel } from './paths.js';
+
+/** How much text goes in one passage, and how much of it the next one repeats. */
+const CHUNK_CHARS = 1400;
+const CHUNK_OVERLAP = 200;
+
+/** Sent per call. Small enough that one embedding request stays well inside its limits. */
+const BATCH_CHUNKS = 96;
+
+const MAX_FILE_BYTES = 12_000_000;
+const MAX_FILES = 3000;
+
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', '.svn', '.hg', 'dist', 'build', 'out', 'target', '.next', '.nuxt',
+  '.venv', 'venv', '__pycache__', '.cache', '.gradle', 'vendor', 'Pods', '.terraform',
+  '$RECYCLE.BIN', 'System Volume Information', 'AppData',
+]);
+
+/** Extensions worth reading. Anything else is skipped in silence. */
+const TEXT_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.rst', '.org', '.tex', '.log',
+  '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.rb', '.go', '.rs', '.java', '.kt',
+  '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.swift', '.sh', '.ps1', '.sql', '.r', '.lua',
+  '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.env', '.csv', '.tsv',
+  '.html', '.htm', '.xml', '.svg', '.css', '.scss', '.vue', '.svelte',
+]);
+
+let sink = null;
+
+/** Where finished batches go. Set by the worker, or by a locally-run server. */
+export function setIndexSink(fn) {
+  sink = fn;
+}
+
+async function send(payload) {
+  if (!sink) throw new Error('This worker has nowhere to send an index to — it is not connected to a server.');
+  return sink(payload);
+}
+
+// ── reading ───────────────────────────────────────────────────────────
+
+async function* walk(dir, depth = 0) {
+  if (depth > 12) return;
+  let entries;
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return; // a folder we may not read is not a failure worth stopping for
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+      yield* walk(full, depth + 1);
+    } else if (entry.isFile() && !entry.name.startsWith('~$')) {
+      yield full;
+    }
+  }
+}
+
+/** Office formats, read by the same code the chat and the projects use. */
+const OFFICE_EXTENSIONS = new Set(['.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm']);
+
+/**
+ * The text of one file, or null when there is none to be had.
+ *
+ * PDFs and Office documents go through the same extractors the chat attachments
+ * use, so a document reads identically whether it was dropped on the window or
+ * found on disk. That matters here more than anywhere: a folder of contracts is
+ * mostly .docx, and an indexer that skipped them would quietly make the
+ * assistant's "I searched your documents" a lie.
+ */
+async function extract(file) {
+  const ext = path.extname(file).toLowerCase();
+
+  if (ext === '.pdf') {
+    const { extractPdfText } = await import('../server/pdf.js');
+    const base64 = (await fsp.readFile(file)).toString('base64');
+    const result = await extractPdfText(base64).catch(() => null);
+    return result?.text || null;
+  }
+
+  if (OFFICE_EXTENSIONS.has(ext)) {
+    const { officeFormat, readOffice } = await import('../server/office/index.js');
+    const buffer = await fsp.readFile(file);
+    try {
+      return readOffice(officeFormat(file, ''), buffer).text || null;
+    } catch {
+      // Password-protected, or written by something that got the format wrong.
+      // One unreadable file in a folder of two thousand is not a reason to stop.
+      return null;
+    }
+  }
+
+  if (!TEXT_EXTENSIONS.has(ext)) return null;
+
+  const text = await fsp.readFile(file, 'utf8').catch(() => null);
+  if (text === null) return null;
+  // A .json that is really a binary blob, or a file saved as UTF-16: either way
+  // the embedding would be of nonsense.
+  if (text.includes('\u0000')) return null;
+  return text;
+}
+
+// ── chunking ──────────────────────────────────────────────────────────
+
+const HEADING = /^(#{1,6}\s+.+|.+\n[=-]{3,})$/;
+
+/**
+ * Cut text into overlapping passages, preferring to break where the author did.
+ *
+ * The overlap is what stops a definition that happens to straddle a boundary
+ * from being unfindable in both halves. Breaking on blank lines rather than on a
+ * character count means a passage usually starts at the top of a thought, which
+ * is most of what makes a retrieved result readable on its own.
+ */
+export function chunk(text, { size = CHUNK_CHARS, overlap = CHUNK_OVERLAP } = {}) {
+  const clean = String(text).replace(/\r\n/g, '\n').replace(/\n{4,}/g, '\n\n\n').trim();
+  if (!clean) return [];
+
+  const paragraphs = clean.split(/\n\s*\n/);
+  const chunks = [];
+  let current = '';
+  let heading = null;
+  let lastHeading = null;
+
+  const flush = () => {
+    const body = current.trim();
+    if (body) chunks.push({ text: body, heading: lastHeading });
+    current = '';
+  };
+
+  for (const paragraph of paragraphs) {
+    const first = paragraph.split('\n')[0];
+    if (HEADING.test(paragraph) || (first.startsWith('#') && first.length < 120)) {
+      heading = first.replace(/^#+\s*/, '').trim().slice(0, 120);
+    }
+
+    // One paragraph longer than a whole passage: cut it on its own.
+    if (paragraph.length > size) {
+      flush();
+      for (let i = 0; i < paragraph.length; i += size - overlap) {
+        const slice = paragraph.slice(i, i + size).trim();
+        if (slice) chunks.push({ text: slice, heading: heading || lastHeading });
+      }
+      lastHeading = heading;
+      continue;
+    }
+
+    if (current.length + paragraph.length + 2 > size) {
+      flush();
+      // Carry the tail of the last passage into the next one.
+      const tail = chunks[chunks.length - 1]?.text.slice(-overlap) || '';
+      current = tail ? `${tail}\n\n` : '';
+      lastHeading = heading;
+    }
+    if (!lastHeading) lastHeading = heading;
+    current += `${paragraph}\n\n`;
+  }
+  flush();
+
+  return chunks;
+}
+
+// ── the tool ──────────────────────────────────────────────────────────
+
+/**
+ * Index a folder of the user's documents.
+ *
+ * Files whose modification time has not moved since the last run are skipped,
+ * which is what makes re-indexing a large folder cheap enough to do casually —
+ * embedding is billed per token, and re-reading an unchanged archive every time
+ * would be a bill for nothing.
+ */
+export async function indexFolder({ path: target = '.', reindex = false }) {
+  const root = resolveInWorkspace(target);
+  const stat = await fsp.stat(root).catch(() => null);
+  if (!stat) throw new Error(`There is nothing at ${target} on this computer.`);
+  if (!stat.isDirectory()) throw new Error(`${rel(root)} is a file. Point index_folder at a folder.`);
+
+  const source = rel(root);
+  const known = reindex ? { stamps: {}, model: null } : await send({ op: 'stamps', source });
+
+  let seen = 0;
+  let indexed = 0;
+  let skipped = 0;
+  let unreadable = 0;
+  let chunks = 0;
+  const failures = [];
+
+  let batch = [];
+  let batchChunks = 0;
+
+  const flush = async () => {
+    if (!batch.length) return;
+    const result = await send({ op: 'ingest', source, files: batch });
+    indexed += result?.files || 0;
+    chunks += result?.chunks || 0;
+    batch = [];
+    batchChunks = 0;
+  };
+
+  for await (const file of walk(root)) {
+    if (seen >= MAX_FILES) break;
+    seen += 1;
+
+    const info = await fsp.stat(file).catch(() => null);
+    if (!info || info.size === 0 || info.size > MAX_FILE_BYTES) continue;
+
+    const key = file.split(path.sep).join('/');
+    const mtime = Math.floor(info.mtimeMs);
+    if (!reindex && known.stamps?.[key] && known.stamps[key] >= mtime) {
+      skipped += 1;
+      continue;
+    }
+
+    let text;
+    try {
+      text = await extract(file);
+    } catch (err) {
+      unreadable += 1;
+      if (failures.length < 5) failures.push(`${path.basename(file)}: ${err.message}`);
+      continue;
+    }
+    if (!text) continue;
+
+    const pieces = chunk(text);
+    if (!pieces.length) continue;
+
+    // A single enormous file is split across calls rather than sent whole.
+    for (let i = 0; i < pieces.length; i += BATCH_CHUNKS) {
+      const slice = pieces.slice(i, i + BATCH_CHUNKS);
+      if (batchChunks + slice.length > BATCH_CHUNKS) await flush();
+      batch.push({ path: key, mtime, chunks: slice.map((c, n) => ({ ...c, ordinal: i + n })) });
+      batchChunks += slice.length;
+    }
+    if (batchChunks >= BATCH_CHUNKS) await flush();
+  }
+  await flush();
+
+  const lines = [
+    `Indexed ${source}/ — ${indexed} file${indexed === 1 ? '' : 's'}, ${chunks} passage${chunks === 1 ? '' : 's'}.`,
+  ];
+  if (skipped) lines.push(`${skipped} unchanged since last time, so they were not re-read.`);
+  if (unreadable) lines.push(`${unreadable} could not be read${failures.length ? `: ${failures.join('; ')}` : '.'}`);
+  if (seen >= MAX_FILES) lines.push(`Stopped at ${MAX_FILES} files. Index a narrower folder to reach the rest.`);
+  if (!indexed && !skipped) {
+    lines.push(
+      'Nothing in there was a document this can read — it looks for text, code, Markdown, PDFs, ' +
+        'and Word, Excel and PowerPoint files.',
+    );
+  } else {
+    lines.push('search_docs can find this now.');
+  }
+  return lines.join(' ');
+}
+
+export const INDEX_IMPLEMENTATIONS = { index_folder: indexFolder };

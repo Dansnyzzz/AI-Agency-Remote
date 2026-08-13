@@ -1,0 +1,24 @@
+{
+  "//": "Copy to .mcp.json to enable. Kept as an example on purpose — see .claude/README.md. Every server listed here adds its whole tool schema to EVERY request of EVERY session, so enable only what you are actually using. Delete the \"//\" comment keys before use if your tooling rejects them.",
+
+  "mcpServers": {
+    "playwright": {
+      "//": "Drives a real browser. Genuinely useful here because test/ui.test.mjs already exercises the app in Chromium and playwright-core is a dependency. Costs roughly 20 extra tools. Enable while working on the interface, not permanently.",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+
+    "github": {
+      "//": "Issues, PRs, code search. Needs a personal access token with the narrowest scope that works — repo read is usually enough. Set GITHUB_TOKEN in your shell; it is expanded here rather than written into the file so the token never lands in the repo.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+    },
+
+    "postgres": {
+      "//": "Read-only inspection of a real database — useful for checking a migration landed. Point it at a DEVELOPMENT database. Never a production connection string: an agent with SQL access and a production URL is one confused turn away from a very bad afternoon.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "${DEV_DATABASE_URL}"]
+    }
+  }
+}

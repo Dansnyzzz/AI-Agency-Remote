@@ -1,0 +1,317 @@
+import { getStore } from './store/index.js';
+import { encryptSecret, decryptSecret } from './crypto.js';
+import { CATALOG } from './providers/catalog.js';
+
+const PREFS_KEY = 'prefs';
+const KEYS_KEY = 'providerKeys';
+
+const DEFAULT_PREFS = {
+  defaultModel: 'anthropic/claude-opus-5',
+  effort: 'high',
+  maxSteps: 30,
+  // Ordinary work proceeds; only the irreversible stops for a yes. Asking about
+  // everything trains people to click through without reading, which protects
+  // nobody.
+  toolPolicy: 'guarded',
+  systemPrompt: '',
+  // Fold the older turns into a summary before the window fills, rather than
+  // letting a long conversation quietly stop working. Off is a real choice —
+  // some work wants every word kept — but it means hitting the ceiling.
+  autoCompact: true,
+  // Which paired computer the assistant acts on, when more than one is online.
+  // Null means "whichever answered most recently", which is the right answer for
+  // the overwhelmingly common case of owning one computer.
+  activeDevice: null,
+  // A document the assistant just made opens beside the conversation on its
+  // own. On by default: the reason to ask for a report is to read it, and
+  // hunting for the card afterwards is a step nobody wanted. It opens once per
+  // turn and closing it means closed, so it never fights anyone — and this
+  // switch is for the person who wants it off entirely.
+  autoPreview: true,
+  /**
+   * Which language the interface is in.
+   *
+   * Per-account rather than per-browser, unlike the theme: the theme belongs to
+   * the screen somebody is looking at, the language belongs to the person. Null
+   * means "nobody has said", and the browser decides from `navigator.language` —
+   * so a Vietnamese customer gets Vietnamese on their first visit without having
+   * to find a setting to ask for it.
+   */
+  language: null,
+  /**
+   * Whether the getting-started guide has been through once.
+   *
+   * On the account, not in local storage, because the point of dismissing it is
+   * not to see it again — including on the phone they sign in on next.
+   */
+  onboarded: false,
+};
+
+/** The languages the interface has strings for. See public/js/locales/. */
+const LANGUAGES = new Set(['vi', 'en']);
+
+/**
+ * Deployment-wide keys. These act as a shared fallback: handy for a private
+ * deployment, but in a multi-user setup every account should bring its own, or
+ * one person's key pays for everyone.
+ */
+const ENV_KEYS = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  google: 'GOOGLE_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+};
+
+/**
+ * The preferences, with a default model the account can actually run.
+ *
+ * `DEFAULT_PREFS.defaultModel` names a Claude model, which is the right choice
+ * when there is an Anthropic key and completely useless when there is not.
+ * Somebody who signs up and pastes an OpenRouter key — the common case, since it
+ * is the one key that reaches everything — used to get "No API key for
+ * Anthropic" on their very first message, with no hint that the *model* was the
+ * thing to change.
+ *
+ * So an unchosen default resolves to a provider that is configured. An explicit
+ * choice is never second-guessed: picking a model and finding it swapped would
+ * be far worse than an error message.
+ */
+export async function getPrefs(userId) {
+  const stored = (await getStore().getUserSetting(userId, PREFS_KEY)) || {};
+  const prefs = { ...DEFAULT_PREFS, ...stored };
+
+  if (!stored.defaultModel) {
+    prefs.defaultModel = await usableDefaultModel(userId, prefs.defaultModel);
+  }
+  return prefs;
+}
+
+/**
+ * Where somebody who has not chosen a model should land.
+ *
+ * The newest free model on OpenRouter, when there is an OpenRouter key. That is
+ * a deliberate reordering: this used to prefer the built-in flagships and only
+ * fall back to a free model when *nothing else* was configured, so an account
+ * with an Anthropic key started on Claude Opus and started spending immediately,
+ * without ever being told there was a free option.
+ *
+ * Free first is the friendlier default for somebody arriving, and it costs
+ * nothing to change. Be clear about the trade, because it is real: free models
+ * are rate-limited and weaker at chaining tool calls than the paid flagships, so
+ * the interface says so and offers the swap in one press rather than leaving
+ * anyone to work out why a long job stalled. See `renderTopbar` and the
+ * onboarding step that names it.
+ *
+ * The invariant that matters more than any of this: **an explicit choice is never
+ * second-guessed.** Only `getPrefs` calls this, and only when nothing is stored.
+ */
+async function usableDefaultModel(userId, fallback) {
+  const status = await providerStatus(userId).catch(() => ({}));
+
+  if (status.openrouter?.configured) {
+    const [free] = await getStore()
+      .listSharedModels({ tier: 'free', sort: 'new', limit: 1 })
+      .catch(() => []);
+    if (free) return free.id;
+    // An OpenRouter key but an empty library — the daily refresh has not landed
+    // yet. Fall through rather than returning nothing.
+  }
+
+  const stated = CATALOG.find((m) => m.id === fallback);
+  if (status[stated?.provider]?.configured) return fallback;
+
+  const runnable = CATALOG.find((m) => status[m.provider]?.configured);
+  if (runnable) return runnable.id;
+
+  // No keys at all. The stated default is as good as anything, and the error it
+  // produces names the provider to add a key for.
+  return fallback;
+}
+
+export async function setPrefs(userId, patch) {
+  const next = { ...(await getPrefs(userId)), ...patch };
+
+  // Validated here rather than at the route, because this is the only way into
+  // the stored object and an unknown language would leave the interface asking
+  // for strings that do not exist.
+  if ('language' in patch && patch.language != null && !LANGUAGES.has(patch.language)) {
+    throw new Error(`"${patch.language}" is not a language this interface has. Use one of: ${[...LANGUAGES].join(', ')}.`);
+  }
+  if ('onboarded' in patch) next.onboarded = !!patch.onboarded;
+
+  await getStore().setUserSetting(userId, PREFS_KEY, next);
+  return next;
+}
+
+async function storedKeys(userId) {
+  return (await getStore().getUserSetting(userId, KEYS_KEY)) || {};
+}
+
+/**
+ * One provider's keys, as a list.
+ *
+ * Stored as a single encrypted string until keys could be stacked, so a stored
+ * string is read as a list of one. Nothing migrates on write and nothing has to
+ * be converted: an account that never adds a second key keeps working, and the
+ * moment it does the shape becomes the list it always meant.
+ */
+function keyList(stored, provider) {
+  const held = stored[provider];
+  if (!held) return [];
+  if (typeof held === 'string') return [{ cipher: held, hint: '', addedAt: null }];
+  return Array.isArray(held) ? held.filter((entry) => entry?.cipher) : [];
+}
+
+/**
+ * Where a fallback should start.
+ *
+ * A key that ran out at nine in the morning is still out at ten, and paying a
+ * failed round trip to rediscover that on every single request is a tax on the
+ * whole account. So the last key that worked is remembered — in memory only,
+ * because it is a hint rather than a fact, and a restart rediscovering it costs
+ * one request.
+ */
+const cursor = new Map();
+const cursorKey = (userId, provider) => `${userId}:${provider}`;
+
+export function rememberWorkingKey(userId, provider, index) {
+  cursor.set(cursorKey(userId, provider), index);
+}
+
+/**
+ * Every key this account can try for a provider, in the order to try them.
+ *
+ * Their own first — nobody should silently spend somebody else's budget — and
+ * the deployment-wide key last, as the final fallback. The list starts at
+ * whichever key last worked, then wraps, so a dead first key costs one failed
+ * request per process rather than one per turn.
+ *
+ * @returns `[{ key, index, shared }]`
+ */
+export async function getApiKeys(userId, provider) {
+  const list = keyList(await storedKeys(userId), provider);
+
+  const own = [];
+  list.forEach((entry, index) => {
+    const decrypted = decryptSecret(entry.cipher);
+    if (decrypted) own.push({ key: decrypted, index, shared: false });
+  });
+
+  const start = cursor.get(cursorKey(userId, provider)) || 0;
+  const from = own.findIndex((entry) => entry.index === start);
+  const ordered = from > 0 ? [...own.slice(from), ...own.slice(0, from)] : own;
+
+  const environment = process.env[ENV_KEYS[provider]];
+  if (environment) ordered.push({ key: environment, index: -1, shared: true });
+  return ordered;
+}
+
+/** The first key, for callers that only ever wanted one. */
+export async function getApiKey(userId, provider) {
+  const [first] = await getApiKeys(userId, provider);
+  return first?.key || '';
+}
+
+/**
+ * True when this account is spending the deployment's key rather than its own.
+ * Quotas only apply in that case.
+ */
+export async function usesSharedKey(userId, provider) {
+  const own = keyList(await storedKeys(userId), provider).some((entry) => decryptSecret(entry.cipher));
+  if (own) return false;
+  return !!process.env[ENV_KEYS[provider]];
+}
+
+/** The last four characters, which is how everybody tells one key from another. */
+const hintFor = (value) => `…${String(value).slice(-4)}`;
+
+/** Replace whatever is stored with this single key, or clear it. */
+export async function setApiKey(userId, provider, value) {
+  if (!(provider in ENV_KEYS)) throw new Error(`Unknown provider "${provider}"`);
+  const keys = await storedKeys(userId);
+  if (value) keys[provider] = [{ cipher: encryptSecret(value), hint: hintFor(value), addedAt: new Date().toISOString() }];
+  else delete keys[provider];
+  await getStore().setUserSetting(userId, KEYS_KEY, keys);
+  cursor.delete(cursorKey(userId, provider));
+}
+
+/** Add a spare, kept behind the ones already there. */
+export async function addApiKey(userId, provider, value) {
+  if (!(provider in ENV_KEYS)) throw new Error(`Unknown provider "${provider}"`);
+  const clean = String(value || '').trim();
+  if (!clean) throw new Error('That is an empty key.');
+
+  const keys = await storedKeys(userId);
+  const list = keyList(keys, provider);
+  // The same key twice is not a fallback; it is the same outage twice.
+  if (list.some((entry) => decryptSecret(entry.cipher) === clean)) {
+    throw new Error('That key is already on this provider.');
+  }
+  if (list.length >= 8) throw new Error('Eight keys per provider is the limit.');
+
+  list.push({ cipher: encryptSecret(clean), hint: hintFor(clean), addedAt: new Date().toISOString() });
+  keys[provider] = list;
+  await getStore().setUserSetting(userId, KEYS_KEY, keys);
+  return list.length;
+}
+
+/** Drop one key by its position, leaving the rest in order. */
+export async function removeApiKey(userId, provider, index) {
+  if (!(provider in ENV_KEYS)) throw new Error(`Unknown provider "${provider}"`);
+  const keys = await storedKeys(userId);
+  const list = keyList(keys, provider);
+  if (index < 0 || index >= list.length) throw new Error('There is no key in that position.');
+
+  list.splice(index, 1);
+  if (list.length) keys[provider] = list;
+  else delete keys[provider];
+
+  await getStore().setUserSetting(userId, KEYS_KEY, keys);
+  cursor.delete(cursorKey(userId, provider));
+  return list.length;
+}
+
+/**
+ * What the browser may know: whether a provider works, never the key itself.
+ *
+ * `shared` is the field that matters and the one the interface used to ignore —
+ * it read a `fromEnv` that this function has never returned, so somebody quietly
+ * spending the deployment's key saw the same "configured" badge as somebody
+ * paying their own bill, with no way to tell the difference.
+ */
+export async function providerStatus(userId) {
+  const stored = await storedKeys(userId);
+  const out = {};
+
+  for (const [provider, envName] of Object.entries(ENV_KEYS)) {
+    const list = keyList(stored, provider);
+    const shared = !!process.env[envName];
+    out[provider] = {
+      configured: list.length > 0 || shared,
+      own: list.length > 0,
+      // True when this account is riding the deployment's shared key.
+      shared: list.length === 0 && shared,
+      envVar: envName,
+      // Enough to tell one key from another and no more: the last four
+      // characters and when it was added. The key itself never leaves here.
+      keys: list.map((entry, index) => ({
+        position: index + 1,
+        hint: entry.hint || '',
+        addedAt: entry.addedAt || null,
+      })),
+      // Whether there is anywhere to fall back to if the first one is refused.
+      spare: Math.max(0, list.length - 1) + (list.length && shared ? 1 : 0),
+    };
+  }
+  return out;
+}
+
+/**
+ * Optional endpoint override, so an OpenAI-compatible server — Ollama, LM
+ * Studio, vLLM — can be used exactly like a hosted one.
+ */
+export function baseUrlFor(provider) {
+  if (provider === 'openai') return process.env.OPENAI_BASE_URL || undefined;
+  if (provider === 'anthropic') return process.env.ANTHROPIC_BASE_URL || undefined;
+  return undefined;
+}

@@ -1,0 +1,245 @@
+import crypto from 'node:crypto';
+import { getStore } from './store/index.js';
+import { streamCompletion } from './providers/index.js';
+
+/**
+ * Keeping a long conversation inside the model's window.
+ *
+ * Every turn re-sends the whole transcript, so a conversation that goes well is
+ * a conversation that eventually stops working: the prompt outgrows the context
+ * window and the provider refuses it. The usual answers are both bad — silently
+ * dropping the oldest turns loses the decisions the work rests on, and refusing
+ * to continue makes the person start again somewhere else.
+ *
+ * So the old part is *summarised* rather than discarded, and the summary is
+ * written into the conversation as a message of its own. Two consequences worth
+ * knowing:
+ *
+ *   **The transcript the model sees and the one you read are different.** The
+ *   page still shows everything that was said; only what is sent is trimmed.
+ *   Scrolling back to something from an hour ago must keep working.
+ *
+ *   **It chains.** Compacting again summarises the previous summary along with
+ *   everything since, so the cost stays flat however long the conversation runs.
+ */
+
+/**
+ * How full the window may get before the older turns are folded up.
+ *
+ * Not 100%, and not close to it: the reply needs room too, and the summary call
+ * itself has to fit. Leaving it until the window is genuinely full means the
+ * compaction request is the one that fails.
+ */
+const COMPACT_AT = 0.82;
+
+/** Turns kept word for word. Recent context is where the work actually is. */
+const KEEP_RECENT = 8;
+
+/** Assumed window for a model that never said how big its own is. */
+const ASSUMED_CONTEXT = 128_000;
+
+/**
+ * Roughly how many tokens a message is worth.
+ *
+ * Four characters per token is the usual English approximation and is wrong for
+ * code and wrong for Vietnamese — but it is only ever used for the *tail*, the
+ * handful of messages added since the provider last told us a real number, so
+ * the error stays small and always shrinks at the next turn.
+ */
+function estimateTokens(message) {
+  let chars = (message.text || '').length + (message.thinking || '').length;
+  for (const call of message.toolCalls || []) {
+    chars += call.name.length + JSON.stringify(call.input ?? {}).length;
+  }
+  for (const result of message.results || []) {
+    chars += String(result.content ?? '').length;
+  }
+  // An image is not characters at all. A rough per-image constant beats
+  // pretending a 2MB screenshot costs nothing.
+  const images = (message.attachments || []).filter((a) => a.kind === 'image').length;
+  return Math.ceil(chars / 4) + images * 1200;
+}
+
+/**
+ * How much of the window this conversation is using.
+ *
+ * The honest number comes from the provider: every assistant turn records the
+ * prompt size it was actually billed for. Everything after the last of those is
+ * estimated, because nobody has counted it yet.
+ */
+export function measure(messages, entry, { maxOutput } = {}) {
+  const context = Number(entry?.context) || ASSUMED_CONTEXT;
+
+  // The last turn the provider gave us a real figure for.
+  let lastCounted = -1;
+  let counted = 0;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const usage = messages[i].usage;
+    if (usage?.input) {
+      counted = usage.input;
+      lastCounted = i;
+      break;
+    }
+  }
+
+  let used = counted;
+  for (let i = lastCounted + 1; i < messages.length; i += 1) used += estimateTokens(messages[i]);
+
+  /**
+   * What is left once the reply has its room.
+   *
+   * The room reserved is the model's own output limit, and it has to be capped at
+   * half the window. This was a flat 32000 that no caller ever overrode, so any
+   * model with a window smaller than that — `openai/gpt-4` at 8191,
+   * `gpt-3.5-turbo` at 16385, `qwen-2.5-7b` at 32768 — got
+   * `max(1, 8191 - 32000)` = a budget of **one token**. Every conversation then
+   * measured as 100% full from its first message, and with auto-compaction on
+   * (the default) that meant summarising the whole transcript on every single
+   * turn: an extra model call each time, spending tokens to save tokens, on the
+   * cheap models people pick precisely to avoid spending them.
+   */
+  const reserve = Math.min(
+    Number(maxOutput) || Number(entry?.maxOutput) || 32_000,
+    Math.floor(context / 2),
+  );
+  const budget = Math.max(1024, context - reserve);
+  return {
+    used,
+    context,
+    budget,
+    ratio: Math.min(1, used / budget),
+    // `counted` is exact; anything past it is arithmetic on character counts.
+    exact: lastCounted === messages.length - 1,
+  };
+}
+
+/** Whether the next turn should fold the older part up first. */
+export function shouldCompact(messages, entry, options = {}) {
+  const { ratio } = measure(messages, entry, options);
+  // Nothing to gain from summarising a conversation that is mostly tail.
+  return ratio >= COMPACT_AT && messages.length > KEEP_RECENT + 2;
+}
+
+/**
+ * Where the kept tail begins.
+ *
+ * Never between an assistant turn and the results of the tools it called: every
+ * provider rejects a `tool` message whose call it cannot see, so a boundary in
+ * the wrong place turns a working conversation into a 400. Walks backwards past
+ * any leading tool message until the split is somewhere legal.
+ */
+export function tailStart(messages, keep = KEEP_RECENT) {
+  let start = Math.max(0, messages.length - keep);
+  while (start > 0 && messages[start].role === 'tool') start -= 1;
+  return start;
+}
+
+/** The messages the model is actually sent: the latest summary, then the tail. */
+export function activeTranscript(messages) {
+  let last = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'summary') {
+      last = i;
+      break;
+    }
+  }
+  if (last < 0) return messages;
+
+  const summary = messages[last];
+  return [
+    // Handed over as something the user said, because that is the only role
+    // every provider accepts unconditionally at the start of a transcript.
+    {
+      id: summary.id,
+      role: 'user',
+      text:
+        'Summary of the earlier part of this conversation, which has been folded up to save room:\n\n' +
+        `${summary.text}\n\n` +
+        'Continue from here. Ask if you need something from before that the summary does not cover.',
+    },
+    ...messages.slice(last + 1),
+  ];
+}
+
+const SYSTEM = [
+  'You are compacting a working conversation so it can continue in a smaller context window.',
+  '',
+  'Write a summary the assistant can pick up from cold. It is not a description of the',
+  'conversation — it is the conversation\'s state, handed over.',
+  '',
+  'Keep, in this order:',
+  '  1. What the user is trying to achieve, in their words where possible.',
+  '  2. Decisions made and why, including ones that were reversed.',
+  '  3. Facts that were established: file paths, names, ids, numbers, versions, URLs.',
+  '  4. Code and commands that matter — verbatim, not described.',
+  '  5. What has been done so far, and what is still open.',
+  '  6. Anything the user asked for that has not been delivered yet.',
+  '',
+  'Drop: pleasantries, retries that led nowhere, tool output that has been superseded,',
+  'and your own commentary about the summarising.',
+  '',
+  'Be specific over brief. A summary that loses a file path costs far more than the',
+  'tokens it saved. No preamble — start with the summary itself.',
+].join('\n');
+
+/**
+ * Fold the older part of a conversation into a summary message.
+ *
+ * @returns the summary message that was appended, or null when there was
+ *   nothing worth folding.
+ */
+export async function compact({ userId, chatId, entry, prefs, messages, stream = streamCompletion }) {
+  const store = getStore();
+  const live = activeTranscript(messages);
+  const start = tailStart(live);
+  if (start < 1) return null;
+
+  const older = live.slice(0, start);
+  const transcript = older
+    .map((m) => {
+      if (m.role === 'user') return `USER: ${m.text || '(files only)'}`;
+      if (m.role === 'tool') {
+        return (m.results || [])
+          .map((r) => `TOOL ${r.name} ${r.isError ? '(failed)' : ''}: ${String(r.content ?? '').slice(0, 2000)}`)
+          .join('\n');
+      }
+      const calls = (m.toolCalls || [])
+        .map((c) => `CALLED ${c.name}(${JSON.stringify(c.input ?? {}).slice(0, 400)})`)
+        .join('\n');
+      return [m.text ? `ASSISTANT: ${m.text}` : '', calls].filter(Boolean).join('\n');
+    })
+    .filter(Boolean)
+    .join('\n\n');
+
+  if (!transcript.trim()) return null;
+
+  let summary = '';
+  for await (const ev of stream({
+    userId,
+    entry,
+    system: SYSTEM,
+    messages: [{ id: 'compact', role: 'user', text: transcript }],
+    // No tools: this is a writing job, and a summariser that starts running
+    // commands is a summariser that has misunderstood the assignment.
+    tools: [],
+    effort: prefs?.effort === 'low' ? 'low' : 'medium',
+    signal: undefined,
+  })) {
+    if (ev.type === 'text') summary += ev.delta;
+  }
+
+  summary = summary.trim();
+  if (!summary) return null;
+
+  const message = {
+    id: crypto.randomUUID(),
+    role: 'summary',
+    text: summary,
+    // What it stands in for, so the interface can say so honestly.
+    replaced: older.length,
+  };
+  await store.appendMessage(userId, chatId, message);
+  return message;
+}
+
+export const LIMITS = { compactAt: COMPACT_AT, keepRecent: KEEP_RECENT };

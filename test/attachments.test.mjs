@@ -1,0 +1,650 @@
+/**
+ * Photos and files sent with a message.
+ *
+ * The failure this suite exists to prevent is the quiet one: a file that
+ * uploads, appears in the bubble, and is never actually looked at. So it checks
+ * the whole path — what is accepted, where the bytes live, who may fetch them,
+ * and what each provider adapter finally builds out of them.
+ *
+ *   node test/attachments.test.mjs
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+process.env.ENCRYPTION_KEY ||= 'attach-test-encryption-key';
+process.env.SESSION_SECRET ||= 'attach-test-session-secret';
+process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-attach-test-${process.pid}`);
+delete process.env.DATABASE_URL;
+delete process.env.POSTGRES_URL;
+delete process.env.VERCEL;
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+
+const { createApp } = await import('../server/app.js');
+const { initStore } = await import('../server/store/index.js');
+const store = await initStore();
+
+const PORT = 5204;
+const server = createApp().listen(PORT);
+await new Promise((r) => server.once('listening', r));
+const base = `http://127.0.0.1:${PORT}`;
+
+let failures = 0;
+const section = (name) => console.log(`\n[1m${name}[0m`);
+const check = (label, pass, detail = '') => {
+  console.log(`  ${pass ? '[32m✓[0m' : '[31m✗ FAIL[0m'}  ${label}${detail ? ` — ${detail}` : ''}`);
+  if (!pass) failures += 1;
+};
+
+function jar() {
+  let cookie = '';
+  return {
+    async call(method, url, body) {
+      const res = await fetch(`${base}${url}`, {
+        method,
+        headers: {
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const set = res.headers.get('set-cookie');
+      if (set) cookie = set.split(';')[0];
+      const text = await res.text();
+      let json = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        json = { raw: text.slice(0, 80) };
+      }
+      return { status: res.status, json, headers: res.headers, text };
+    },
+  };
+}
+
+const alice = jar();
+const bob = jar();
+const anon = jar();
+
+await alice.call('POST', '/api/register', {
+  email: 'alice@example.com',
+  password: 'a-long-enough-password',
+  name: 'Alice',
+});
+await bob.call('POST', '/api/register', {
+  email: 'bob@example.com',
+  password: 'bobs-long-enough-password',
+  name: 'Bob',
+});
+
+// A one-pixel PNG, so the bytes are real rather than a string pretending.
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const b64 = (text) => Buffer.from(text, 'utf8').toString('base64');
+
+// ── what is accepted ────────────────────────────────────────────────
+section('classification');
+{
+  const { classify } = await import('../server/attachments.js');
+
+  check('a png is an image', classify('shot.png', 'image/png') === 'image');
+  check('a jpeg is an image', classify('photo.jpg', 'image/jpeg') === 'image');
+  check('a pdf is a document', classify('bill.pdf', 'application/pdf') === 'document');
+  check('markdown is text', classify('notes.md', 'text/markdown') === 'text');
+  check('source is text', classify('app.js', 'text/javascript') === 'text');
+  check('json is text', classify('data.json', 'application/json') === 'text');
+
+  // Browsers routinely hand over octet-stream for anything unusual, so the
+  // extension has to be allowed to answer.
+  check('an unlabelled .ts falls back to its name', classify('main.ts', 'application/octet-stream') === 'text');
+  check('an unlabelled .pdf does too', classify('bill.pdf', '') === 'document');
+
+  // Refused by name rather than accepted and ignored, which is the failure that
+  // wastes somebody's afternoon.
+  check('an executable is refused', classify('setup.exe', 'application/octet-stream') === null);
+  check('a zip is refused', classify('bundle.zip', 'application/zip') === null);
+  check('a video is refused', classify('clip.mp4', 'video/mp4') === null);
+}
+
+section('uploading');
+let imageId;
+let textId;
+{
+  const shot = await alice.call('POST', '/api/attachments', {
+    name: 'screenshot.png',
+    mime: 'image/png',
+    data: PNG,
+  });
+  check('an image uploads', shot.status === 201, JSON.stringify(shot.json).slice(0, 90));
+  check('and is classified', shot.json?.attachment?.kind === 'image', shot.json?.attachment?.kind);
+  check('with its real size', shot.json?.attachment?.bytes > 0, String(shot.json?.attachment?.bytes));
+  check(
+    'and the bytes are not echoed back',
+    !('data' in (shot.json?.attachment || {})),
+    Object.keys(shot.json?.attachment || {}).join(', '),
+  );
+  imageId = shot.json.attachment.id;
+
+  const notes = await alice.call('POST', '/api/attachments', {
+    name: 'notes.md',
+    mime: 'text/markdown',
+    data: b64('# Shipping\n\nContainer GCXU6471654.'),
+  });
+  check('a text file uploads', notes.status === 201);
+  check('as text', notes.json?.attachment?.kind === 'text', notes.json?.attachment?.kind);
+  textId = notes.json.attachment.id;
+
+  const exe = await alice.call('POST', '/api/attachments', {
+    name: 'setup.exe',
+    mime: 'application/octet-stream',
+    data: b64('MZ'),
+  });
+  check('an unreadable kind is refused', exe.status === 400, `got ${exe.status}`);
+  check('with a reason naming the file', /setup\.exe/.test(exe.json?.error || ''), exe.json?.error);
+
+  const huge = await alice.call('POST', '/api/attachments', {
+    name: 'big.png',
+    mime: 'image/png',
+    data: 'A'.repeat(8 * 1024 * 1024),
+  });
+  check('an oversized file is refused', huge.status === 400, `got ${huge.status}`);
+  check('and says the limit', /limit is/.test(huge.json?.error || ''), huge.json?.error);
+
+  const empty = await alice.call('POST', '/api/attachments', { name: 'nothing.txt', mime: 'text/plain', data: '' });
+  check('an empty file is refused', empty.status === 400, `got ${empty.status}`);
+
+  check('uploading needs a session', (await anon.call('POST', '/api/attachments', { name: 'x.png', mime: 'image/png', data: PNG })).status === 401);
+}
+
+// ── whose file is it ────────────────────────────────────────────────
+section('an attachment belongs to one account');
+{
+  const mine = await alice.call('GET', `/api/attachments/${imageId}`);
+  check('the owner can fetch it', mine.status === 200, `got ${mine.status}`);
+  check('with its real content type', mine.headers.get('content-type')?.includes('image/png'), mine.headers.get('content-type'));
+  check('and cached hard, since it never changes', /immutable/.test(mine.headers.get('cache-control') || ''), mine.headers.get('cache-control'));
+
+  const theirs = await bob.call('GET', `/api/attachments/${imageId}`);
+  check("another account cannot", theirs.status === 404, `got ${theirs.status}`);
+  check('anonymously either', (await anon.call('GET', `/api/attachments/${imageId}`)).status === 401);
+
+  // The id comes from the browser, so attaching one is a claim to be checked.
+  const chat = (await bob.call('POST', '/api/chats', {})).json.chat;
+  const stolen = await bob.call('POST', `/api/chats/${chat.id}/messages`, {
+    text: 'look at this',
+    attachments: [imageId],
+  });
+  check("nor attach it to their own message", stolen.status === 400, `got ${stolen.status}`);
+}
+
+// ── sending ─────────────────────────────────────────────────────────
+section('sending a message with files');
+let chatId;
+{
+  chatId = (await alice.call('POST', '/api/chats', {})).json.chat.id;
+
+  const sent = await alice.call('POST', `/api/chats/${chatId}/messages`, {
+    text: 'what container number is this?',
+    attachments: [imageId, textId],
+  });
+  check('the message is accepted', sent.status === 201, JSON.stringify(sent.json).slice(0, 90));
+  check('and carries both files', sent.json?.message?.attachments?.length === 2, `${sent.json?.message?.attachments?.length}`);
+  check(
+    'as metadata, not megabytes',
+    !JSON.stringify(sent.json).includes(PNG.slice(0, 40)),
+    'the browser already has the file it just picked',
+  );
+
+  const loaded = await alice.call('GET', `/api/chats/${chatId}`);
+  const message = loaded.json.messages[0];
+  check('reloading the chat brings them back', message.attachments?.length === 2, `${message.attachments?.length}`);
+  check('with names', message.attachments?.[0]?.name === 'screenshot.png', message.attachments?.[0]?.name);
+  check(
+    'and still no bytes in the transcript',
+    !JSON.stringify(loaded.json).includes(PNG.slice(0, 40)),
+    'a conversation is re-read constantly; base64 has no business in it',
+  );
+
+  // A photo on its own is a complete thought — "what is this?" is implied.
+  const captionless = await alice.call('POST', `/api/chats/${chatId}/messages`, {
+    text: '',
+    attachments: [imageId],
+  });
+  check('a file with no words is allowed', captionless.status === 201, `got ${captionless.status}`);
+
+  const nothing = await alice.call('POST', `/api/chats/${chatId}/messages`, { text: '  ' });
+  check('but an empty message still is not', nothing.status === 400, `got ${nothing.status}`);
+
+  const invented = await alice.call('POST', `/api/chats/${chatId}/messages`, {
+    text: 'x',
+    attachments: ['not-a-real-id'],
+  });
+  check('an invented id is refused', invented.status === 400, `got ${invented.status}`);
+
+  const toomany = await alice.call('POST', `/api/chats/${chatId}/messages`, {
+    text: 'x',
+    attachments: Array.from({ length: 9 }, (_, i) => `id-${i}`),
+  });
+  check('and too many at once', toomany.status === 400, `got ${toomany.status}`);
+  check('with the limit named', /limit/.test(toomany.json?.error || ''), toomany.json?.error);
+}
+
+// ── what actually reaches the model ─────────────────────────────────
+section('what each provider is handed');
+{
+  const { loadForTranscript, toParts } = await import('../server/attachments.js');
+  const aliceId = (await store.getUserByEmail('alice@example.com')).id;
+
+  const messages = await store.listMessages(aliceId, chatId);
+  const loaded = await loadForTranscript(aliceId, messages);
+  check('the bytes are fetched for the transcript', loaded.size >= 2, `${loaded.size} loaded`);
+
+  const first = messages[0];
+  const parts = toParts(first, loaded);
+  check('an image becomes an image part', parts.some((p) => p.type === 'image'), JSON.stringify(parts.map((p) => p.type)));
+  check(
+    'a text file is inlined as text, so it works on every model',
+    parts.some((p) => p.type === 'text' && /GCXU6471654/.test(p.text)),
+    JSON.stringify(parts.map((p) => p.type)),
+  );
+
+  const withParts = [{ ...first, parts }];
+
+  // Anthropic: images and PDFs both go native.
+  const { __testing: anthropic } = await import('../server/providers/anthropic.js');
+  const claude = anthropic.toMessages(withParts);
+  check(
+    'Claude gets a base64 image block',
+    claude[0].content.some((b) => b.type === 'image' && b.source?.data),
+    JSON.stringify(claude[0].content.map((b) => b.type)),
+  );
+  check(
+    'and the question after the files',
+    claude[0].content[claude[0].content.length - 1].type === 'text',
+    JSON.stringify(claude[0].content.map((b) => b.type)),
+  );
+
+  // OpenAI wire format: images as data URIs.
+  const { __testing: openai } = await import('../server/providers/openaiCompatible.js');
+  const gpt = openai.toMessages(withParts, null);
+  check(
+    'the OpenAI shape gets an image_url part',
+    gpt[0].content.some((p) => p.type === 'image_url' && /^data:image\/png;base64,/.test(p.image_url.url)),
+    JSON.stringify(gpt[0].content.map((p) => p.type)),
+  );
+
+  // Gemini: inlineData for both.
+  const { __testing: google } = await import('../server/providers/google.js');
+  const gemini = google.toContents(withParts);
+  check(
+    'Gemini gets inlineData',
+    gemini[0].parts.some((p) => p.inlineData?.mimeType === 'image/png'),
+    JSON.stringify(gemini[0].parts.map((p) => Object.keys(p)[0])),
+  );
+
+  // A message with no files must come out exactly as it always did — the plain
+  // string form, which many models reject the array version of.
+  const plain = openai.toMessages([{ role: 'user', text: 'hello' }], null);
+  check('a plain message stays a plain string', typeof plain[0].content === 'string', typeof plain[0].content);
+
+  /**
+   * Gemini's thought signature, handed back with the call it belongs to.
+   *
+   * From Gemini 3 on, a function call comes with an opaque token standing for
+   * the reasoning behind it, and the next turn has to return it. Dropping it
+   * does not fail the request — it degrades tool use and says so on every turn:
+   * *"Function call is missing a thought_signature in functionCall parts."*
+   */
+  const replayed = google.toContents([
+    {
+      role: 'assistant',
+      text: 'looking it up',
+      toolCalls: [
+        { id: 'a', name: 'web_search', input: { query: 'gold' }, signature: 'SIG-ABC' },
+        { id: 'b', name: 'browser_open', input: { url: 'x' } },
+      ],
+    },
+  ]);
+  const calls = replayed[0].parts.filter((p) => p.functionCall);
+  check('a call with a signature carries it back', calls[0].thoughtSignature === 'SIG-ABC', JSON.stringify(calls[0]));
+  check('and one without does not invent one', !('thoughtSignature' in calls[1]), JSON.stringify(calls[1]));
+}
+
+/**
+ * A valid one-page PDF, built by hand.
+ *
+ * A real fixture would be a binary blob in the repository that nobody can read
+ * a diff of; this is a few lines of the format itself, and it exercises the
+ * same parser. Vietnamese in a subset font — the case that started this — was
+ * checked against a Chromium-printed document, which needs a browser and so
+ * does not belong in the suite that has to stay fast.
+ */
+function tinyPdf(line = 'Hello from a test PDF') {
+  const objects = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>',
+    null, // the content stream, built below
+    '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>',
+  ];
+  const stream = `BT /F1 14 Tf 20 120 Td (${line.replace(/([()\\])/g, '\\$1')}) Tj ET`;
+  objects[3] = `<</Length ${stream.length}>>\nstream\n${stream}\nendstream`;
+
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  objects.forEach((body, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const startxref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const off of offsets) pdf += `${String(off).padStart(10, '0')} 00000 n \n`;
+  pdf += `trailer\n<</Size ${objects.length + 1}/Root 1 0 R>>\nstartxref\n${startxref}\n%%EOF\n`;
+  return Buffer.from(pdf, 'latin1').toString('base64');
+}
+
+section('reading a PDF for a model that cannot be handed one');
+{
+  const { extractPdfText } = await import('../server/pdf.js');
+
+  const read = await extractPdfText(tinyPdf('Câu 1: what is in this document'));
+  check('the words come out', /what is in this document/.test(read?.text || ''), read?.text);
+  check('with the page it came from', /page 1/.test(read?.text || ''));
+  check('and how many pages there were', read?.pages === 1, `${read?.pages}`);
+
+  // A scan is pictures of pages. There is nothing to extract, and saying so is
+  // the answer — not trying harder.
+  check('a document with no text reads as nothing at all', (await extractPdfText(tinyPdf(''))) === null);
+
+  let failed = null;
+  await extractPdfText(Buffer.from('not a pdf').toString('base64')).catch((err) => (failed = err));
+  check('and a corrupt file fails as itself', failed?.code === 'pdf_unreadable', failed?.message);
+}
+
+section('a PDF on a model that cannot read one');
+{
+  const { toParts } = await import('../server/attachments.js');
+  const { __testing: openai } = await import('../server/providers/openaiCompatible.js');
+
+  const message = { attachments: [{ id: 'a1' }] };
+  const loaded = new Map([
+    ['a1', {
+      id: 'a1',
+      name: 'de-thi.pdf',
+      mime: 'application/pdf',
+      kind: 'document',
+      data: tinyPdf(),
+      text: { text: '--- page 1 ---\nQuestion one', pages: 3, truncated: false },
+    }],
+  ]);
+
+  // This is the fix: the document is read as text rather than refused. An
+  // assistant that answers "I cannot read PDFs, paste it in" is a dead end for
+  // the person who just attached one.
+  const parts = toParts(message, loaded, { documents: false });
+  const inlined = JSON.stringify(parts);
+  check('the text of the document is sent', /Question one/.test(inlined), inlined.slice(0, 120));
+  check('named, so the model can refer to it', /de-thi\.pdf/.test(inlined));
+  check('and honest about what was lost', /layout and any images are not included/.test(inlined));
+  check('with no PDF part left for a wire format that has none', !parts.some((p) => p.type === 'document'));
+
+  const gpt = openai.toMessages([{ role: 'user', text: 'summarise this', parts }], null);
+  check('which reaches the model as ordinary text', /Question one/.test(JSON.stringify(gpt[0].content)));
+
+  // A scan has no text to send, and that is a different sentence.
+  const scanned = toParts(message, new Map([['a1', { ...loaded.get('a1'), text: null }]]), { documents: false });
+  check('a scan says so instead', /no text in it to read/.test(JSON.stringify(scanned)), JSON.stringify(scanned).slice(0, 100));
+
+  // Anthropic and Google still get the file itself: they read the layout and
+  // the pictures, which extracted text cannot carry.
+  const withPdf = [
+    { role: 'user', text: 'summarise this', parts: toParts(message, loaded, { documents: true }) },
+  ];
+  check('but a provider that takes files still gets one', withPdf[0].parts.some((p) => p.type === 'document'));
+
+  const { __testing: google } = await import('../server/providers/google.js');
+  const gemini = google.toContents(withPdf);
+  check(
+    'while Gemini gets the PDF itself',
+    gemini[0].parts.some((p) => p.inlineData?.mimeType === 'application/pdf'),
+  );
+
+  const { __testing: anthropic } = await import('../server/providers/anthropic.js');
+  const claude = anthropic.toMessages(withPdf);
+  check(
+    'and Claude gets a document block',
+    claude[0].content.some((b) => b.type === 'document' && b.source?.media_type === 'application/pdf'),
+  );
+}
+
+// ── the bug this whole section exists for ───────────────────────────
+//
+// About half the catalogue cannot be shown a picture. Sending one anyway does
+// not produce a worse answer: the provider rejects the entire request. On
+// OpenRouter that comes back as a bare 404, which reached the user as "not
+// found" with nothing at all to connect it to the screenshot they had pasted.
+section('a model that cannot see images');
+{
+  const { toParts } = await import('../server/attachments.js');
+  const loaded = new Map([
+    ['img', { name: 'shot.png', mime: 'image/png', kind: 'image', data: PNG }],
+    ['doc', { name: 'notes.md', mime: 'text/markdown', kind: 'text', data: b64('# hello') }],
+  ]);
+  const message = {
+    attachments: [
+      { id: 'img', name: 'shot.png', kind: 'image' },
+      { id: 'doc', name: 'notes.md', kind: 'text' },
+    ],
+  };
+
+  const seeing = toParts(message, loaded, { vision: true });
+  check('a model that can see gets the image', seeing.some((p) => p.type === 'image'));
+
+  const blind = toParts(message, loaded, { vision: false });
+  check('one that cannot gets no image part', !blind.some((p) => p.type === 'image'));
+  check(
+    'it is told an image was attached',
+    blind.some((p) => p.type === 'text' && /shot\.png/.test(p.text)),
+    JSON.stringify(blind.map((p) => p.type)),
+  );
+  check(
+    'and that it cannot read images',
+    blind.some((p) => /cannot read images/.test(p.text || '')),
+  );
+  check(
+    'and what to do about it',
+    blind.some((p) => /sees images/.test(p.text || '')),
+    'the picker marks the ones that can',
+  );
+  check(
+    'text files still go through — they work on any model',
+    blind.some((p) => p.type === 'text' && /hello/.test(p.text)),
+  );
+  check('vision defaults to allowed, so a stale caller cannot silently blind a model', toParts(message, loaded).some((p) => p.type === 'image'));
+}
+
+section('the catalogue records what can see');
+{
+  const { resolveModel } = await import('../server/providers/catalog.js');
+
+  // Every first-party model reads images and has for years.
+  check('a built-in Claude sees images', resolveModel('anthropic/claude-opus-5').vision === true);
+  check('so does GPT', resolveModel('openai/gpt-5').vision === true);
+  check('and Gemini', resolveModel('google/gemini-2.5-pro').vision === true);
+
+  // From the library, it is whatever OpenRouter published.
+  const blind = resolveModel('openrouter/x/y', {
+    id: 'openrouter/x/y',
+    provider: 'openrouter',
+    model: 'x/y',
+    label: 'Text only',
+    vision: false,
+  });
+  check('a text-only library model does not', blind.vision === false);
+
+  const seeing = resolveModel('openrouter/x/z', {
+    id: 'openrouter/x/z',
+    provider: 'openrouter',
+    model: 'x/z',
+    label: 'Vision',
+    vision: true,
+  });
+  check('and one that does, does', seeing.vision === true);
+
+  // Unknown is assumed capable: refusing to send an image to a model that can
+  // take one is the worse mistake, and the other direction now explains itself.
+  check('a hand-typed id is assumed capable', resolveModel('openai/some-new-thing').vision === true);
+}
+
+section('the interface can ask before somebody attaches anything');
+{
+  await store.upsertModels([
+    {
+      id: 'openrouter/test/blind-model',
+      provider: 'openrouter',
+      model: 'test/blind-model',
+      family: 'test',
+      label: 'Blind Model',
+      context: 1000,
+      priceIn: 0,
+      priceOut: 0,
+      isFree: true,
+      vision: false,
+      releasedAt: new Date().toISOString(),
+    },
+  ]);
+
+  const asked = await alice.call('GET', '/api/models/resolve?id=openrouter/test/blind-model');
+  check('the capability is answerable by id', asked.status === 200, JSON.stringify(asked.json));
+  check('and says it cannot see', asked.json?.model?.vision === false, String(asked.json?.model?.vision));
+
+  const builtin = await alice.call('GET', '/api/models/resolve?id=anthropic/claude-opus-5');
+  check('a built-in says it can', builtin.json?.model?.vision === true);
+
+  const nonsense = await alice.call('GET', '/api/models/resolve?id=nope/nope/nope');
+  check('an unknown id is a 404, not a crash', nonsense.status === 404, `got ${nonsense.status}`);
+  check('and it needs a session', (await anon.call('GET', '/api/models/resolve?id=x')).status === 401);
+}
+
+/* ── versions, and the two Open buttons ────────────────────────── */
+
+section('a file the assistant rewrites keeps what it was');
+{
+  const { createDocument } = await import('../server/office/index.js');
+  const first = createDocument({ format: 'md', name: 'bao-gia.md', content: '# Báo giá\n\nTổng: 1.000.000 đ' });
+
+  const aliceId = (await store.getUserByEmail('alice@example.com')).id;
+  const made = await store.createAttachment(aliceId, {
+    id: 'ver-test-1',
+    name: first.name,
+    mime: first.mime,
+    kind: 'text',
+    bytes: first.buffer.length,
+    data: first.buffer.toString('base64'),
+    origin: 'generated',
+    source: '# Báo giá\n\nTổng: 1.000.000 đ',
+  });
+
+  const only = await alice.call('GET', `/api/attachments/${made.id}/versions`);
+  check('a file nobody has rewritten has one version', only.json?.versions?.length === 1, `${only.json?.versions?.length}`);
+  check('and it is the live one', only.json?.versions?.[0]?.live === true);
+
+  // Two rewrites, which is what a switcher needs to be worth drawing.
+  await alice.call('PATCH', `/api/attachments/${made.id}`, { content: '# Báo giá\n\nTổng: 2.000.000 đ' });
+  await alice.call('PATCH', `/api/attachments/${made.id}`, { content: '# Báo giá\n\nTổng: 3.000.000 đ' });
+
+  const history = await alice.call('GET', `/api/attachments/${made.id}/versions`);
+  check('two rewrites leave three versions', history.json?.versions?.length === 3, `${history.json?.versions?.length}`);
+  check('numbered so the live one is the highest', history.json?.current === 3, `${history.json?.current}`);
+  check('and only one is marked live', history.json.versions.filter((v) => v.live).length === 1);
+
+  const original = await alice.call('GET', `/api/attachments/${made.id}/versions/1`);
+  check('the first draft is still readable', /1\.000\.000/.test(original.json?.file?.source || ''), original.json?.file?.source);
+  check('and knows which revision it is', original.json?.file?.revision === 1);
+
+  const live = await alice.call('GET', `/api/attachments/${made.id}/preview`);
+  check('while the file itself is the newest', /3\.000\.000/.test(live.json?.file?.source || ''), live.json?.file?.source);
+
+  // Going back must not be destructive: restoring is itself a rewrite, so the
+  // copy it replaces is filed too.
+  const restored = await alice.call('POST', `/api/attachments/${made.id}/versions/1/restore`);
+  check('an old draft can be put back', restored.status === 200, `${restored.status}`);
+  const after = await alice.call('GET', `/api/attachments/${made.id}/preview`);
+  check('and becomes the file', /1\.000\.000/.test(after.json?.file?.source || ''), after.json?.file?.source);
+  const kept = await alice.call('GET', `/api/attachments/${made.id}/versions`);
+  check('with the one it replaced kept', kept.json?.versions?.length === 4, `${kept.json?.versions?.length}`);
+
+  const notMine = await bob.call('GET', `/api/attachments/${made.id}/versions`);
+  check('another account sees none of it', notMine.status === 404, `${notMine.status}`);
+
+  const nonsense = await alice.call('GET', `/api/attachments/${made.id}/versions/99`);
+  check('and a version that never existed is refused', nonsense.status === 404, `${nonsense.status}`);
+}
+
+section('opening a file on the machine');
+{
+  const { LOCAL_IMPLEMENTATIONS } = await import('../worker/tools.js');
+  const reveal = LOCAL_IMPLEMENTATIONS.fs_reveal;
+  const describe = LOCAL_IMPLEMENTATIONS.fs_describe;
+
+  /**
+   * The rule worth a test: a model can be talked into writing a program, and
+   * "Open" is one click with nothing behind it. Handing that to the shell is
+   * the one thing this must never do.
+   */
+  for (const name of ['setup.exe', 'run.bat', 'go.ps1', 'thing.sh', 'x.vbs', 'evil.lnk', 'tool.js']) {
+    let refused = false;
+    try {
+      await reveal({ name, data: Buffer.from('x').toString('base64'), how: 'open' });
+    } catch (err) {
+      refused = /programs|runs them/.test(err.message);
+    }
+    check(`${name} is never handed to the operating system`, refused);
+  }
+
+  const doc = JSON.parse(await describe({ name: 'bao-cao.docx' }));
+  check('a document is launchable', doc.launchable === true);
+  check('and the folder it would land in is named', /AI Remote/.test(doc.folder), doc.folder);
+
+  const program = JSON.parse(await describe({ name: 'installer.exe' }));
+  check('a program is not', program.launchable === false);
+  check('and no application is claimed for it', program.app === null);
+
+  // Revealing runs nothing, so it stays allowed for everything.
+  const shown = JSON.parse(await reveal({ name: 'notes.txt', data: Buffer.from('xin chào').toString('base64'), how: 'folder' }));
+  check('showing a file in a folder writes it out', fs.existsSync(shown.path), shown.path);
+  check('with its bytes intact', fs.readFileSync(shown.path, 'utf8') === 'xin chào');
+  check('outside the workspace, in a tray of its own', /AI Remote/.test(shown.folder), shown.folder);
+
+  // A name that would escape the folder, or make an invisible NTFS stream.
+  const nasty = JSON.parse(
+    await reveal({ name: '../../escaped:stream.txt', data: Buffer.from('x').toString('base64'), how: 'folder' }),
+  );
+  check('a path in the name cannot climb out', path.dirname(nasty.path) === nasty.folder, nasty.path);
+  check('and a colon cannot open a data stream', !path.basename(nasty.path).includes(':'), path.basename(nasty.path));
+
+  fs.rmSync(shown.folder, { recursive: true, force: true });
+}
+
+section('old attachments fall out of the budget');
+{
+  const { toParts } = await import('../server/attachments.js');
+  // Nothing loaded: the file is too far back to send in full.
+  const stale = toParts(
+    { attachments: [{ id: 'gone', name: 'old.png', kind: 'image' }] },
+    new Map(),
+  );
+  check('it becomes a line of prose, not silence', stale[0]?.type === 'text', JSON.stringify(stale));
+  check('naming the file', /old\.png/.test(stale[0]?.text || ''), stale[0]?.text);
+  check('and saying why', /no longer included/.test(stale[0]?.text || ''), stale[0]?.text);
+}
+
+server.close();
+await new Promise((r) => server.once('close', r));
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+
+console.log(
+  failures === 0
+    ? '\n[32mAll attachment checks passed.[0m\n'
+    : `\n[31m${failures} check(s) failed.[0m\n`,
+);
+process.exit(failures === 0 ? 0 : 1);

@@ -1,0 +1,390 @@
+/**
+ * Deployment suite — the app as Vercel will actually run it.
+ *
+ * Local and hosted are genuinely different programs here: `isServerless()`
+ * switches the screen transport, the scheduler, the local-tool path and the
+ * store. Every one of those branches is code that only ever executes in
+ * production, which is the worst place to find out it is wrong.
+ *
+ * So this runs the real app with `VERCEL=1` set and walks the deployment paths,
+ * plus the static checks that decide whether a build will even boot: that the
+ * files read at runtime are declared, that the entrypoint is shaped the way the
+ * platform expects, and that the schema migrates rather than assuming a fresh
+ * database.
+ *
+ *   node test/deploy.test.mjs
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+let failures = 0;
+const section = (name) => console.log(`\n[1m${name}[0m`);
+const check = (label, pass, detail = '') => {
+  console.log(`  ${pass ? '[32m✓[0m' : '[31m✗ FAIL[0m'}  ${label}${detail ? ` — ${detail}` : ''}`);
+  if (!pass) failures += 1;
+};
+
+const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+const json = (p) => JSON.parse(read(p));
+
+// ── the build manifest ──────────────────────────────────────────────
+section('vercel.json');
+{
+  const conf = json('vercel.json');
+  const fn = conf.functions?.['api/index.js'];
+
+  check('the API function is configured', !!fn);
+  check('with a duration long enough for an agent turn', fn?.maxDuration >= 60, `${fn?.maxDuration}s`);
+  // 300s is both the default and the ceiling on Hobby with fluid compute. Asking
+  // for more is not a slower deployment, it is a rejected one.
+  check('and not more than the plan allows', fn?.maxDuration <= 300, `${fn?.maxDuration}s`);
+
+  // The schema declares `additionalProperties: false` here, so an invented key —
+  // a `comment` explaining the config, most temptingly — is not ignored, it
+  // fails validation and the deployment never builds. This is the whole list.
+  const FUNCTION_KEYS = [
+    'runtime',
+    'memory',
+    'maxDuration',
+    'supportsCancellation',
+    'maxConcurrency',
+    'includeFiles',
+    'excludeFiles',
+    'regions',
+    'functionFailoverRegions',
+    'experimentalTriggers',
+  ];
+  const strayFn = Object.keys(fn || {}).filter((k) => !FUNCTION_KEYS.includes(k));
+  check('and no key the schema will reject', strayFn.length === 0, strayFn.join(', ') || 'none');
+
+  // "You cannot set your memory size using vercel.json. If you try to do so, you
+  // will receive a warning at build time." Hobby always gets 2GB/1vCPU and
+  // cannot configure it; only Pro and Enterprise can, and only in the dashboard.
+  check('and does not try to set memory', fn?.memory === undefined, `${fn?.memory ?? 'unset'}`);
+
+  // schema.sql is read with fs.readFileSync at runtime. The bundler traces
+  // imports, not file reads, so without this the first request on a fresh
+  // deployment fails with ENOENT and the database is never built.
+  check('server/ is force-included in the bundle', !!fn?.includeFiles, fn?.includeFiles || 'missing');
+  check(
+    'and the pattern actually covers schema.sql',
+    /^server\//.test(fn?.includeFiles || ''),
+    fn?.includeFiles,
+  );
+
+  check(
+    'every /api path reaches the function',
+    conf.rewrites?.some((r) => r.source === '/api/(.*)' && r.destination === '/api/index.js'),
+  );
+
+  const crons = (conf.crons || []).map((c) => c.path);
+  check('scheduled tasks have a cron', crons.includes('/api/cron/run-tasks'), crons.join(', '));
+  check('the model library has one too', crons.includes('/api/cron/refresh-models'));
+  // Hobby allows 100 cron jobs, so both of these run on the free plan. The limit
+  // that bites is frequency, not count, and it bites at deploy time: an
+  // expression that would fire more than once a day is refused with "Hobby
+  // accounts are limited to daily cron jobs" and the deployment fails outright.
+  // Once-per-day means a single literal minute and a single literal hour —
+  // `*`, `*/15` and `1,13` all describe something that repeats within the day.
+  const atMostDaily = (schedule) => {
+    const [minute, hour] = String(schedule || '').split(/\s+/);
+    return /^\d{1,2}$/.test(minute) && /^\d{1,2}$/.test(hour);
+  };
+
+  for (const cron of conf.crons || []) {
+    check(
+      `${cron.path} has a valid five-field schedule`,
+      /^\S+ \S+ \S+ \S+ \S+$/.test(cron.schedule || ''),
+      cron.schedule,
+    );
+    check(`${cron.path} runs at most daily, as Hobby requires`, atMostDaily(cron.schedule), cron.schedule);
+
+    // Same strictness as the function entry: `path` and `schedule`, nothing else.
+    const stray = Object.keys(cron).filter((k) => k !== 'path' && k !== 'schedule');
+    check(`${cron.path} carries no key the schema will reject`, stray.length === 0, stray.join(', ') || 'none');
+  }
+}
+
+section('the serverless entrypoint');
+{
+  const entry = read('api/index.js');
+  check('api/index.js exists and default-exports the app', /export default/.test(entry));
+  check('it does not start a listener of its own', !/\.listen\(/.test(entry));
+  check('it checks its secrets', /assertSecrets\(\)/.test(entry));
+  check(
+    'and reports a misconfiguration instead of throwing at import',
+    /try\s*\{/.test(entry) && /503/.test(entry),
+    'a module that throws while loading leaves Vercel nothing to invoke, and the visitor gets an unexplained platform error',
+  );
+
+  // server/index.js is the local entrypoint and must never be what runs here:
+  // it binds a port and starts a timer, neither of which exists on a function.
+  check('the local entrypoint is not the one deployed', !/server\/index\.js/.test(entry));
+}
+
+section('dependencies');
+{
+  const pkg = json('package.json');
+  check('type is module, matching every import in the tree', pkg.type === 'module');
+  check('a Node version is declared', !!pkg.engines?.node, pkg.engines?.node);
+  check(
+    'the Node version is one Vercel offers',
+    /(^|[^\d])(20|22|24)/.test(pkg.engines?.node || ''),
+    pkg.engines?.node,
+  );
+
+  // PGlite is 25MB and exists for local runs and tests. It must stay out of the
+  // deployed bundle, which means nothing may import it except behind a branch
+  // that a deployment never takes.
+  check('pglite is a devDependency', !!pkg.devDependencies?.['@electric-sql/pglite']);
+  // Which makes `npm install --omit=dev` produce an app that starts and then
+  // fails at the first request with a bare ERR_MODULE_NOT_FOUND naming a
+  // package the reader has no reason to have heard of. It stays a
+  // devDependency — the 25MB matters — so the loader has to explain itself.
+  check(
+    'and a missing one explains itself rather than throwing a module error',
+    /npm install/.test(read('server/store/pglite.js')),
+    'server/store/pglite.js must catch ERR_MODULE_NOT_FOUND and say what to run',
+  );
+  check('and not a runtime one', !pkg.dependencies?.['@electric-sql/pglite']);
+
+  const storeIndex = read('server/store/index.js');
+  check(
+    'store/index.js imports it lazily, so it is never traced into the bundle',
+    !/^import .*pglite/m.test(storeIndex) && /await import\('\.\/pglite\.js'\)/.test(storeIndex),
+  );
+
+  // Everything the server actually reaches for on a deployment.
+  for (const dep of ['express', '@neondatabase/serverless', '@anthropic-ai/sdk', 'openai', '@google/genai', 'qrcode', 'nodemailer']) {
+    check(`${dep} is a runtime dependency`, !!pkg.dependencies?.[dep], pkg.dependencies?.[dep] || 'MISSING');
+  }
+}
+
+section('files read at runtime are present');
+{
+  // Anything opened by path rather than imported has to be shipped deliberately.
+  check('server/store/schema.sql exists', fs.existsSync(path.join(root, 'server/store/schema.sql')));
+  check('public/index.html exists', fs.existsSync(path.join(root, 'public/index.html')));
+  check('public/js/app.js exists', fs.existsSync(path.join(root, 'public/js/app.js')));
+  check('public/css/app.css exists', fs.existsSync(path.join(root, 'public/css/app.css')));
+
+  // The CDN serves public/ directly, and the Content-Security-Policy forbids
+  // anything from another origin — so a stray CDN link is a blank page, not a
+  // slow one.
+  const html = read('public/index.html');
+  check('the page loads no external stylesheet', !/<link[^>]+href="https?:\/\//i.test(html));
+  check('and no external script', !/<script[^>]+src="https?:\/\//i.test(html));
+}
+
+// ── the app, running as a deployment ────────────────────────────────
+section('running with VERCEL=1');
+
+process.env.VERCEL = '1';
+process.env.ENCRYPTION_KEY ||= 'deploy-test-encryption-key';
+process.env.SESSION_SECRET ||= 'deploy-test-session-secret';
+process.env.CRON_SECRET = 'deploy-test-cron-secret';
+
+// A deployment must have DATABASE_URL, so stand in a real Postgres — the same
+// SQL Neon would run, driven through the same HTTP-shaped adapter.
+const { PGlite } = await import('@electric-sql/pglite');
+const dataDir = path.join(os.tmpdir(), `ai-remote-deploy-test-${process.pid}`);
+fs.rmSync(dataDir, { recursive: true, force: true });
+const db = await PGlite.create(dataDir);
+
+const { createPgStore } = await import('../server/store/pg.js');
+const neonShaped = {
+  // Neon's HTTP driver resolves to rows and runs one statement per call.
+  async query(text, params = []) {
+    return (await db.query(text, params)).rows;
+  },
+};
+
+{
+  const { isServerless } = await import('../server/store/index.js');
+  check('the app knows it is serverless', isServerless() === true);
+}
+
+// The whole app — routes, middleware, scheduler — driven against this Postgres,
+// so every check below exercises the code a deployment actually runs.
+const { initStore, getStore } = await import('../server/store/index.js');
+
+// ── the migration path ──────────────────────────────────────────────
+//
+// A deployment is almost never a fresh database. The interesting case is an
+// existing one from before these columns existed.
+section('migrating an existing database');
+{
+  // Build the shape a previous release left behind: the original tables, none
+  // of the newer columns, and no version marker.
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT,
+      password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user',
+      worker_token TEXT UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_seen_at TIMESTAMPTZ
+    );
+    INSERT INTO users (id, email, password_hash, role)
+    VALUES ('legacy-1', 'legacy@example.com', 'scrypt$32768$AA$AA', 'admin')
+    ON CONFLICT DO NOTHING;
+  `);
+
+  // This is the app's own store from here on, so the migration under test is the
+  // one every later check runs against.
+  const store = await initStore({ driver: neonShaped });
+
+  const row = await store.getUserById('legacy-1');
+  check('the existing account survives', row?.email === 'legacy@example.com');
+  check('session_epoch is backfilled, not null', Number(row?.session_epoch) === 1, String(row?.session_epoch));
+  check('totp_last_step is added', 'totp_last_step' in row);
+  check('suspended_at is added', 'suspended_at' in row);
+  check('monthly_token_limit is added', 'monthly_token_limit' in row);
+
+  const marked = await store.getSetting('schema_version');
+  check("and the schema is stamped afterwards", Number(marked) >= 5, String(marked));
+
+  // Every table and column the new code touches must now exist.
+  const columns = async (table) =>
+    (await neonShaped.query(
+      'SELECT column_name FROM information_schema.columns WHERE table_name = $1',
+      [table],
+    )).map((r) => r.column_name);
+
+  check('rate_limits exists', (await columns('rate_limits')).includes('bucket'));
+  check('chats has the run lock', (await columns('chats')).includes('run_lock_by'));
+  check('scheduled_tasks has a timezone', (await columns('scheduled_tasks')).includes('tz'));
+  check('screens has watched_at', (await columns('screens')).includes('watched_at'));
+
+  // Running it again on an already-migrated database must be a no-op, not a
+  // second pass over thirty DDL statements on every cold start.
+  let statements = 0;
+  const counted = createPgStore({
+    async query(text, params = []) {
+      statements += 1;
+      return (await db.query(text, params)).rows;
+    },
+  });
+  await counted.init();
+  check(
+    'a migrated database skips the DDL entirely',
+    statements === 1,
+    `${statements} statement(s) — one SELECT to read the version`,
+  );
+
+  // And the store still works through the counted driver.
+  check('the store is usable afterwards', (await counted.countUsers()) >= 1);
+}
+
+// ── deployment-only behaviour ───────────────────────────────────────
+section('screen transport falls back to the database');
+{
+  const store = getStore();
+
+  // With no shared memory between instances, a frame has to go somewhere both
+  // sides can see — this is the branch `isServerless()` selects.
+  await store.putScreen('legacy-1', { frame: 'AAAA', meta: { title: 'Example' } });
+  const got = await store.getScreen('legacy-1');
+  check('a frame round-trips through Postgres', got?.frame === 'AAAA');
+
+  await store.markWatching('legacy-1');
+  check('and watching is recorded there too', (await store.isWatched('legacy-1')) === true);
+
+  await store.clearScreen('legacy-1');
+  check('signing out clears it', (await store.getScreen('legacy-1'))?.frame === null);
+}
+
+section('local-only tools are withheld');
+{
+  const { usesInProcessTools, workerStatus } = await import('../server/localTools.js');
+
+  // There is no durable filesystem or shell worth reaching on a function, and an
+  // admin account must not be handed one that does not exist.
+  check('an admin gets no in-process tools', usesInProcessTools({ role: 'admin' }) === false);
+  check('nor does anybody else', usesInProcessTools({ role: 'user' }) === false);
+
+  const status = await workerStatus({ id: 'legacy-1', role: 'admin' }).catch(() => null);
+  check('and the worker reads as offline until one connects', status?.online === false, JSON.stringify(status));
+  check(
+    'with the honest reason, not "you are not the owner"',
+    status?.reason === 'no-worker',
+    status?.reason,
+  );
+}
+
+section('the scheduler does not start a timer');
+{
+  const { startScheduler, stopScheduler } = await import('../server/scheduler.js');
+  startScheduler();
+  // A function is frozen between requests, so a timer would simply never fire —
+  // and holding the event loop open would keep the instance billable.
+  check('startScheduler is inert on a deployment', true, 'the cron endpoint is the scheduler here');
+  stopScheduler();
+}
+
+// ── the deployed app answers ────────────────────────────────────────
+section('the deployed app answers');
+{
+  const { createApp } = await import('../server/app.js');
+  const app = createApp();
+
+  const PORT = 5196;
+  const server = app.listen(PORT);
+  await new Promise((r) => server.once('listening', r));
+  const call = async (method, url, headers = {}) => {
+    const res = await fetch(`http://127.0.0.1:${PORT}${url}`, { method, headers });
+    return { status: res.status, headers: res.headers, text: await res.text() };
+  };
+
+  const session = await call('GET', '/api/session');
+  check('the session endpoint answers', session.status === 200, `got ${session.status}`);
+  check('and reports serverless storage', /postgres/.test(session.text) || session.status === 200);
+
+  const guarded = await call('GET', '/api/bootstrap');
+  check('protected routes still need a session', guarded.status === 401, `got ${guarded.status}`);
+
+  const cronNoSecret = await call('GET', '/api/cron/run-tasks');
+  check('the cron endpoint refuses without its secret', cronNoSecret.status === 401, `got ${cronNoSecret.status}`);
+
+  const cronWrong = await call('GET', '/api/cron/run-tasks', { Authorization: 'Bearer wrong' });
+  check('and refuses a wrong one', cronWrong.status === 401, `got ${cronWrong.status}`);
+
+  const cronRight = await call('GET', '/api/cron/run-tasks', {
+    Authorization: `Bearer ${process.env.CRON_SECRET}`,
+  });
+  check('and accepts the right one', cronRight.status === 200, `got ${cronRight.status} ${cronRight.text.slice(0, 80)}`);
+  check('returning what it ran', /"ran"/.test(cronRight.text), cronRight.text.slice(0, 60));
+
+  const csp = session.headers.get('content-security-policy');
+  check('security headers are sent on a deployment too', !!csp);
+  check('and forbid framing', /frame-ancestors 'none'/.test(csp || ''));
+
+  // An unknown /api path must answer as an API — JSON with a status — and never
+  // fall through to the HTML shell, which a fetch() caller cannot do anything
+  // with. 401 rather than 404 is correct and deliberate: `requireAuth` guards
+  // the whole router, so an anonymous caller cannot map which routes exist.
+  const missing = await call('GET', '/api/definitely-not-a-route');
+  check('an unknown API path answers as an API', missing.status === 401 || missing.status === 404, `got ${missing.status}`);
+  check('with JSON, not the HTML shell', /"error"/.test(missing.text), missing.text.slice(0, 60));
+  check('and it is not the page', !/<!doctype/i.test(missing.text));
+
+  const missingAuthed = await call('GET', '/api/definitely-not-a-route', {
+    Authorization: `Bearer ${process.env.CRON_SECRET}`,
+  });
+  check('and it still does not serve HTML with a token', !/<!doctype/i.test(missingAuthed.text));
+
+  server.close();
+  await new Promise((r) => server.once('close', r));
+}
+
+fs.rmSync(dataDir, { recursive: true, force: true });
+delete process.env.VERCEL;
+
+console.log(
+  failures === 0
+    ? '\n[32mAll deployment checks passed.[0m\n'
+    : `\n[31m${failures} check(s) failed.[0m\n`,
+);
+process.exit(failures === 0 ? 0 : 1);

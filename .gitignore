@@ -1,0 +1,12 @@
+node_modules/
+data/
+.env
+# Local MCP server config — may hold tokens or a database URL.
+# .mcp.json.example is the committed, valueless version.
+.mcp.json
+.claude/settings.local.json
+.env.local
+.env*.local
+.vercel
+.DS_Store
+*.log

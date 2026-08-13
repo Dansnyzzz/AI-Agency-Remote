@@ -1,0 +1,374 @@
+import crypto from 'node:crypto';
+import { getStore } from './store/index.js';
+import { classify } from './attachments.js';
+import { extractPdfText } from './pdf.js';
+import { isLegacyOffice, officeFormat, readOffice } from './office/index.js';
+
+/**
+ * Projects: standing instructions, a shelf of sources, and answers that stay on
+ * them.
+ *
+ * Two ideas welded together, because on their own each is half of what people
+ * actually want. A project is a workspace — a name, instructions that survive
+ * between conversations, and its own chats — so nobody re-explains the job
+ * every morning. And within it the assistant answers *from the sources*: it
+ * quotes them, it names which file a claim came from, and when they do not
+ * cover the question it says so instead of reaching for what it half-remembers
+ * from training.
+ *
+ * That last part is the whole point and it is a prompt, not a cage — no
+ * arrangement of words can make a language model incapable of inventing. What
+ * this can do is remove every excuse for it: put the relevant text in front of
+ * the model, require a filename beside each claim, and make "the sources do not
+ * say" an explicitly correct answer rather than a failure to avoid. A model
+ * given all three lies far less than one given a question and a vague
+ * instruction to be accurate.
+ */
+
+/** How much source text a turn may carry. Roughly 15k tokens of the window. */
+const CONTEXT_CHARS = 60_000;
+
+/**
+ * Passage size when a shelf is too big to send whole. Big enough to hold an
+ * idea, and never so big that one passage swallows the budget it is competing
+ * for — chop finer when there is less room, or the best-matching passage is the
+ * one that does not fit and the space goes to whatever scraps happen to.
+ */
+const PASSAGE_CHARS = 1_400;
+const PASSAGE_OVERLAP = 200;
+const MIN_PASSAGE = 400;
+const passageSize = (budget) => Math.max(MIN_PASSAGE, Math.min(PASSAGE_CHARS, Math.floor(budget / 6)));
+
+/** One file's worth of text, and the ceiling on a whole shelf. */
+const MAX_FILE_CHARS = 400_000;
+const MAX_SHELF_CHARS = 4_000_000;
+
+/* ── taking a file onto the shelf ──────────────────────────────── */
+
+/**
+ * Turn an upload into a source.
+ *
+ * Only text comes in — a source is something that can be quoted, and a picture
+ * cannot be. Saying that at the moment of upload is the honest place for it:
+ * the alternative is a file that sits in the list looking like knowledge and is
+ * never once consulted.
+ */
+export async function addSource(userId, projectId, { name, mime, data }) {
+  const store = getStore();
+  const project = await store.getProject(userId, projectId);
+  if (!project) throw Object.assign(new Error('No such project.'), { status: 404 });
+
+  const filename = String(name || 'file').slice(0, 200);
+  const base64 = String(data || '');
+  if (!base64) throw new Error(`${filename} is empty.`);
+
+  const kind = classify(filename, mime);
+  if (kind === 'image') {
+    throw new Error(
+      `${filename} is an image. A source has to be something the assistant can quote — ` +
+        'send pictures in a message instead, where it can look at them.',
+    );
+  }
+  if (!kind) {
+    throw new Error(
+      isLegacyOffice(filename, mime)
+        ? `${filename} is in the old Office format, which cannot be read. Save it as .docx, .xlsx or .pptx and add that.`
+        : `${filename} is not a kind of file that can be read. PDFs, Word, Excel, PowerPoint, text and code work.`,
+    );
+  }
+
+  const bytes = Buffer.byteLength(base64, 'base64');
+  let text = '';
+  let pages = null;
+
+  if (kind === 'office') {
+    // The same reader the chat uses, so a contract on a project's shelf and the
+    // same contract sent in a message are read identically — a difference
+    // between the two would be indefensible and impossible to explain.
+    const format = officeFormat(filename, mime);
+    let read;
+    try {
+      read = readOffice(format, Buffer.from(base64, 'base64'));
+    } catch (err) {
+      throw new Error(`${filename}: ${err.message}`);
+    }
+    if (!read.text?.trim()) {
+      throw new Error(
+        `${filename} has no text in it — it may be empty, protected, or made entirely of pictures. ` +
+          'Nothing in it can be quoted, so it would be a source in name only.',
+      );
+    }
+    text = read.text;
+  } else if (kind === 'document') {
+    const read = await extractPdfText(base64).catch((err) => {
+      throw new Error(`${filename}: ${err.message}`);
+    });
+    if (!read) {
+      throw new Error(
+        `${filename} has no text in it — it is a scan or photographs of pages. ` +
+          'Nothing in it can be quoted, so it would be a source in name only.',
+      );
+    }
+    text = read.text;
+    pages = read.pages;
+  } else {
+    text = Buffer.from(base64, 'base64').toString('utf8');
+  }
+
+  text = text.replace(/\r\n/g, '\n').trim();
+  if (!text) throw new Error(`${filename} has no text in it.`);
+  if (text.length > MAX_FILE_CHARS) text = `${text.slice(0, MAX_FILE_CHARS)}\n\n[truncated]`;
+
+  const existing = await store.listProjectFiles(userId, projectId);
+  const shelf = existing.reduce((sum, f) => sum + (f.chars || 0), 0);
+  if (shelf + text.length > MAX_SHELF_CHARS) {
+    throw new Error('This project has as much source text as it can hold. Remove something first.');
+  }
+
+  return store.addProjectFile(userId, projectId, {
+    id: crypto.randomUUID(),
+    name: filename,
+    mime: String(mime || '').slice(0, 120) || 'text/plain',
+    bytes,
+    pages,
+    text,
+  });
+}
+
+/* ── finding the part that answers the question ────────────────── */
+
+/**
+ * Words worth matching on.
+ *
+ * Diacritics are kept: in Vietnamese they are the word, and folding them turns
+ * distinct terms into one. Short tokens go because they match everything.
+ */
+const terms = (text) =>
+  String(text || '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_]+/u)
+    .filter((w) => w.length > 1);
+
+/** Split one file into overlapping passages, on paragraph edges where it can. */
+function passages(file, size = PASSAGE_CHARS) {
+  const out = [];
+  const body = file.text;
+  const overlap = Math.min(PASSAGE_OVERLAP, Math.floor(size / 4));
+  let at = 0;
+
+  while (at < body.length) {
+    let end = Math.min(body.length, at + size);
+    if (end < body.length) {
+      // Prefer to break where the document breaks, so a passage is a thought
+      // rather than a fixed number of characters.
+      const paragraph = body.lastIndexOf('\n\n', end);
+      const line = body.lastIndexOf('\n', end);
+      const cut = paragraph > at + size / 2 ? paragraph : line > at + size / 2 ? line : end;
+      end = cut;
+    }
+    out.push({ file: file.name, at, end, text: body.slice(at, end).trim() });
+    if (end >= body.length) break;
+    at = Math.max(end - overlap, at + 1);
+  }
+  return out.filter((p) => p.text);
+}
+
+/**
+ * Rank passages against the question.
+ *
+ * Plain term matching with an inverse-document-frequency weight — no
+ * embeddings, so no second API to hold a key for, no vector column, and nothing
+ * to re-index when a file changes. It is worse than embeddings at "find the bit
+ * about the thing I described in other words" and it is entirely adequate at
+ * what people actually type into a project, which is the words that are in
+ * their documents.
+ *
+ * It only runs at all when the shelf does not fit; below that everything is
+ * sent and there is nothing to rank.
+ */
+function rank(all, question) {
+  const wanted = [...new Set(terms(question))];
+  if (!wanted.length) return all.map((p) => ({ ...p, score: 0 }));
+
+  const df = new Map();
+  const bags = all.map((p) => {
+    const bag = new Map();
+    for (const w of terms(p.text)) bag.set(w, (bag.get(w) || 0) + 1);
+    for (const w of new Set(bag.keys())) df.set(w, (df.get(w) || 0) + 1);
+    return bag;
+  });
+
+  return all
+    .map((p, i) => {
+      let score = 0;
+      for (const w of wanted) {
+        const tf = bags[i].get(w);
+        if (!tf) continue;
+        const idf = Math.log(1 + all.length / (df.get(w) || 1));
+        // Saturating term frequency: a passage that says a word ten times is
+        // not ten times better than one that says it twice.
+        score += idf * (tf / (tf + 1.5));
+      }
+      return { ...p, score };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Assemble what the model is allowed to answer from.
+ *
+ * Under the budget, every source goes in whole — the most accurate thing
+ * available, and the reason the budget is generous. Over it, the passages that
+ * match the question are selected and put back in document order, with `[…]`
+ * where something was left out, because a model shown a jump cut without one
+ * will happily read across it.
+ */
+export function selectSources(files, question, budget = CONTEXT_CHARS) {
+  const total = files.reduce((sum, f) => sum + f.text.length, 0);
+
+  if (total <= budget) {
+    return {
+      whole: true,
+      truncated: false,
+      sources: files.map((f) => ({ name: f.name, text: f.text })),
+    };
+  }
+
+  const size = passageSize(budget);
+  const all = files.flatMap((f) => passages(f, size));
+  const ordered = rank(all, question);
+
+  /**
+   * Only passages that actually match the question compete for the budget.
+   *
+   * The earlier version kept going once it ran out of matches, on the theory
+   * that some context beats none. It does not: filling the window with text
+   * that has nothing to do with the question buries the passage that answers it
+   * and gives the model something irrelevant to be confident about. When
+   * nothing matches at all — a question in different words to the documents —
+   * the opening of the shelf is sent instead, in document order, which is at
+   * least honest about being a starting point.
+   */
+  const matching = ordered.filter((p) => p.score > 0);
+  const pool = matching.length ? matching : ordered;
+
+  const keep = [];
+  let used = 0;
+  for (const p of pool) {
+    const room = budget - used;
+    if (room < MIN_PASSAGE / 2) break;
+    if (p.text.length > room) continue; // a later, smaller match may still fit
+    keep.push(p);
+    used += p.text.length;
+  }
+
+  const sources = [];
+  for (const file of files) {
+    const mine = keep.filter((p) => p.file === file.name).sort((a, b) => a.at - b.at);
+    if (!mine.length) continue;
+
+    // `[…]` wherever something was skipped, including at the ends. A model
+    // shown a jump cut without one will read straight across it.
+    let text = '';
+    let previousEnd = 0;
+    for (const p of mine) {
+      if (p.at > previousEnd + 4) text += text ? '\n\n[…]\n\n' : '[…]\n\n';
+      text += p.text;
+      previousEnd = p.end;
+    }
+    if (previousEnd < file.text.length - 4) text += '\n\n[…]';
+    sources.push({ name: file.name, text });
+  }
+
+  return { whole: false, truncated: true, sources };
+}
+
+/* ── what the model is told ────────────────────────────────────── */
+
+/**
+ * The project's half of the system prompt.
+ *
+ * Written as rules the model can follow one at a time rather than an appeal to
+ * be careful. "Say the sources do not cover it" is a specific, achievable
+ * action; "be accurate" is a mood.
+ */
+export function renderProject({ project, sources, whole, truncated, names }) {
+  const lines = ['', `# Project: ${project.name}`];
+
+  if (project.instructions?.trim()) {
+    lines.push('', '## How this project works', project.instructions.trim());
+  }
+
+  if (!names.length) {
+    lines.push(
+      '',
+      '## Sources',
+      'This project has no sources yet. Say so if the user asks about a document, rather than answering as though you had read one.',
+    );
+    return lines.join('\n');
+  }
+
+  lines.push(
+    '',
+    '## Sources',
+    `The user has put ${names.length} document${names.length === 1 ? '' : 's'} on this project's shelf: ${names.join(', ')}.`,
+  );
+
+  if (project.grounded) {
+    lines.push(
+      '',
+      '**Answer from these sources.** They are the ground truth for this project and they outrank anything you remember from training.',
+      '',
+      '- Every factual claim must come from the text below, and must name the file it came from — like `[report.pdf]` — so the user can check it.',
+      '- When the sources do not answer the question, say exactly that and stop. "The sources here do not cover X" is a correct and useful answer; a plausible guess dressed as an answer is not, and it is the one thing this project exists to prevent.',
+      '- Do not fill gaps from general knowledge. If you have relevant knowledge from outside the sources and it genuinely helps, you may add it *after* answering, clearly labelled as outside the sources.',
+      '- Quote rather than paraphrase where the wording carries the meaning — definitions, figures, dates, names, contract terms.',
+      '- If two sources disagree, say so and give both, with their filenames. Do not pick one silently.',
+      '- Answer what was asked. Do not pad with background the user did not ask for.',
+    );
+  } else {
+    lines.push(
+      '',
+      'Use these sources first and name the file when a claim comes from one. You may draw on general knowledge as well — say plainly which parts came from outside the sources.',
+    );
+  }
+
+  if (!whole || truncated) {
+    lines.push(
+      '',
+      `Some sources are too long to include whole, so what follows is the parts that match this question, with \`[…]\` where text was left out. If the answer looks like it lies in a gap, say so — do not read across a \`[…]\` as though it were continuous.`,
+    );
+  }
+
+  for (const source of sources) {
+    lines.push('', `### ${source.name}`, source.text);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Everything a turn in a project needs, or null for an ordinary conversation.
+ *
+ * `question` is the message being answered: it decides which passages are worth
+ * sending when the shelf does not fit whole.
+ */
+export async function projectPrompt(userId, chat, question) {
+  if (!chat?.project_id) return null;
+
+  const store = getStore();
+  const project = await store.getProject(userId, chat.project_id);
+  if (!project) return null;
+
+  const files = await store.readProjectFiles(userId, project.id);
+  const names = files.map((f) => f.name);
+  const picked = files.length
+    ? selectSources(files, question)
+    : { whole: true, truncated: false, sources: [] };
+
+  return {
+    project,
+    text: renderProject({ project, names, ...picked }),
+    fileCount: files.length,
+  };
+}

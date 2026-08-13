@@ -1,0 +1,89 @@
+/**
+ * Strip credentials out of text before it is stored.
+ *
+ * Memory is written by a model, from a conversation that may well have had an
+ * API key or a password in it. A note is durable and reaches into every future
+ * conversation, so a secret that lands there is a secret that keeps escaping.
+ *
+ * This is a filter, not a guarantee. It catches the shapes credentials usually
+ * come in — long random-looking tokens, `KEY=value` assignments, the well-known
+ * provider prefixes — and it will miss ones that look like ordinary words.
+ * Treat it as a safety net under a rule you still have to follow, which is not
+ * to paste secrets into a chat in the first place.
+ */
+
+const REDACTED = '[redacted]';
+
+/**
+ * Vendor-specific prefixes. These are worth matching exactly because they are
+ * unambiguous: nothing else looks like `sk-ant-` followed by forty characters.
+ */
+const KNOWN_KEYS = [
+  /\bsk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
+  /\bsk-or-v1-[A-Za-z0-9]{32,}/g, // OpenRouter
+  /\bsk-proj-[A-Za-z0-9_-]{20,}/g, // OpenAI project keys
+  /\bsk-[A-Za-z0-9]{32,}/g, // OpenAI classic
+  /\bAIza[A-Za-z0-9_-]{30,}/g, // Google
+  /\bgh[pousr]_[A-Za-z0-9]{30,}/g, // GitHub
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack
+  /\bntn_[A-Za-z0-9]{30,}/g, // Notion
+  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, // JWT
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+];
+
+/**
+ * `SOMETHING_SECRET = value` in any of the shapes people write it — env files,
+ * JSON, YAML, a shell export. The name is what marks it, so the value can be
+ * anything at all.
+ */
+const SECRET_ASSIGNMENT =
+  /\b([A-Za-z_][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH|APIKEY|ACCESS_KEY|PRIVATE)[A-Za-z0-9_]*)\s*[:=]\s*["']?([^\s"',;]{6,})["']?/gi;
+
+/** A password in a URL: https://user:hunter2@example.com */
+const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]*:\/\/[^\s/@:]+):([^\s/@]+)@/gi;
+
+/** `Authorization: Bearer …` in a pasted request. */
+const BEARER = /\b(authorization\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{12,}/gi;
+
+/**
+ * Remove anything that looks like a credential.
+ *
+ * @returns {{ text: string, found: string[] }} the cleaned text, and the kinds
+ *   of thing removed — so the caller can say what happened rather than silently
+ *   editing what someone asked to save.
+ */
+export function redactSecrets(input) {
+  let text = String(input ?? '');
+  const found = [];
+  const note = (what) => {
+    if (!found.includes(what)) found.push(what);
+  };
+
+  for (const pattern of KNOWN_KEYS) {
+    text = text.replace(pattern, () => {
+      note('an API key');
+      return REDACTED;
+    });
+  }
+
+  text = text.replace(SECRET_ASSIGNMENT, (whole, name) => {
+    note(`the value of ${name}`);
+    return `${name}=${REDACTED}`;
+  });
+
+  text = text.replace(URL_CREDENTIALS, (whole, prefix) => {
+    note('a password in a URL');
+    return `${prefix}:${REDACTED}@`;
+  });
+
+  text = text.replace(BEARER, (whole, prefix) => {
+    note('an authorization header');
+    return `${prefix}${REDACTED}`;
+  });
+
+  return { text, found };
+}
+
+/** True when the text still contains something that looks like a credential. */
+export const looksSecret = (input) => redactSecrets(input).found.length > 0;

@@ -1,0 +1,166 @@
+<!doctype html>
+<!--
+  The quick launcher.
+
+  One box, one keystroke, gone. It deliberately shares nothing with the main app
+  beyond the API: app.js is a whole workspace and this has to be on screen before
+  the thought that summoned it has finished forming, so it carries its own eleven
+  lines of CSS instead of the workspace's stylesheet.
+
+  What it does not do is answer. It creates the conversation, posts the message,
+  and hands the window to the real app with ?chat=&run=1 — because a reply worth
+  reading needs the streaming, the tool approvals and the plan, all of which
+  already exist over there and none of which belong in a text box.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Ask</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230B0E11'/%3E%3Cpath d='M9 21l5-11 5 11M11 18h6' stroke='%235EE6A8' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='23' cy='11' r='2.5' fill='%23FFB454'/%3E%3C/svg%3E" />
+    <style>
+      :root {
+        --bg: #0b0e11;
+        --fg: #e8edf2;
+        --dim: #7d8795;
+        --accent: #5ee6a8;
+        --line: #1e242c;
+      }
+      @media (prefers-color-scheme: light) {
+        :root { --bg: #f7f9fb; --fg: #14181d; --dim: #6b7480; --accent: #12805a; --line: #dde3ea; }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 14px 18px;
+        /* The window has no title bar in app mode, so this is the only handle. */
+        -webkit-app-region: drag;
+      }
+      form { display: flex; gap: 10px; align-items: center; -webkit-app-region: no-drag; }
+      .mark { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); flex: none; }
+      .mark[data-state="busy"] { animation: pulse 1s ease-in-out infinite; }
+      .mark[data-state="error"] { background: #ff6b6b; }
+      @keyframes pulse { 50% { opacity: 0.25; } }
+      input {
+        flex: 1;
+        background: transparent;
+        border: 0;
+        color: inherit;
+        font: inherit;
+        font-size: 19px;
+        padding: 6px 0;
+        outline: none;
+      }
+      input::placeholder { color: var(--dim); }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        font-size: 12px;
+        -webkit-app-region: no-drag;
+      }
+      kbd {
+        font: inherit;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+      a { color: inherit; }
+    </style>
+  </head>
+  <body>
+    <form id="form" autocomplete="off">
+      <span class="mark" id="mark"></span>
+      <input id="q" placeholder="Ask anything…" autofocus spellcheck="false" />
+    </form>
+    <footer>
+      <span id="hint"><kbd>Enter</kbd> to send · <kbd>Esc</kbd> to close</span>
+      <span id="who"></span>
+    </footer>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const input = $('q');
+      const mark = $('mark');
+      const hint = $('hint');
+
+      const say = (text, state = '') => {
+        hint.textContent = text;
+        mark.dataset.state = state;
+      };
+
+      async function json(method, url, body) {
+        const res = await fetch(url, {
+          method,
+          headers: body ? { 'Content-Type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+        return res.json();
+      }
+
+      // Signed out, the box would take a question and lose it. Say so first.
+      let authed = false;
+      try {
+        const session = await json('GET', '/api/session');
+        authed = !!session.authed;
+        $('who').textContent = session.user?.email || '';
+      } catch {
+        say('The app is not running — start it with npm start.', 'error');
+      }
+      if (!authed && $('who').textContent === '') {
+        say('Sign in first — press Enter to open the app.', 'error');
+      }
+
+      let sending = false;
+
+      $('form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (sending) return;
+
+        if (!authed) {
+          location.href = '/';
+          return;
+        }
+        const text = input.value.trim();
+        if (!text) return;
+
+        sending = true;
+        say('Sending…', 'busy');
+        try {
+          // Created and posted here, then run over there: the main app owns the
+          // streaming, the approval prompts and the plan, and reimplementing any
+          // of that in a launcher would mean two of everything.
+          const { chat } = await json('POST', '/api/chats', {});
+          await json('POST', `/api/chats/${chat.id}/messages`, { text });
+          location.href = `/?chat=${encodeURIComponent(chat.id)}&run=1`;
+        } catch (err) {
+          sending = false;
+          say(err.message, 'error');
+        }
+      });
+
+      // Esc closes it. A window opened by the OS cannot always close itself, so
+      // blanking the field is the fallback — the next press of the hotkey then
+      // finds it empty rather than holding a stale question.
+      addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        input.value = '';
+        window.close();
+      });
+
+      addEventListener('focus', () => input.focus());
+      input.focus();
+    </script>
+  </body>
+</html>

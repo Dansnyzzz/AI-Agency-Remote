@@ -1,0 +1,199 @@
+import { streamCompletion } from './providers/index.js';
+import { resolve as resolveModelId } from './models.js';
+import { executeTool } from './tools/execute.js';
+import { availableTools, assessRisk } from './tools/definitions.js';
+import { getPrefs } from './settings.js';
+import { record as recordUsage } from './usage.js';
+import { workerStatus } from './localTools.js';
+import { estimateCost } from './providers/catalog.js';
+
+/**
+ * Sub-agents — several independent investigations at once.
+ *
+ * Worth being precise about what this is for. It suits work that **fans out**:
+ * read six files and tell me what each does, check four sites for a price,
+ * summarise every folder under here. Each part is answered on its own and the
+ * answers come back together.
+ *
+ * It does *not* suit work where the parts depend on each other. Sub-agents
+ * cannot see each other's findings — that is what makes them parallel — so a
+ * chain of steps must stay in the main loop, in order.
+ *
+ * Two deliberate limits:
+ *
+ * **They are read-only.** A sub-agent gets the safe tools and nothing else. Two
+ * agents editing the same file at the same time is a race with no referee, and
+ * the approval prompt has nowhere to appear when five things are running at
+ * once. So they find things out; the main loop decides and acts.
+ *
+ * **They do not nest.** A sub-agent has no `run_parallel` of its own, or one
+ * careless prompt becomes an exponential fan-out of API calls on someone's key.
+ */
+
+const MAX_TASKS = 6;
+const MAX_STEPS = 8;
+
+const SYSTEM = [
+  'You are a sub-agent: one part of a larger job, working on your own.',
+  '',
+  'Answer the question you were given and nothing else. You cannot see the other sub-agents,',
+  'the conversation this came from, or the user — so do not ask questions, do not suggest',
+  'next steps, and do not address anybody. Your reply is read by the agent that sent you,',
+  'which will combine it with the others.',
+  '',
+  'Your tools are read-only by design. If the task needs something changed, say what needs',
+  'changing and why, and let the main agent do it.',
+  '',
+  'Be dense and concrete. Findings, file paths, numbers, quotes. No preamble, no summary of',
+  'what you were asked.',
+].join('\n');
+
+/**
+ * Run one sub-task to an answer.
+ *
+ * A miniature of the main loop: no approval gate (there is nothing read-only to
+ * approve), no persistence (nobody resumes a sub-agent), no streaming outward.
+ *
+ * `streamCompletion` is an async *generator*, so it has to be driven with
+ * `for await`. Awaiting it instead hands back the generator object untouched —
+ * no request is ever sent, no event ever fires, and every sub-agent politely
+ * reports "(no answer)" in zero seconds having done nothing at all. That is
+ * exactly what this used to do, which is why `sub-agents answer their task`
+ * now lives in the test suite.
+ */
+async function runOne({ userId, user, entry, prefs, tools, task, signal, stream }) {
+  const messages = [{ id: `sub-${Date.now()}`, role: 'user', text: String(task) }];
+  let answer = '';
+  const usage = { input: 0, output: 0 };
+
+  for (let step = 0; step < MAX_STEPS; step += 1) {
+    if (signal?.aborted) break;
+
+    const assistant = { id: `sub-a-${step}`, role: 'assistant', text: '', toolCalls: [] };
+    let done = null;
+    try {
+      for await (const ev of stream({
+        // The key lookup is scoped by account, so this must be the id — not the
+        // user object, which resolves to `undefined` and fails with a confusing
+        // "no API key" a long way from the cause.
+        userId,
+        entry,
+        system: SYSTEM,
+        messages,
+        tools,
+        effort: prefs.effort,
+        signal,
+      })) {
+        if (ev.type === 'text') assistant.text += ev.delta ?? '';
+        else if (ev.type === 'done') done = ev;
+      }
+    } catch (err) {
+      return { task, answer: `Failed: ${err.message}`, usage, failed: true };
+    }
+
+    assistant.toolCalls = done?.toolCalls || [];
+    if (done?.raw) assistant.raw = done.raw;
+    if (done?.usage) {
+      usage.input += done.usage.input || 0;
+      usage.output += done.usage.output || 0;
+    }
+    answer = assistant.text.trim() || answer;
+    messages.push(assistant);
+
+    if (!assistant.toolCalls.length) break;
+
+    const results = await Promise.all(
+      assistant.toolCalls.map(async (call) => {
+        // Belt and braces: the tool list is already read-only, so anything else
+        // arriving here means the model invented a name.
+        if (assessRisk(call.name, call.input) !== 'safe') {
+          return {
+            toolCallId: call.id,
+            name: call.name,
+            content: `A sub-agent may only use read-only tools; "${call.name}" is not one. Report what needs doing instead.`,
+            isError: true,
+          };
+        }
+        const out = await executeTool({ user, name: call.name, input: call.input, chatId: null, signal });
+        return { toolCallId: call.id, name: call.name, content: out.content, isError: out.isError };
+      }),
+    );
+    messages.push({ id: `sub-t-${step}`, role: 'tool', results });
+  }
+
+  return { task, answer: answer || '(no answer)', usage, failed: false };
+}
+
+/**
+ * Fan out, then gather.
+ *
+ * @param tasks   independent questions — each must stand alone
+ * @param stream  the provider call, injectable so the loop can be driven in a
+ *                test without a network or a key. It defaults to the real one;
+ *                the seam exists because the bug this function shipped with was
+ *                precisely a mis-call of it, and there was no way to catch that
+ *                without being able to substitute it.
+ */
+export async function runParallel({
+  user,
+  chatId,
+  tasks,
+  modelId,
+  signal,
+  stream = streamCompletion,
+}) {
+  const list = (Array.isArray(tasks) ? tasks : []).map((t) => String(t || '').trim()).filter(Boolean);
+
+  if (!list.length) throw new Error('Give at least one task.');
+  if (list.length > MAX_TASKS) {
+    throw new Error(`That is ${list.length} tasks; ${MAX_TASKS} at once is the limit. Do the most important ones first.`);
+  }
+
+  const prefs = await getPrefs(user.id);
+  const entry = await resolveModelId(modelId || prefs.defaultModel);
+  const worker = await workerStatus(user, prefs);
+
+  // Read-only, and desktop control withheld entirely: a sub-agent has no screen
+  // to share and no way to ask before it moves somebody's mouse.
+  const tools = availableTools({
+    workerOnline: worker.online,
+    desktopOnline: false,
+    policy: 'readonly',
+    // Six sub-agents each re-send the catalogue, so a window too small for it is
+    // six times the problem it is on the main loop.
+    context: entry.context,
+  });
+
+  const started = Date.now();
+  const results = await Promise.all(
+    list.map((task) => runOne({ userId: user.id, user, entry, prefs, tools, task, signal, stream })),
+  );
+
+  const usage = results.reduce(
+    (total, r) => ({ input: total.input + r.usage.input, output: total.output + r.usage.output }),
+    { input: 0, output: 0 },
+  );
+  if (usage.input || usage.output) {
+    // Six sub-agents on a flagship model is real money. Booking it at zero made
+    // fan-out look free on the usage page, which is the one place it should not.
+    await recordUsage(user.id, {
+      chatId,
+      model: entry.id,
+      usage,
+      costUsd: estimateCost(entry, usage) || 0,
+    });
+  }
+
+  const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+  const failed = results.filter((r) => r.failed).length;
+  const body = results.map((r, i) => `## ${i + 1}. ${r.task}\n\n${r.answer}`).join('\n\n');
+
+  // Say when some of them fell over. Folding a failure into the same sentence as
+  // a success invites the main agent to report findings that were never made.
+  return (
+    `${results.length} sub-agents finished in ${elapsed}s ` +
+    `(${usage.input + usage.output} tokens)` +
+    `${failed ? `, ${failed} of them failed — treat those sections as missing, not empty` : ''}.` +
+    `\n\n${body}`
+  );
+}

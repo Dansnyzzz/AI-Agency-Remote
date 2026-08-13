@@ -1,0 +1,340 @@
+import { api } from './api.js';
+import { escapeHtml } from './markdown.js';
+import { toast, revealInStrip } from './render.js';
+import { parseQuery, familyLabel } from './search.js';
+
+/**
+ * The model browser.
+ *
+ * Search is parsed rather than passed straight through, so a query like
+ * "free claude >200k <$1" filters on tier, family, context and price at once
+ * and only the leftover words go to the database as text. That is the whole
+ * "smart search" trick — no index, no ranking model, just reading intent out
+ * of the words people already type.
+ */
+
+const fmtContext = (n) => {
+  if (!n) return null;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M context`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)}K context`;
+  return `${n} context`;
+};
+
+const fmtPrice = (price) => {
+  if (!price) return null;
+  const round = (n) => (n >= 1 ? n.toFixed(2) : n.toFixed(3).replace(/0+$/, ''));
+  return `$${round(price.in)} / $${round(price.out)} per 1M`;
+};
+
+/** Released within the last 45 days gets a "new" tag. */
+const isRecent = (iso) => !!iso && Date.now() - new Date(iso).getTime() < 45 * 86_400_000;
+
+const relative = (iso) => {
+  if (!iso) return '';
+  const days = Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days}d ago`;
+  if (days < 365) return `${Math.round(days / 30)}mo ago`;
+  return `${Math.round(days / 365)}y ago`;
+};
+
+export function createModelBrowser({ onPick }) {
+  const dialog = document.getElementById('models');
+  const searchInput = document.getElementById('model-search');
+  const clearButton = document.getElementById('model-search-clear');
+  const results = document.getElementById('model-results');
+  const familyBar = document.getElementById('family-filter');
+  const vendorRow = document.getElementById('vendor-row');
+  const sortSelect = document.getElementById('model-sort');
+  const statusLabel = document.getElementById('library-status');
+
+  const state = {
+    // Which API the model runs on, and therefore which of your keys pays for
+    // it — the distinction people actually care about when picking.
+    provider: 'all',
+    tier: 'all',
+    family: 'all',
+    sort: 'new',
+    query: '',
+    current: null,
+    builtin: [],
+  };
+  let debounce = null;
+
+  /** Everything under `openrouter` is one library; the rest are first-party. */
+  const isLibrary = (provider) => provider === 'all' || provider === 'openrouter';
+
+  async function load() {
+    const parsed = parseQuery(state.query);
+
+    // Words in the box beat the buttons, so typing "free" just works.
+    const tier = parsed.tier || state.tier;
+    const family = parsed.family || state.family;
+    const { provider } = state;
+
+    results.innerHTML = '<p class="hint">Loading…</p>';
+
+    let data;
+    try {
+      data = await api.models({ q: parsed.text, tier, family, sort: state.sort });
+    } catch (err) {
+      results.innerHTML = `<p class="hint">Could not load models: ${escapeHtml(err.message)}</p>`;
+      return;
+    }
+
+    state.builtin = data.builtin;
+    renderFamilies(data.families, family);
+    renderStatus(data.status, provider);
+
+    // Vendor chips describe families inside the OpenRouter catalogue, so they
+    // mean nothing while a first-party provider is selected.
+    vendorRow.hidden = !isLibrary(provider);
+
+    // Context and price are client-side because they come from the parsed query
+    // rather than the filter controls.
+    let models = isLibrary(provider) ? data.models : [];
+    if (parsed.minContext) models = models.filter((m) => (m.context || 0) >= parsed.minContext);
+    if (parsed.maxPrice != null) {
+      models = models.filter((m) => m.isFree || (m.price && m.price.in <= parsed.maxPrice));
+    }
+
+    // Selecting OpenRouter means the library alone; the built-ins run on your
+    // own Anthropic, OpenAI or Google key and are a different thing entirely.
+    const builtin =
+      provider === 'openrouter'
+        ? []
+        : matchingBuiltins(data.builtin, { ...parsed, tier, family, provider });
+
+    renderResults(builtin, models, tier, provider);
+  }
+
+  /** First-party models are not in the shared library, so filter them here. */
+  function matchingBuiltins(builtin, { text, tier, family, provider, minContext, maxPrice }) {
+    return builtin.filter((m) => {
+      if (tier === 'free') return false; // none of the first-party models are free
+      if (provider && provider !== 'all' && m.provider !== provider) return false;
+      if (family && family !== 'all' && m.provider !== family) return false;
+      if (minContext && (m.context || 0) < minContext) return false;
+      if (maxPrice != null && !(m.price && m.price.in <= maxPrice)) return false;
+      if (text) {
+        const haystack = `${m.id} ${m.label}`.toLowerCase();
+        if (!text.toLowerCase().split(/\s+/).every((w) => haystack.includes(w))) return false;
+      }
+      return true;
+    });
+  }
+
+  function renderFamilies(families, active) {
+    const chips = [{ family: 'all', count: null }, ...families];
+    familyBar.innerHTML = chips
+      .map((f) => {
+        const label =
+          f.family === 'all'
+            ? 'All vendors'
+            : `${familyLabel(f.family)}${f.count ? ` <span class="muted">${f.count}</span>` : ''}`;
+        return `<button class="chip-btn ${f.family === active ? 'is-active' : ''}"
+                        data-family="${escapeHtml(f.family)}" type="button">${label}</button>`;
+      })
+      .join('');
+
+    // Only hint at scrolling when there is something past the edge.
+    familyBar.classList.toggle('is-scrollable', familyBar.scrollWidth > familyBar.clientWidth + 2);
+
+    // Whichever vendor is selected should be visible, including when the list
+    // is rebuilt after a search and the active chip lands off the right edge.
+    revealInStrip(familyBar.querySelector('.chip-btn.is-active'));
+
+    for (const btn of familyBar.querySelectorAll('[data-family]')) {
+      btn.addEventListener('click', () => {
+        revealInStrip(btn);
+        state.family = btn.dataset.family;
+        // Clear a vendor word from the box so the chip is not fighting it.
+        const parsed = parseQuery(state.query);
+        if (parsed.family) {
+          state.query = parsed.text;
+          searchInput.value = state.query;
+        }
+        load();
+      });
+    }
+  }
+
+  const PROVIDER_LABEL = {
+    anthropic: 'Anthropic',
+    openai: 'OpenAI',
+    google: 'Google',
+    openrouter: 'OpenRouter',
+  };
+
+  function renderStatus(status, provider) {
+    // The counts describe the OpenRouter library, so saying them while a
+    // first-party provider is selected would be describing the wrong thing.
+    if (provider && provider !== 'all' && provider !== 'openrouter') {
+      statusLabel.textContent = `${PROVIDER_LABEL[provider]} models — billed to your own ${PROVIDER_LABEL[provider]} key.`;
+      return;
+    }
+    statusLabel.textContent = status.total
+      ? `${status.total.toLocaleString()} models · ${status.free.toLocaleString()} free · updated ${relative(status.refreshedAt)}`
+      : 'Library is empty — press Refresh to pull it from OpenRouter.';
+  }
+
+  function card(model, isBuiltin) {
+    const tags = [];
+    if (model.isFree) tags.push('<span class="tag tag--free">free</span>');
+    if (isRecent(model.releasedAt)) tags.push('<span class="tag tag--new">new</span>');
+    // The one capability that fails loudly rather than quietly: send a picture
+    // to a model without it and the provider rejects the whole request.
+    if (model.vision !== false) tags.push('<span class="tag tag--vision">sees images</span>');
+    if (isBuiltin) tags.push('<span class="tag">built-in</span>');
+
+    const meta = [
+      fmtContext(model.context),
+      model.isFree ? 'no cost' : fmtPrice(model.price),
+      model.releasedAt ? `released ${relative(model.releasedAt)}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    return `
+      <button class="model-card ${model.id === state.current ? 'is-current' : ''}"
+              data-model="${escapeHtml(model.id)}" type="button">
+        <span class="model-card__main">
+          <span class="model-card__name">${escapeHtml(model.label)} ${tags.join(' ')}</span>
+          <span class="model-card__id">${escapeHtml(model.id)}</span>
+          ${meta ? `<span class="model-card__meta">${escapeHtml(meta)}</span>` : ''}
+        </span>
+      </button>`;
+  }
+
+  function renderResults(builtin, models, tier, provider) {
+    if (!builtin.length && !models.length) {
+      // Say *why* it is empty. "Anthropic + Free" matches nothing for a real
+      // reason, and a generic "nothing matched" would leave people hunting.
+      const why =
+        tier === 'free' && provider && provider !== 'all' && provider !== 'openrouter'
+          ? `${PROVIDER_LABEL[provider]} has no free models — they bill to your own key. Try the Free tier under OpenRouter.`
+          : 'Nothing matched. Try fewer words, or add the model by id in Settings → Models.';
+      results.innerHTML = `<p class="hint">${escapeHtml(why)}</p>`;
+      return;
+    }
+
+    const sections = [];
+    if (builtin.length) {
+      const heading =
+        provider && provider !== 'all'
+          ? `${PROVIDER_LABEL[provider]} — on your own key`
+          : 'Built in — your own provider keys';
+      sections.push(
+        `<div class="model-group__label">${escapeHtml(heading)}</div>` +
+          builtin.map((m) => card(m, true)).join(''),
+      );
+    }
+
+    // Free and paid are split apart rather than interleaved: people are almost
+    // always looking for one or the other, not a mix.
+    if (tier === 'all') {
+      const free = models.filter((m) => m.isFree);
+      const paid = models.filter((m) => !m.isFree);
+      if (free.length) {
+        sections.push(
+          `<div class="model-group__label">Free · ${free.length}</div>` + free.map((m) => card(m)).join(''),
+        );
+      }
+      if (paid.length) {
+        sections.push(
+          `<div class="model-group__label">Paid · ${paid.length}</div>` + paid.map((m) => card(m)).join(''),
+        );
+      }
+    } else if (models.length) {
+      sections.push(
+        `<div class="model-group__label">${tier === 'free' ? 'Free' : 'Paid'} · ${models.length}</div>` +
+          models.map((m) => card(m)).join(''),
+      );
+    }
+
+    results.innerHTML = sections.join('');
+
+    for (const btn of results.querySelectorAll('[data-model]')) {
+      btn.addEventListener('click', () => {
+        dialog.close();
+        onPick(btn.dataset.model);
+      });
+    }
+  }
+
+  // ── wiring ───────────────────────────────────────────────────────
+  searchInput.addEventListener('input', () => {
+    state.query = searchInput.value;
+    clearButton.hidden = !state.query;
+    clearTimeout(debounce);
+    debounce = setTimeout(load, 180);
+  });
+
+  clearButton.addEventListener('click', () => {
+    searchInput.value = '';
+    state.query = '';
+    clearButton.hidden = true;
+    searchInput.focus();
+    load();
+  });
+
+  for (const btn of document.querySelectorAll('#tier-filter [data-tier]')) {
+    btn.addEventListener('click', () => {
+      revealInStrip(btn);
+      state.tier = btn.dataset.tier;
+      for (const other of document.querySelectorAll('#tier-filter .seg__btn')) {
+        other.classList.toggle('is-active', other === btn);
+      }
+      load();
+    });
+  }
+
+  for (const btn of document.querySelectorAll('#provider-filter [data-provider]')) {
+    btn.addEventListener('click', () => {
+      // This row scrolls sideways on a phone, so the provider you just picked
+      // must not end up off the edge of the strip that shows it is picked.
+      revealInStrip(btn);
+      state.provider = btn.dataset.provider;
+      for (const other of document.querySelectorAll('#provider-filter .seg__btn')) {
+        other.classList.toggle('is-active', other === btn);
+      }
+      // A vendor chip is meaningless outside the library, and leaving a stale
+      // one selected would silently filter the next OpenRouter view.
+      if (!isLibrary(state.provider)) state.family = 'all';
+      load();
+    });
+  }
+
+  sortSelect.addEventListener('change', () => {
+    state.sort = sortSelect.value;
+    load();
+  });
+
+  document.getElementById('refresh-library').addEventListener('click', async (event) => {
+    const btn = event.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Refreshing…';
+    try {
+      const status = await api.refreshModels();
+      toast(`Library updated — ${status.total.toLocaleString()} models.`);
+      await load();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Refresh now';
+    }
+  });
+
+  return {
+    open(currentModelId) {
+      state.current = currentModelId;
+      dialog.showModal();
+      load();
+      // Opening the on-screen keyboard the instant a sheet appears is jarring
+      // on a phone, so only autofocus where there is a real keyboard.
+      if (!matchMedia('(hover: none)').matches) searchInput.focus();
+    },
+  };
+}

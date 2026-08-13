@@ -1,0 +1,1832 @@
+/**
+ * Tool catalogue shared by the server (which advertises the schemas to the
+ * model) and the worker (which executes the `local` ones).
+ *
+ * scope    'cloud' runs wherever the API runs; 'local' runs on the user's PC
+ *          via the worker and is hidden from the model when no worker is online.
+ * readOnly tools are exempt from the approval prompt and stay available under
+ *          the "read-only" tool policy.
+ * needs    a connector that has to be linked before the tool can do anything.
+ *          Withheld otherwise: offering `slack_post` to an account with no Slack
+ *          is a tool that can only fail, and it costs schema on every request.
+ * needsProvider
+ *          an API key the tool cannot work without — `generate_image` needs
+ *          Google's, and an OpenRouter key cannot stand in for it. Withheld for
+ *          the same reason as `needs`: a model that can see the tool will promise
+ *          a picture it has no way to make.
+ * secondary
+ *          useful but not part of the core loop. Dropped first when the model's
+ *          context window is too small to hold the whole catalogue — see
+ *          `availableTools`.
+ */
+export const TOOLS = [
+  // ── Local: filesystem ────────────────────────────────────────────────
+  {
+    name: 'list_dir',
+    scope: 'local',
+    readOnly: true,
+    description:
+      'List files and folders at a path inside the workspace. Use this first to orient yourself before reading files.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative directory, e.g. "." or "src".' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'read_file',
+    scope: 'local',
+    readOnly: true,
+    description: 'Read a UTF-8 text file from the workspace. Returns numbered lines.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative file path.' },
+        offset: { type: 'integer', description: 'First line to return (1-based). Optional.' },
+        limit: { type: 'integer', description: 'How many lines to return. Defaults to 400.' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'write_file',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Create a file or replace its entire contents. Parent folders are created automatically. Prefer edit_file for changing part of an existing file.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative file path.' },
+        content: { type: 'string', description: 'The complete new file contents.' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'edit_file',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Replace an exact string in a file. `old_string` must appear exactly once unless replace_all is true. Read the file first so the match is exact.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative file path.' },
+        old_string: { type: 'string', description: 'Text to find, including surrounding whitespace.' },
+        new_string: { type: 'string', description: 'Replacement text.' },
+        replace_all: { type: 'boolean', description: 'Replace every occurrence instead of requiring a unique match.' },
+      },
+      required: ['path', 'old_string', 'new_string'],
+    },
+  },
+  {
+    name: 'multi_edit',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Make several exact-string replacements in ONE file, in one call. ' +
+      'Use this instead of calling edit_file repeatedly on the same file: it is one round trip rather than five, ' +
+      'and it is all-or-nothing — if any edit does not match, the file is left exactly as it was. ' +
+      'Edits apply in order, so a later one sees the result of an earlier one. Read the file first.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative file path.' },
+        edits: {
+          type: 'array',
+          description: 'The replacements, in the order they should be applied.',
+          items: {
+            type: 'object',
+            properties: {
+              old_string: { type: 'string', description: 'Text to find, including surrounding whitespace.' },
+              new_string: { type: 'string', description: 'Replacement text.' },
+              replace_all: { type: 'boolean', description: 'Replace every occurrence instead of requiring a unique match.' },
+            },
+            required: ['old_string', 'new_string'],
+          },
+        },
+      },
+      required: ['path', 'edits'],
+    },
+  },
+  {
+    name: 'delete_file',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Delete a file, or a folder and everything under it. Checked against the workspace like every other file tool. ' +
+      'Prefer this over `run_command` with rm or del: it is the same act on every platform, it says what it removed, and it always stops for a yes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative path to the file or folder.' },
+        recursive: {
+          type: 'boolean',
+          description: 'Required to delete a folder that is not empty. Deleting a tree is never assumed.',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  /**
+   * The file browser's own tools.
+   *
+   * `hidden` keeps them out of what the model is offered: it already has
+   * `list_dir` and `read_file`, which are written to be read by a model, while
+   * these return JSON for the interface to draw. Two tools that do the same job
+   * in the same list is a choice the model has to make for no reason.
+   */
+  {
+    name: 'move_file',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Rename a file or folder, or move it somewhere else — the same operation either way. ' +
+      'Refuses to overwrite unless told to, and works across drives.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'Workspace-relative path of the file or folder.' },
+        to: { type: 'string', description: 'Where it should end up, including the new name.' },
+        overwrite: { type: 'boolean', description: 'Replace whatever is already at the destination.' },
+      },
+      required: ['from', 'to'],
+    },
+  },
+  {
+    name: 'fs_search',
+    scope: 'local',
+    hidden: true,
+    readOnly: true,
+    description: 'A plain-text search across the workspace, grouped by file, for the browser.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        path: { type: 'string' },
+        glob: { type: 'string' },
+        ignore_case: { type: 'boolean' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'fs_browse',
+    scope: 'local',
+    hidden: true,
+    readOnly: true,
+    description: 'A folder as structured data, for the file browser.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string' } },
+    },
+  },
+  {
+    name: 'fs_read_text',
+    scope: 'local',
+    hidden: true,
+    readOnly: true,
+    description: 'One text file, for the editor.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string' } },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'fs_reveal',
+    scope: 'local',
+    hidden: true,
+    readOnly: false,
+    description:
+      "Put a file from a conversation on the user's machine and hand it to the desktop, for the Open buttons.",
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        data: { type: 'string', description: 'The bytes, base64.' },
+        how: { type: 'string', enum: ['open', 'folder'] },
+      },
+      required: ['name', 'data'],
+    },
+  },
+  {
+    name: 'fs_describe',
+    scope: 'local',
+    hidden: true,
+    readOnly: true,
+    description: 'Which application would open this file, so the button can say so before it is pressed.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'glob',
+    scope: 'local',
+    readOnly: true,
+    description: 'Find files by glob pattern, e.g. "**/*.ts". Returns paths sorted by modification time.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'Glob pattern relative to the workspace.' },
+        path: { type: 'string', description: 'Directory to search in. Defaults to the workspace root.' },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'grep',
+    scope: 'local',
+    readOnly: true,
+    description: 'Search file contents with a regular expression. Returns matching lines with their file and line number.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'JavaScript regular expression.' },
+        path: { type: 'string', description: 'Directory to search. Defaults to the workspace root.' },
+        glob: { type: 'string', description: 'Only search files matching this glob, e.g. "*.js".' },
+        ignore_case: { type: 'boolean' },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'open_url',
+    scope: 'local',
+    readOnly: false,
+    description:
+      "Hand something to the user's OWN browser or file manager — their real Chrome, with their logins and their tabs. " +
+      'Use it when they want the page for themselves: a video to watch properly, a document to read, a folder to browse. ' +
+      'It is a one-way door: you cannot see the page, act on it, or close it afterwards. ' +
+      'If you might need to read or click anything, or to close it later, use `browser_open` instead — that is the sandbox, and it is yours to drive.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          description:
+            'An http(s) URL, or a path to a file or folder. For a specific YouTube video use its full watch URL.',
+        },
+      },
+      required: ['target'],
+    },
+  },
+  {
+    name: 'set_workspace',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Move the workspace to a different folder on the same computer, so relative paths resolve there from now on. ' +
+      'Use it when the user says they want to work on something outside the current workspace — it is better than reaching for absolute paths every call. ' +
+      'The folder must already exist. The choice is remembered, so the computer comes back to it after a restart.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Absolute path to an existing folder, e.g. "D:\\\\projects\\\\shop" or "/home/me/code".',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'run_command',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Run a shell command in the workspace on the user\'s computer and return its combined output. Use for builds, tests, git, and package managers. Never run interactive commands — they will hang until the timeout.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'The command line to execute.' },
+        cwd: { type: 'string', description: 'Workspace-relative working directory. Defaults to the workspace root.' },
+        timeout_ms: { type: 'integer', description: 'Kill the command after this long. Default 120000, max 600000.' },
+      },
+      required: ['command'],
+    },
+  },
+
+  /**
+   * Long-running commands.
+   *
+   * `run_command` waits for the process to exit and kills it at the timeout, so
+   * `npm run dev` was a two-minute wait ending in a dead server — which meant a
+   * web app could be written and never started, and never checked.
+   */
+  {
+    name: 'run_background',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Start a long-running command and leave it running: a dev server, a watcher, a tunnel. ' +
+      'Use this instead of `run_command` for anything that is not meant to finish — `run_command` kills it at the timeout. ' +
+      'It waits a moment and shows you the first output, so a command that fails immediately says why now rather than two steps later. ' +
+      'Read it later with `run_background_logs`; stop it with `run_background_stop`. It does not survive the worker restarting.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'The command line, e.g. "npm run dev".' },
+        cwd: { type: 'string', description: 'Workspace-relative working directory. Defaults to the workspace root.' },
+        name: { type: 'string', description: 'A short name to refer to it by, e.g. "dev". One is generated otherwise.' },
+        settle_ms: {
+          type: 'integer',
+          description: 'How long to wait before reporting the first output. Default 1500, max 15000. Raise it for something slow to boot.',
+        },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'run_background_logs',
+    scope: 'local',
+    readOnly: true,
+    description:
+      'What a background command has printed, and whether it is still running. Omit the id to list them all. Check here before assuming a server is up — "started" and "serving" are different claims.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The id or name from run_background. Omit to list every one.' },
+        lines: { type: 'integer', description: 'How many of the most recent lines to show. Default 120.' },
+      },
+    },
+  },
+  {
+    name: 'run_background_stop',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Stop a background command. It is asked to close first and killed if it refuses. Omit the id to stop all of them — tidy up before you finish, or the user is left with a port in use and nothing visible holding it.',
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'The id from run_background. Omit to stop every one.' } },
+    },
+  },
+  {
+    name: 'download_file',
+    scope: 'local',
+    readOnly: false,
+    description:
+      "Fetch a URL and save the bytes to a file on the user's computer. " +
+      'This is the tool for anything that is not text: an image, a spreadsheet, an archive, a font. ' +
+      '`web_fetch` reads a page and gives you words, which is useless for a file. ' +
+      'Private and local network addresses are refused, the same as for `web_fetch`.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Absolute http(s) URL.' },
+        path: { type: 'string', description: "Workspace-relative destination. Defaults to the URL's own filename." },
+        overwrite: { type: 'boolean', description: 'Replace the file if it is already there.' },
+        max_bytes: { type: 'integer', description: 'Refuse anything larger. Default and maximum 200MB.' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'edit_image',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Resize, crop, rotate, flip or re-encode an image already on the disk. ' +
+      'This is the companion to `generate_image`, which makes a picture and cannot change one. ' +
+      'Reach for it before putting a photo in a document — a 4MB screenshot becomes a 200KB JPEG with no visible loss. ' +
+      'Give only one of width or height to keep the proportions; giving both will stretch it. ' +
+      'The original is never overwritten unless you name it as the output.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative path to the image.' },
+        output: { type: 'string', description: 'Where to write it. Defaults to "<name>-edited.<ext>" beside the original.' },
+        width: { type: 'integer', description: 'Target width in pixels. Omit height to keep the aspect ratio.' },
+        height: { type: 'integer', description: 'Target height in pixels. Omit width to keep the aspect ratio.' },
+        crop: {
+          type: 'object',
+          description: 'Keep only this rectangle of the original, in pixels. Applied before resizing.',
+          properties: {
+            x: { type: 'integer' },
+            y: { type: 'integer' },
+            width: { type: 'integer' },
+            height: { type: 'integer' },
+          },
+        },
+        rotate: { type: 'integer', description: 'Degrees clockwise, rounded to 90: 90, 180 or 270.' },
+        flip: { type: 'string', enum: ['horizontal', 'vertical'], description: 'Mirror it.' },
+        format: { type: 'string', enum: ['png', 'jpeg', 'webp'], description: 'Re-encode as this. Defaults to the original format.' },
+        quality: { type: 'number', description: 'For jpeg and webp, 0.1 to 1. Default 0.9. Lower means a smaller file.' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'export_pdf',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Print a real PDF, using the browser on the user\'s machine. Give it `html` to print, or a `url` to print from. ' +
+      'Because it goes through a real browser it uses the system fonts, so accents and non-Latin text come out correct — ' +
+      'which is why this is better than composing a PDF by hand. ' +
+      'For a document the user asked for, this and `create_file` answer different questions: `create_file` puts a file in the conversation to download, this writes a PDF onto their disk.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative destination. ".pdf" is added if missing.' },
+        html: { type: 'string', description: 'A self-contained HTML page to print. Inline any styling.' },
+        url: { type: 'string', description: 'Print this page instead. Give one of html or url, not both.' },
+        landscape: { type: 'boolean', description: 'Landscape rather than portrait. Right for wide tables.' },
+      },
+      required: ['path'],
+    },
+  },
+
+  // ── Local: the machine itself, on all three platforms ────────────────
+  {
+    name: 'clipboard_read',
+    scope: 'local',
+    readOnly: true,
+    description:
+      'Read what is currently on the user\'s clipboard. Use it when they say "this", "what I just copied", or paste-and-fix — it saves them retyping. Text only: an image or a copied file comes back empty.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'clipboard_write',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Put text on the user\'s clipboard so they can paste it straight into whatever they were doing. Much better than printing a long block and making them select it. Replaces whatever was there — say what you copied.',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'The text to copy.' } },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'notify',
+    scope: 'local',
+    readOnly: true,
+    description:
+      'Show a desktop notification on the user\'s screen. Use it when something long has finished and they have looked away — a build, a scheduled task, a download. It is a nudge, not a message: keep it to one line and put the detail in your reply.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short heading, a few words.' },
+        body: { type: 'string', description: 'One line of detail. Optional.' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'system_stats',
+    scope: 'local',
+    readOnly: true,
+    description:
+      'How the computer is doing right now: CPU load, memory, disk space, uptime and the heaviest processes. Reach for it when the user says the machine is slow, or before starting something that needs room.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'process_list',
+    scope: 'local',
+    readOnly: true,
+    description:
+      'List running processes with their memory and CPU. Filter by name to find something specific. Call this before process_kill so you stop the right thing — the process name is often not the window title.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filter: { type: 'string', description: 'Only processes whose name contains this. Optional.' },
+        sort: { type: 'string', description: '"memory" (default) or "cpu".' },
+        limit: { type: 'integer', description: 'How many to return. Default 20, max 100.' },
+      },
+    },
+  },
+  {
+    name: 'process_kill',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Stop a running program by pid or by name. Anything unsaved in it is lost, so confirm with the user unless they asked for exactly this. Without force it asks the program to close politely, which it may ignore.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pid: { type: 'integer', description: 'Process id from process_list. Preferred — a name can match several.' },
+        name: { type: 'string', description: 'Exact process name, if you have no pid. Stops every match.' },
+        force: { type: 'boolean', description: 'Kill it outright instead of asking it to close. Loses unsaved work.' },
+      },
+    },
+  },
+  {
+    name: 'launch_app',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Start an application by name on the user\'s computer — works on Windows, macOS and Linux. Use `open_url` instead when you have a file or a page and want the OS to pick the app for it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'Application name, e.g. "notepad", "Calculator", "code".' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Arguments to pass it. Optional.' },
+      },
+      required: ['app'],
+    },
+  },
+
+  {
+    name: 'index_folder',
+    scope: 'local',
+    readOnly: false,
+    description:
+      "Read a folder of the user's documents so it can be searched by meaning afterwards with `search_docs`. " +
+      'Handles text, Markdown, code and PDFs; skips files that have not changed since the last run, so re-indexing is cheap. ' +
+      'Nothing is sent anywhere except the passages themselves, and only from the folder named here — say which folder you are about to read before you do it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Folder to index, workspace-relative or absolute.' },
+        reindex: { type: 'boolean', description: 'Read every file again even if it has not changed. Costs tokens.' },
+      },
+      required: ['path'],
+    },
+  },
+
+  // ── Local: the browser sandbox the user watches live ─────────────────
+  {
+    name: 'browser_open',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Open a page in the browser sandbox — a separate browser window that belongs to you, not the one the user is browsing in. ' +
+      'You can read it, click it, type into it and close it, and the user watches it live in the panel. ' +
+      'Prefer this over `open_url` for anything you may need to interact with or shut down afterwards.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Full http(s) URL.' },
+        // Defaulting this to "replace what is open" put the burden of noticing
+        // that something mattered on the model, every single time — and losing
+        // a half-filled form to a lookup is not a small mistake. A browser does
+        // not throw your page away when you open a link, and neither does this.
+        replace_tab: {
+          type: 'boolean',
+          description:
+            'Reuse the current tab instead of opening a new one. Default is a new tab, so nothing already open is lost. Say true only when the current page is finished with — a search you are done reading, a step you have moved past.',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'browser_tabs',
+    scope: 'local',
+    readOnly: true,
+    description: 'List the sandbox tabs, with the one you are acting on marked. Check here before assuming you know what is open.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_switch',
+    scope: 'local',
+    readOnly: false,
+    description: 'Act on a different tab, by its number from browser_tabs. The panel follows you.',
+    parameters: {
+      type: 'object',
+      properties: { tab: { type: 'integer', description: 'Tab number from the listing.' } },
+      required: ['tab'],
+    },
+  },
+  {
+    name: 'browser_close_tab',
+    scope: 'local',
+    readOnly: false,
+    description: 'Close one tab and leave the rest alone. Omit the number to close the one you are on.',
+    parameters: {
+      type: 'object',
+      properties: { tab: { type: 'integer', description: 'Tab number. Defaults to the current one.' } },
+    },
+  },
+  {
+    name: 'browser_look',
+    scope: 'local',
+    readOnly: true,
+    description:
+      'Re-read the current page: its text and a fresh numbered list of what you can act on. Call this whenever the page may have changed under you, before clicking anything.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_click',
+    scope: 'local',
+    readOnly: false,
+    description: 'Click one of the numbered elements from the latest page listing.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'integer', description: 'The number in square brackets from the listing.' },
+        description: { type: 'string', description: 'What you believe you are clicking, for the log.' },
+      },
+      required: ['ref'],
+    },
+  },
+  {
+    name: 'browser_type',
+    scope: 'local',
+    readOnly: false,
+    description: 'Type into one of the numbered fields. Set submit to press Enter afterwards, which is usually what a search box wants.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'integer' },
+        text: { type: 'string' },
+        submit: { type: 'boolean' },
+      },
+      required: ['ref', 'text'],
+    },
+  },
+  {
+    name: 'browser_press',
+    scope: 'local',
+    readOnly: false,
+    description: 'Press a single key on the page, e.g. "Enter", "Escape", "k" (play/pause on YouTube), "f" (fullscreen).',
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string' } },
+      required: ['key'],
+    },
+  },
+  /**
+   * Back and forward.
+   *
+   * The panel has had these buttons since it got an address bar, so the person
+   * watching could undo a wrong turn — and the model could not. Its only way
+   * back was to remember the previous URL and re-open it, which loses the scroll
+   * position, re-runs the page, and does not exist at all for a result reached by
+   * clicking. A browser without a Back button is not a browser.
+   */
+  {
+    name: 'browser_back',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Go back one page in the current tab, exactly like a browser Back button. Use it after following a link that turned out to be wrong, rather than re-opening the previous URL — going back keeps the page you came from as it was.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_forward',
+    scope: 'local',
+    readOnly: false,
+    description: 'Go forward one page in the current tab, undoing a browser_back.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_select',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Choose an option in a dropdown (a <select>) by its visible text. ' +
+      'Clicking a native dropdown does not open a list you can then click — this is the only way to set one. ' +
+      'The listing shows the current value after `=`.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'integer', description: 'The number in square brackets from the listing.' },
+        value: { type: 'string', description: 'The option text to choose, as shown to a person.' },
+      },
+      required: ['ref', 'value'],
+    },
+  },
+  {
+    name: 'browser_hover',
+    scope: 'local',
+    readOnly: true,
+    secondary: true,
+    description:
+      'Move the pointer over a numbered element without clicking it. Some menus only appear on hover, so their items are absent from the listing until you do this.',
+    parameters: {
+      type: 'object',
+      properties: { ref: { type: 'integer', description: 'The number in square brackets from the listing.' } },
+      required: ['ref'],
+    },
+  },
+  {
+    name: 'browser_scroll',
+    scope: 'local',
+    readOnly: true,
+    description: 'Scroll the page. Only elements in the viewport appear in the listing, so scroll to reach the rest.',
+    parameters: {
+      type: 'object',
+      properties: {
+        direction: { type: 'string', enum: ['up', 'down'] },
+        amount: { type: 'integer', description: 'Roughly this many screens. 1 to 10.' },
+      },
+    },
+  },
+  {
+    name: 'browser_wait',
+    scope: 'local',
+    readOnly: true,
+    description:
+      'Let time pass while the user keeps watching — for a video to play, or a slow page to finish loading. Keeps the live screen updating.',
+    parameters: {
+      type: 'object',
+      properties: { seconds: { type: 'integer', description: '1 to 30.' } },
+    },
+  },
+  {
+    name: 'browser_close',
+    scope: 'local',
+    readOnly: false,
+    description:
+      'Close the browser sandbox when the task is finished. This closes only your own sandbox window — it has no effect on pages you handed to the user with `open_url`, which live in their browser.',
+    parameters: { type: 'object', properties: {} },
+  },
+
+  // ── Local: real applications on the machine ──────────────────────────
+  //
+  // The same shape as the browser tools — look at a numbered list, act on a
+  // number — because the model is far better at picking from a list than at
+  // judging where something sits in a screenshot. `desktop` here means the
+  // whole machine, not a sandbox: these are marked scope 'desktop' so they can
+  // be withheld entirely unless the machine has opted in.
+  {
+    name: 'desktop_windows',
+    scope: 'desktop',
+    readOnly: true,
+    description:
+      'List the application windows open on the user\'s machine. Start here when you need to work with a program that is already running.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'desktop_launch',
+    scope: 'desktop',
+    readOnly: false,
+    description:
+      'Start an application and wait for its window, then return a numbered list of its controls. Use the executable or shell name, e.g. "notepad", "calc.exe", "winword", "explorer".',
+    parameters: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'Program to start, e.g. "notepad".' },
+        args: { type: 'string', description: 'Command-line arguments, e.g. a file path to open.' },
+      },
+      required: ['app'],
+    },
+  },
+  {
+    name: 'desktop_look',
+    scope: 'desktop',
+    readOnly: true,
+    description:
+      'Re-read the window you are working in: its visible text and a fresh numbered list of controls. Numbers are only valid for the window they came from, so call this after anything that may have changed the screen.',
+    parameters: {
+      type: 'object',
+      properties: {
+        window: { type: 'string', description: 'Title fragment. Omit to stay on the window you are already in.' },
+      },
+    },
+  },
+  {
+    name: 'desktop_focus',
+    scope: 'desktop',
+    readOnly: false,
+    description: 'Bring a window to the front and make it the one you are working in.',
+    parameters: {
+      type: 'object',
+      properties: { window: { type: 'string', description: 'Title fragment, e.g. "Notepad".' } },
+      required: ['window'],
+    },
+  },
+  {
+    name: 'desktop_click',
+    scope: 'desktop',
+    readOnly: false,
+    description:
+      'Click a numbered control from the latest listing. Prefer `ref` over coordinates — it presses the actual control and keeps working when the window moves. Coordinates are a last resort for things with no accessible control.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'integer', description: 'The number in square brackets from the listing.' },
+        x: { type: 'integer', description: 'Screen X, only when there is no ref to use.' },
+        y: { type: 'integer', description: 'Screen Y, only when there is no ref to use.' },
+        button: { type: 'string', enum: ['left', 'right'], description: 'Defaults to left.' },
+        double: { type: 'boolean', description: 'Double-click instead of single.' },
+        description: { type: 'string', description: 'What you believe you are clicking, for the log.' },
+      },
+    },
+  },
+  {
+    name: 'desktop_type',
+    scope: 'desktop',
+    readOnly: false,
+    description:
+      'Type text. With `ref`, it goes into that control. Without one, it goes wherever the keyboard focus already is — so make sure you know where that is.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The text to type.' },
+        ref: { type: 'integer', description: 'Control to type into, from the latest listing.' },
+        submit: { type: 'boolean', description: 'Press Enter afterwards.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'desktop_key',
+    scope: 'desktop',
+    readOnly: false,
+    description:
+      'Press a key or a combination, e.g. "ctrl+s", "alt+f4", "enter", "f5". Often the most reliable way to drive a program that exposes few controls.',
+    parameters: {
+      type: 'object',
+      properties: { keys: { type: 'string', description: 'A key, or modifiers joined with "+".' } },
+      required: ['keys'],
+    },
+  },
+  {
+    name: 'desktop_scroll',
+    scope: 'desktop',
+    readOnly: false,
+    description: 'Scroll the window you are working in.',
+    parameters: {
+      type: 'object',
+      properties: {
+        direction: { type: 'string', enum: ['up', 'down'] },
+        amount: { type: 'integer', description: 'Wheel notches, 1 to 10. Default 3.' },
+      },
+    },
+  },
+  {
+    name: 'desktop_wait',
+    scope: 'desktop',
+    readOnly: true,
+    description:
+      'Wait while something finishes — a program starting, a file saving, a video playing. The user keeps seeing the screen throughout.',
+    parameters: {
+      type: 'object',
+      properties: { seconds: { type: 'integer', description: '1 to 30.' } },
+    },
+  },
+  {
+    name: 'desktop_close',
+    scope: 'desktop',
+    readOnly: false,
+    description:
+      'Close a window. This does not save anything first — if the program has unsaved work it will either prompt or lose it, so save before calling this.',
+    parameters: {
+      type: 'object',
+      properties: { window: { type: 'string', description: 'Title fragment.' } },
+      required: ['window'],
+    },
+  },
+
+  // ── Cloud: always available ──────────────────────────────────────────
+  {
+    name: 'web_search',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Search the web and return result titles, URLs and snippets. Use this for anything that changes over time or that you are not confident about.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The search query.' },
+        count: { type: 'integer', description: 'How many results to return. Default 8.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'web_fetch',
+    scope: 'cloud',
+    readOnly: true,
+    description: 'Fetch a URL and return its readable text content, with HTML markup stripped.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Absolute http(s) URL.' },
+        max_chars: { type: 'integer', description: 'Truncate the result to this many characters. Default 20000.' },
+      },
+      required: ['url'],
+    },
+  },
+  // ── documents the assistant makes ─────────────────────────────────────
+  {
+    name: 'create_file',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Write a real document the user can preview and download from the chat: Word (docx), Excel (xlsx), PowerPoint (pptx), Markdown, plain text, CSV, HTML or JSON. ' +
+      'This is the right tool whenever somebody asks for a report, a quotation, a plan, a table of figures or a deck — do not paste a long document into your reply instead. ' +
+      'The content is written in Markdown whatever the format: headings, lists, tables, bold, links and fenced code all carry across. ' +
+      'For xlsx and csv, write the data as Markdown tables — a heading above each one starts a new sheet — or as JSON `{"sheets":[{"name":..,"rows":[[..]]}]}`. ' +
+      'For pptx, each heading is a slide, the list under it is that slide\'s bullets, and a blockquote is the speaker notes. ' +
+      'It does not write PDFs: make a .docx or .html and tell the user the viewer has Print → Save as PDF, which uses their browser and gets accents right. ' +
+      '\n\n' +
+      'It also writes **artifacts**: with `format: "html"`, content that is real markup is kept exactly as written and the user can *run* it — a calculator, a chart, a small tool, a mock-up. ' +
+      'Write one self-contained page: inline CSS and JavaScript, no external scripts or fonts, no network calls (it runs sandboxed with no access to the network or to their session). ' +
+      'Content that is Markdown instead becomes a styled article, so both readings of "make me a web page" work. ' +
+      'Source files — js, ts, py, sql, css, sh and the rest — are stored exactly as written and shown as code.' +
+      '\n\n' +
+      'This does not touch their filesystem — use write_file for that.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'What to call it, e.g. "Bao gia thang 8". The extension is added to match the format.' },
+        format: {
+          type: 'string',
+          enum: [
+            'docx', 'xlsx', 'pptx', 'md', 'txt', 'csv', 'html', 'json',
+            'js', 'mjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'java', 'cs',
+            'c', 'h', 'cpp', 'php', 'sh', 'ps1', 'sql', 'css', 'scss', 'yaml', 'yml',
+            'toml', 'ini', 'xml', 'svg',
+          ],
+          description: 'Which kind of file to write. `html` with real markup is a runnable artifact.',
+        },
+        content: { type: 'string', description: 'The document in Markdown, the page as HTML, or the source as itself.' },
+        title: { type: 'string', description: "Document title for the file's own properties. Defaults to the first heading." },
+      },
+      required: ['name', 'format', 'content'],
+    },
+  },
+  {
+    name: 'update_file',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Rewrite a document you made earlier, keeping the same file and the same place in the conversation. ' +
+      'Pass the complete new content, not a patch — read the current source back with read_generated_file first if you no longer have it. ' +
+      'Use this rather than create_file when the user asks to change something: a second copy of a quotation with one number different is how the wrong one gets sent.',
+    parameters: {
+      type: 'object',
+      properties: {
+        file_id: { type: 'string', description: 'The id create_file returned.' },
+        content: { type: 'string', description: 'The complete new content, in the same language as the original.' },
+        name: { type: 'string', description: 'Rename it at the same time. Optional.' },
+      },
+      required: ['file_id', 'content'],
+    },
+  },
+  {
+    name: 'read_generated_file',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Read back the source of a document you made earlier in this conversation, or list them all. Use it before update_file when the content is no longer in front of you.',
+    parameters: {
+      type: 'object',
+      properties: { file_id: { type: 'string', description: 'Omit to list every file made in this conversation.' } },
+    },
+  },
+  {
+    name: 'file_versions',
+    scope: 'cloud',
+    // Listing and reading are read-only; restoring is a rewrite. Marked as a
+    // change, because the one call that matters is the one that alters a file.
+    readOnly: false,
+    secondary: true,
+    description:
+      'The earlier drafts of a document you made. Every update_file keeps the copy it replaced, so this is how to ' +
+      'read what a file said before a change, and how to put it back. Restoring is itself a rewrite, so nothing is ' +
+      'lost either way — use it rather than rebuilding an old version from memory.',
+    parameters: {
+      type: 'object',
+      properties: {
+        file_id: { type: 'string', description: 'The id create_file returned.' },
+        revision: {
+          type: 'integer',
+          description: 'Which draft. Omit to list them. v1 is the first thing that was written.',
+        },
+        restore: { type: 'boolean', description: 'Make that draft the current file again.' },
+      },
+      required: ['file_id'],
+    },
+  },
+  {
+    name: 'memory_write',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Save a durable note that persists across every conversation. Use it for user preferences, project facts, and lessons learned — not for scratch state within one task.',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Short kebab-case identifier, e.g. "deploy-process".' },
+        content: { type: 'string', description: 'The note. Replaces any existing note with the same key.' },
+      },
+      required: ['key', 'content'],
+    },
+  },
+  {
+    name: 'show_widget',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Draw something in the conversation itself — a diagram, a chart, a table, a small illustration. ' +
+      'It appears inline where you called it, so the user reads it in the flow of what you are saying rather than opening a file. ' +
+      'Give `svg` for a diagram or chart, or `html` for anything richer; inline every style, because nothing is fetched. ' +
+      '\n\n' +
+      'This and `create_file` answer different questions. This is a picture inside your explanation — a flow chart of what you found, ' +
+      'a bar chart of four numbers. `create_file` with `format: "html"` makes a document they open, keep and download. ' +
+      'If they will want it tomorrow, it is a file; if it is part of this sentence, it is a widget.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'A short caption, so the picture is labelled.' },
+        svg: { type: 'string', description: 'A complete <svg> element. Best for diagrams and charts.' },
+        html: {
+          type: 'string',
+          description:
+            'A fragment of HTML instead. Inline styles only, no external anything. It runs sandboxed with no network and no access to the page.',
+        },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'memory_append',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Add to the end of a note without rewriting it, creating the note if it is not there. ' +
+      'This is the right tool for anything that accumulates — decisions as they are made, facts as they turn up. ' +
+      '`memory_write` replaces the whole note, which means reading it back first and losing whatever you had forgotten.',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'The note to add to, e.g. "project-decisions".' },
+        content: { type: 'string', description: 'What to add. It goes after a blank line.' },
+      },
+      required: ['key', 'content'],
+    },
+  },
+  {
+    name: 'memory_edit',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Change one exact piece of text inside a note, leaving the rest alone. ' +
+      'Use it to correct a fact rather than rewriting the note from memory — that is how the other facts in it get subtly changed. ' +
+      '`old_string` must appear exactly once; read the note first.',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Which note.' },
+        old_string: { type: 'string', description: 'The text to replace, matched exactly.' },
+        new_string: { type: 'string', description: 'What to put there instead.' },
+      },
+      required: ['key', 'old_string', 'new_string'],
+    },
+  },
+  {
+    name: 'memory_read',
+    scope: 'cloud',
+    readOnly: true,
+    description: 'List saved notes, or read one by key.',
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'Omit to list every note.' } },
+    },
+  },
+  /**
+   * The counterpart that was missing.
+   *
+   * Notes could be written and read but never removed, and they are injected into
+   * every future conversation — so a fact that went stale, or a preference the
+   * user changed their mind about, was permanent. The only workaround was
+   * overwriting the note with the word "ignore this", which still costs the
+   * tokens and still has to be read past.
+   */
+  {
+    name: 'memory_delete',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Delete a saved note by key. Use it when a note has gone stale or the user changes a preference you recorded — a note you cannot remove is read back into every future conversation forever. Say which note you removed.',
+    parameters: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'The note key, exactly as memory_read lists it.' } },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'update_plan',
+    scope: 'cloud',
+    readOnly: true,
+    // The first sentence has to carry the threshold, because on a model under
+    // 40k it is the only sentence that survives (see `firstSentence`). "Your
+    // task list for multi-step work" left the judgement entirely open, and a
+    // one-step plan is the result.
+    description:
+      'Show the user a live checklist, for work that genuinely has three or more steps of different kinds. Not for a question, a lookup or a single edit — a checklist above a short answer is noise, and short work is finished faster than it is planned. Resend the whole list on every update, with exactly one item in_progress.',
+    parameters: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          description: 'The full list, resent in its entirety on every update.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'done'] },
+            },
+            required: ['title', 'status'],
+          },
+        },
+      },
+      required: ['steps'],
+    },
+  },
+
+  // ── Cloud: skills, delegation, connected services ────────────────────
+  {
+    name: 'skill_read',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Read the full instructions for one of the procedures this user has taught you. The list of what exists is in your system prompt — read the relevant one before starting that kind of job, because it is how they want it done.',
+    parameters: {
+      type: 'object',
+      properties: { name: { type: 'string', description: 'The skill name, exactly as listed.' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'skill_write',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Record a procedure so it survives this conversation. Use it when the user teaches you how they want something done, or explicitly asks you to remember a workflow. Saving the same name again refines it rather than adding a duplicate.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Short and specific, e.g. "Weekly freight quotation".' },
+        description: {
+          type: 'string',
+          description:
+            'When this applies — this is what you will use later to decide whether to read it, so make it about the situation, not the steps.',
+        },
+        instructions: { type: 'string', description: 'The procedure itself, in as much detail as it needs.' },
+      },
+      required: ['name', 'description', 'instructions'],
+    },
+  },
+  {
+    name: 'run_parallel',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Hand several INDEPENDENT questions to sub-agents that work at the same time, and get all the answers back together. Right for fan-out — read these six files, check these four sites, summarise each of these folders. Wrong for anything sequential: sub-agents cannot see each other, so a chain of steps must stay with you. They are read-only; they report, you act.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tasks: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Up to 6 self-contained tasks. Each must make sense with no other context.',
+        },
+      },
+      required: ['tasks'],
+    },
+  },
+  {
+    name: 'schedule_task',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Set work to run later, or every day or week, without anyone watching. It runs as a fresh conversation the user can read afterwards. Use their words for the prompt — the future you has none of this context.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short label, e.g. "Friday campaign summary".' },
+        prompt: {
+          type: 'string',
+          description:
+            'The full instruction to run then. Self-contained: state the goal, the files or sources, and the output wanted.',
+        },
+        when: {
+          type: 'string',
+          description: 'Time of day as "17:00", or a weekday and time as "fri 17:00".',
+        },
+        repeat: { type: 'boolean', description: 'True to repeat daily or weekly; false to run once. Defaults to true.' },
+      },
+      required: ['title', 'prompt', 'when'],
+    },
+  },
+  /**
+   * Seeing and stopping the work it scheduled.
+   *
+   * `schedule_task` could create a repeating job and then had no way to look at
+   * one or turn it off. "Stop sending me that daily briefing" was a request the
+   * assistant literally could not carry out — it would have to tell the user to
+   * go and find it in Settings, about a thing it had set up itself.
+   */
+  {
+    name: 'list_tasks',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'The scheduled work on this account: what it does, when it next runs, and how the last run went. Check here before creating a task, so a second copy of a daily briefing is not scheduled alongside the first.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'cancel_task',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      'Delete a scheduled task by its id from list_tasks. Use it when the user says to stop something that runs on a clock. It does not pause — the task is gone, and setting it up again means scheduling it again.',
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'The task id from list_tasks.' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'search_docs',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Search the documents the user has indexed, by meaning rather than by keyword — "what did we agree about the deposit" finds the paragraph even when it never says "deposit". ' +
+      'Returns whole passages with the file they came from. Reach for this before saying you do not know something about their own work, and cite the file when you answer from it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What you want to know, as a question or a description. Not keywords.' },
+        limit: { type: 'integer', description: 'How many passages to return. Default 6, max 20.' },
+        source: { type: 'string', description: 'Only search folders whose name contains this. Optional.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'list_indexed',
+    scope: 'cloud',
+    readOnly: true,
+    secondary: true,
+    description:
+      'What has been indexed: which folders, how many files and passages, and with which embedding model. Use it when a search comes back empty, to tell "nothing indexed" from "indexed, but no match".',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'forget_docs',
+    scope: 'cloud',
+    readOnly: false,
+    secondary: true,
+    description:
+      'Delete an indexed folder from the search index. The files themselves are untouched — this only forgets the copy that was made for searching. Omit the source to forget everything, which is a big thing to do without being asked.',
+    parameters: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: 'The folder as it appears in list_indexed. Omit to forget everything.' },
+      },
+    },
+  },
+  {
+    name: 'github',
+    scope: 'cloud',
+    readOnly: true,
+    needs: 'github',
+    description:
+      "Read from GitHub's REST API using the user's connected token. Give an API path, e.g. \"/user/repos\", \"/repos/OWNER/NAME/issues\", \"/search/issues\". Returns raw JSON.",
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'API path beginning with /, e.g. "/repos/owner/name/pulls".' },
+        params: { type: 'object', description: 'Query parameters, e.g. {"state":"open","per_page":"20"}.' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'notion_search',
+    scope: 'cloud',
+    readOnly: true,
+    needs: 'notion',
+    description:
+      'Search the Notion pages shared with the connected integration. Only pages explicitly shared with it are visible — an empty result often means unshared rather than absent.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Text to search for.' } },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'github_write',
+    scope: 'cloud',
+    readOnly: false,
+    needs: 'github',
+    description:
+      'Change something on GitHub: open an issue, leave a comment, raise a pull request, add a label. ' +
+      'Give the API path and the JSON body GitHub documents for it, e.g. POST /repos/OWNER/NAME/issues with {"title":..,"body":..}. ' +
+      'Other people will see this, so check the wording with the user unless they asked for exactly this. ' +
+      'Use `github` for anything that only reads.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'API path beginning with /, e.g. "/repos/owner/name/issues".' },
+        method: { type: 'string', enum: ['POST', 'PATCH', 'PUT', 'DELETE'], description: 'Defaults to POST.' },
+        body: { type: 'object', description: 'The JSON body, exactly as the GitHub API documents it.' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'telegram_send',
+    scope: 'cloud',
+    readOnly: false,
+    needs: 'telegram',
+    description:
+      'Send a Telegram message as the connected bot. Good for a notification the user will actually see on their phone. ' +
+      'A bot cannot start a conversation: the recipient must have messaged it first, or it must be in the group. ' +
+      'Use a numeric chat id, or "@channelname" for a public channel.',
+    parameters: {
+      type: 'object',
+      properties: {
+        chat_id: { type: 'string', description: 'Numeric chat id, or "@channelname".' },
+        text: { type: 'string', description: 'The message.' },
+      },
+      required: ['chat_id', 'text'],
+    },
+  },
+  {
+    name: 'meta_page_post',
+    scope: 'cloud',
+    readOnly: false,
+    needs: 'meta_page',
+    description:
+      'Publish a post to the connected Facebook Page. This is public the moment it lands and cannot be quietly undone, ' +
+      'so read the wording back to the user and wait for a yes unless they asked for exactly this.',
+    parameters: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'The post text.' },
+        link: { type: 'string', description: 'A URL to attach. Optional.' },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'send_email',
+    scope: 'cloud',
+    readOnly: false,
+    description:
+      "Send an email from the deployment's own mail account. Use it when the user asks you to send something to " +
+      'somebody — a quotation, a summary, a reminder. ' +
+      'It leaves immediately and cannot be recalled, so read the recipient, the subject and the body back to the user ' +
+      'and wait for a yes unless they asked for exactly this. ' +
+      'If no mail provider is configured this fails and says so — never tell the user something was sent when it was not.',
+    parameters: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'One recipient address.' },
+        subject: { type: 'string', description: 'The subject line.' },
+        body: { type: 'string', description: 'The message as plain text.' },
+        html: { type: 'string', description: 'An HTML version. Optional; send `body` as well for mail clients that refuse HTML.' },
+      },
+      required: ['to', 'subject', 'body'],
+    },
+  },
+  {
+    name: 'generate_image',
+    scope: 'cloud',
+    readOnly: false,
+    needsProvider: 'google',
+    description:
+      'Make a picture from a description, and put it in the conversation for the user to see and download. ' +
+      'Use it when they ask for an image, a mock-up, an illustration, a social post graphic. ' +
+      'Describe the subject, the style and the composition — a fuller description gets a better picture. ' +
+      'It cannot edit an existing image, and it cannot render reliable text inside the picture.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'What the picture should show, in as much detail as you can give.' },
+        name: { type: 'string', description: 'What to call the file. Defaults to the prompt.' },
+        aspect_ratio: {
+          type: 'string',
+          description: 'One of "1:1", "3:4", "4:3", "9:16", "16:9". Defaults to square.',
+        },
+        count: { type: 'integer', description: 'How many variations, 1 to 4. Default 1.' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'slack_post',
+    scope: 'cloud',
+    readOnly: false,
+    needs: 'slack',
+    description:
+      'Post a message to a Slack channel as the connected bot. Other people will read this, so check the wording with the user first unless they asked for exactly this.',
+    parameters: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel name or ID, e.g. "#general" or "C01234567".' },
+        text: { type: 'string', description: 'The message. Slack markdown works.' },
+      },
+      required: ['channel', 'text'],
+    },
+  },
+];
+
+export const TOOLS_BY_NAME = Object.fromEntries(TOOLS.map((t) => [t.name, t]));
+
+/** Everything that runs on the user's own machine rather than in the cloud. */
+export const LOCAL_TOOLS = TOOLS.filter((t) => t.scope === 'local' || t.scope === 'desktop');
+export const CLOUD_TOOLS = TOOLS.filter((t) => t.scope === 'cloud');
+export const runsLocally = (tool) => tool?.scope === 'local' || tool?.scope === 'desktop';
+
+// ── how risky is this, really ─────────────────────────────────────────
+//
+// Approving every single change is exhausting, and people who are asked
+// twenty times an hour stop reading the question — which is worse than not
+// asking. So the interesting distinction is not "does this change something"
+// but "could this ruin my afternoon".
+//
+// Three levels:
+//   safe       reads something. Nothing to undo.
+//   ordinary   changes something recoverable, inside the space you pointed at.
+//   sensitive  runs arbitrary code, reaches outside that space, or destroys
+//              work that was not backed up.
+//
+// The base level is a property of the tool; the actual level also depends on
+// the arguments, because `write_file` into the workspace and `write_file` into
+// C:\Windows are not remotely the same act.
+
+/** Tools whose base level is worse than "ordinary" whatever the arguments. */
+const ALWAYS_SENSITIVE = new Set([
+  // Nothing about the arguments makes deleting safer, and the one thing that
+  // cannot be undone deserves the one prompt nobody skips.
+  'delete_file',
+  'desktop_close', // closes a window, and unsaved work with it
+  // Same act as desktop_close reached from the other side, and worse: a pid can
+  // be a database mid-write rather than a text editor. Nothing about the
+  // arguments makes it safer, so the level does not depend on them.
+  'process_kill',
+  // Deleting the index is not deleting the files, but it is the difference
+  // between an assistant that knows their documents and one that does not, and
+  // rebuilding it costs money. Not something to settle on its own.
+  'forget_docs',
+  // Moves the boundary the file tools are confined to. The argument is always an
+  // absolute path, so the ordinary path check would flag it anyway — this says
+  // plainly that changing where the assistant works is the user's call, not a
+  // detail it settles for itself along the way.
+  'set_workspace',
+
+  /**
+   * Anything that leaves the building.
+   *
+   * These were graded "ordinary", which under the default policy means they run
+   * without asking — so an assistant could email a client, post to a Facebook
+   * Page or message a Slack channel on its own reading of what the user wanted.
+   * None of it can be recalled, and the audience is not the person who could have
+   * said no.
+   *
+   * The distinction the risk levels are built on is "could this ruin my
+   * afternoon", and sending the wrong quotation to the wrong customer is squarely
+   * that. Their descriptions already say to check the wording first; this is the
+   * part that does not depend on the model choosing to.
+   */
+  'send_email',
+  'slack_post',
+  'telegram_send',
+  'meta_page_post',
+  /**
+   * Named explicitly, though the path check already catches it.
+   *
+   * A GitHub API path begins with "/", which `isAbsolute` reads as an absolute
+   * filesystem path — so this graded as sensitive by accident, for a reason that
+   * has nothing to do with why it should. Relying on that would mean the grading
+   * quietly changed the day the path check was tightened.
+   */
+  'github_write',
+]);
+
+/** Shell text that is destructive, irreversible, or reaches off the machine. */
+const DANGEROUS_COMMAND = [
+  /\brm\s+(-[a-z]*\s+)*-[a-z]*[rf]/i, // rm -rf and friends
+  /\brmdir\s+\/s/i,
+  /\bdel\s+\/[qsf]/i,
+  /\bformat\s+[a-z]:/i,
+  /\bmkfs\b/i,
+  /Remove-Item\b[^|]*-Recurse/i,
+  /\bdd\s+if=/i,
+  /\b(shutdown|reboot|halt)\b/i,
+  /\breg\s+delete\b/i,
+  /\bdiskpart\b/i,
+  /\bgit\s+push\b[^|]*--force/i,
+  /\bgit\s+reset\b[^|]*--hard/i,
+  /\bnpm\s+publish\b/i,
+  /\b(curl|wget|iwr|Invoke-WebRequest)\b[^|]*\|\s*(ba)?sh/i, // pipe the internet into a shell
+  /\bInvoke-Expression\b|\biex\b/i,
+  /\bchmod\s+(-R\s+)?777\b/i,
+  /\bsudo\b/i,
+  /\bnet\s+user\b/i,
+  /\btakeown\b|\bicacls\b/i,
+
+  /**
+   * Databases, which every pattern above misses.
+   *
+   * `psql -c "DROP TABLE users"` was assessed `ordinary`, so under the default
+   * policy it ran without stopping to ask — and unlike a deleted file there is
+   * nothing on disk left to recover. A shell is a shell whether what it destroys
+   * is a directory or a schema, and this list already refuses `mkfs` for exactly
+   * the same reason.
+   *
+   * These make it `sensitive`, which asks. A migration the user genuinely wants
+   * still runs; it just says what it is about to do first.
+   */
+  /\b(drop|truncate)\s+(table|database|schema|collection)\b/i,
+  /**
+   * An unqualified DELETE empties the table. With a WHERE it is ordinary work.
+   *
+   * The table name has to look like an identifier rather than anything at all:
+   * `\bdelete\s+from\b` on its own also matched `grep -r delete from ./docs`,
+   * and a guard that stops a search is a guard somebody turns off.
+   */
+  /\bdelete\s+from\s+["'`[]?[a-z_]\w*\b(?![^|;]*\bwhere\b)/i,
+  /\bdropdatabase\s*\(/i,
+  /\bflush(all|db)\b/i,
+];
+
+/** Key combinations that close, delete, or hand over control. */
+const DANGEROUS_KEYS = /\b(alt\+f4|ctrl\+w|ctrl\+q|delete|ctrl\+alt\+delete|win\+r|win\+l)\b/i;
+
+/**
+ * Windows locations that are the operating system rather than someone's work.
+ *
+ * Two forms on purpose. A `path` argument is matched from its start, because
+ * that is the whole value. A shell command has to be matched anywhere in the
+ * string — `copy a.dll C:\Windows\System32` buries the dangerous part in the
+ * middle, and an anchored pattern sails straight past it.
+ */
+const SYSTEM_DIR = '(?:windows|program files(?: \\(x86\\))?|programdata|system32|syswow64|boot|\\$recycle)';
+const PROTECTED_PATH = new RegExp(`^(?:[a-z]:[\\\\/])?${SYSTEM_DIR}`, 'i');
+const MENTIONS_PROTECTED = new RegExp(`(?:[a-z]:)?[\\\\/]${SYSTEM_DIR}\\b`, 'i');
+
+const isAbsolute = (p) => /^(?:[a-z]:[\\/]|[\\/]|~)/i.test(String(p || ''));
+
+/**
+ * Extensions the operating system will *execute* rather than open.
+ *
+ * `open_url` hands a path to the shell — the same thing double-clicking does —
+ * so pointing it at a .bat is not "opening a file", it is running a program.
+ * Handing a document to a viewer and running an executable deserve different
+ * answers, and only the second one needs to stop and ask.
+ */
+const EXECUTABLE = /\.(exe|bat|cmd|com|scr|pif|msi|msp|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|reg|lnk|jar|sh|command|app|scpt)$/i;
+
+/**
+ * The path-shaped argument of a call, whatever the tool decided to call it.
+ *
+ * `open_url` names its argument `target`, which is how it slipped past the
+ * path checks entirely: with full-disk access on, `open_url` could run an
+ * executable anywhere on the machine and be graded "ordinary".
+ */
+function pathArgument(name, input) {
+  if (name === 'open_url') {
+    const target = String(input?.target || '');
+    // A web address is not a path, and the browser is not the shell.
+    return /^https?:\/\//i.test(target) ? '' : target;
+  }
+  return input?.path ?? input?.file ?? '';
+}
+
+/**
+ * What level is this specific call?
+ *
+ * Deliberately errs upward: an unrecognised tool is treated as sensitive rather
+ * than waved through, because the failure mode of guessing "safe" is something
+ * irreversible happening without anyone being asked.
+ */
+export function assessRisk(name, input = {}) {
+  /**
+   * A tool from an MCP server is always sensitive, and that is deliberate.
+   *
+   * It is code this repository has never seen, doing something described only by
+   * the server that supplied it. There is no honest way to grade "is this
+   * destructive" from a name and a sentence, and the failure mode of guessing
+   * "ordinary" is something irreversible happening on somebody's machine with no
+   * prompt in the way.
+   *
+   * It falls out of the `!tool` branch below anyway — MCP tools are never in
+   * `TOOLS_BY_NAME` — but relying on that would mean the grading changed the day
+   * somebody made unknown tools default to something friendlier.
+   */
+  if (String(name || '').startsWith('mcp__')) return 'sensitive';
+
+  const tool = TOOLS_BY_NAME[name];
+  if (!tool) return 'sensitive';
+  if (tool.readOnly) return 'safe';
+  if (ALWAYS_SENSITIVE.has(name)) return 'sensitive';
+
+  // The shell is judged by what it is about to run, not by the fact that it is
+  // the shell. `npm test` and `git status` are the texture of ordinary work and
+  // stopping for each one trains people to click yes without looking; `rm -rf`
+  // is a different question entirely.
+  //
+  // Be clear about the limit: this is a pattern list, not a sandbox. Something
+  // destructive it does not recognise will run without asking. If that is not a
+  // trade you want, "Ask first" stops on every change.
+  // `run_background` is the same shell reached a different way, so it is graded
+  // the same way. Leaving it out would have made it the way around the rule:
+  // `run_background` with `rm -rf` would have been "ordinary" purely because the
+  // check named one tool rather than the capability.
+  if (name === 'run_command' || name === 'run_background') {
+    const command = String(input?.command || '');
+    if (looksDestructive(command) || MENTIONS_PROTECTED.test(command)) return 'sensitive';
+    return 'ordinary';
+  }
+
+  // Writing outside the folder the user pointed at is a different act from
+  // writing inside it, whatever the tool.
+  const path = pathArgument(name, input);
+  if (path && (isAbsolute(path) || PROTECTED_PATH.test(path) || String(path).includes('..'))) {
+    return 'sensitive';
+  }
+  // Asking the OS to open a program is asking it to run the program.
+  if (name === 'open_url' && path && EXECUTABLE.test(path)) return 'sensitive';
+
+  if (name === 'desktop_key' && DANGEROUS_KEYS.test(String(input?.keys || ''))) return 'sensitive';
+
+  // Launching a program is ordinary; launching a shell to get around the shell
+  // rule is not.
+  if (name === 'desktop_launch' || name === 'launch_app') {
+    const app = String(input?.app || '').toLowerCase();
+    if (/\b(cmd|powershell|pwsh|wt|bash|sh|regedit|wsl|terminal|iterm)\b/.test(app)) return 'sensitive';
+  }
+
+  return 'ordinary';
+}
+
+/** A short reason to show beside an approval prompt, or null when unremarkable. */
+export function riskReason(name, input = {}) {
+  // Nothing that only reads has anything to justify, whatever the path.
+  if (assessRisk(name, input) === 'safe') return null;
+
+  // Where it came from is the fact that matters here: the user chose to plug the
+  // server in, and this is the moment they get to see it being used.
+  if (String(name || '').startsWith('mcp__')) {
+    const server = String(name).slice(5).split('__')[0];
+    return `From the "${server}" MCP server — code outside this app, so it always asks.`;
+  }
+
+  if (name === 'run_command' || name === 'run_background') {
+    const command = String(input?.command || '');
+    if (looksDestructive(command)) return 'This command looks destructive or irreversible.';
+    if (MENTIONS_PROTECTED.test(command)) return 'This command touches Windows system files.';
+    return null;
+  }
+  if (name === 'download_file') {
+    return `Downloads ${input?.url || 'a file'} onto your computer.`;
+  }
+  // The audience is not the person being asked, and none of it can be recalled.
+  if (name === 'send_email') {
+    return `Sends an email to ${input?.to || 'somebody'}. It cannot be unsent.`;
+  }
+  if (name === 'slack_post') return `Posts to ${input?.channel || 'a Slack channel'}, where other people will read it.`;
+  if (name === 'telegram_send') return `Sends a Telegram message to ${input?.chat_id || 'a chat'}.`;
+  if (name === 'meta_page_post') return 'Publishes a post on your Facebook Page, publicly and immediately.';
+  if (name === 'github_write') {
+    return `${String(input?.method || 'POST').toUpperCase()} to GitHub ${input?.path || ''} — other people will see this.`;
+  }
+  if (name === 'delete_file') {
+    return input?.recursive
+      ? `Deletes ${input?.path || 'that folder'} and everything under it. There is no undo.`
+      : `Deletes ${input?.path || 'that file'}. There is no undo.`;
+  }
+  if (name === 'desktop_close') return 'Closes a window. Anything unsaved in it is lost.';
+  if (name === 'process_kill') {
+    const target = input?.pid ? `process ${input.pid}` : input?.name ? `every "${input.name}"` : 'a program';
+    return `Stops ${target}${input?.force ? ' outright' : ''}. Anything unsaved in it is lost.`;
+  }
+  if (name === 'clipboard_write') return 'Replaces what is currently on your clipboard.';
+  if (name === 'forget_docs') {
+    return input?.source
+      ? `Forgets the search index for "${input.source}". The files stay; re-indexing them costs tokens.`
+      : 'Forgets every indexed document. The files stay, but the whole index has to be rebuilt.';
+  }
+  if (name === 'index_folder') {
+    return `Reads every document under ${input?.path || 'that folder'} and sends the text to be embedded.`;
+  }
+  if (name === 'set_workspace') {
+    return `Moves the workspace to ${input?.path || 'another folder'}. The file tools will work there from now on.`;
+  }
+
+  const path = pathArgument(name, input);
+  if (name === 'open_url' && path && EXECUTABLE.test(path)) {
+    return 'This runs a program on your computer, not just opens a document.';
+  }
+  if (path && PROTECTED_PATH.test(path)) return 'This path belongs to Windows, not to your work.';
+  if (path && (isAbsolute(path) || String(path).includes('..'))) return 'This path is outside your workspace.';
+
+  if (name === 'desktop_key' && DANGEROUS_KEYS.test(String(input?.keys || ''))) {
+    return 'This key combination can close or delete things.';
+  }
+  if (name === 'desktop_launch' || name === 'launch_app') return 'Starts a program that can do anything you can.';
+  return null;
+}
+
+/** Whether a shell command matched one of the destructive patterns. */
+export function looksDestructive(command) {
+  return DANGEROUS_COMMAND.some((re) => re.test(String(command || '')));
+}
+
+/**
+ * Windows where the catalogue itself is a significant part of the budget.
+ *
+ * The whole tool set is re-sent on every single request, so its size is not paid
+ * once — it is paid on every turn for the rest of the conversation.
+ *
+ * Measured on the wire (`{name, description, input_schema}`, which is all any
+ * adapter actually sends), with every tool offered:
+ *
+ *   full          81 tools   ~10,650 tokens
+ *   trimmed       81 tools    ~7,380 tokens   descriptions cut to one sentence
+ *   secondary cut 77 tools    ~7,100 tokens
+ *
+ * On a 128k model the full set is ~8% and not worth a thought. On `qwen-2.5-7b`
+ * (32768) it is nearly a third of the window, and on `openai/gpt-4` (8191) it is
+ * *larger than the entire window* — the request cannot be satisfied at all
+ * before anybody has said anything.
+ *
+ * Re-measure after adding tools rather than trusting the figures above; this
+ * catalogue grew about 50% past the last number written here before anyone
+ * noticed. `/audit-tokens` has the one-liner that prints the table.
+ */
+const TRIM_DESCRIPTIONS_BELOW = 40_000;
+const DROP_SECONDARY_BELOW = 16_000;
+
+/**
+ * The first sentence of a description.
+ *
+ * The long descriptions in this file earn their length on a capable model — they
+ * are what stop it reaching for `open_url` when it means `browser_open`. But a
+ * model with no room for the conversation cannot use guidance it has no context
+ * to hold, and the first sentence is the part that says what the tool *is*.
+ */
+function firstSentence(text) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  const match = clean.match(/^.*?[.!?](?=\s|$)/);
+  return match ? match[0] : clean;
+}
+
+/**
+ * The tool set to advertise for this turn.
+ *
+ * Desktop tools are held back separately from the rest. Everything else the
+ * worker offers is either contained or, in the shell's case, at least invoked
+ * deliberately; driving the mouse and keyboard of a machine somebody is sitting
+ * at is a different kind of power, and a model that cannot see the tools cannot
+ * decide to reach for them.
+ *
+ * @param workerOnline   hide local tools entirely when there is nothing to run them
+ * @param desktopOnline  the machine has opted in to being driven
+ * @param policy         'readonly' and 'plan' drop every mutating tool
+ * @param connected      connector ids this account has linked. Omit to keep every
+ *                       connector tool, which is what callers that do not know
+ *                       should do rather than guessing at none.
+ * @param providers      provider ids this account holds a key for. Omit to keep
+ *                       every provider-gated tool, for callers that do not know.
+ * @param context        the model's window, so the catalogue can be cut down to
+ *                       fit one that is genuinely small
+ * @param extra          tools from outside this file — MCP servers — already in
+ *                       the same shape
+ */
+export function availableTools({
+  workerOnline,
+  desktopOnline,
+  policy,
+  connected,
+  providers,
+  context,
+  extra = [],
+}) {
+  // Planning is reading with a different brief: the model still needs to look
+  // at everything, and `update_plan` is read-only, so the same filter serves.
+  const looksOnly = policy === 'readonly' || policy === 'plan';
+  const window = Number(context) || 0;
+  // Zero is "nobody said", not "no room": an unknown window must not silently
+  // strip the catalogue down to its bones.
+  const tight = window > 0 && window < TRIM_DESCRIPTIONS_BELOW;
+  const verytight = window > 0 && window < DROP_SECONDARY_BELOW;
+
+  const offered = [...TOOLS, ...extra].filter((t) => {
+    // Tools that exist for the interface rather than for the model. Offering
+    // both halves of the same job is a decision it has to make for no reason.
+    if (t.hidden) return false;
+    if (runsLocally(t) && !workerOnline) return false;
+    if (t.scope === 'desktop' && !desktopOnline) return false;
+    if (looksOnly && !t.readOnly) return false;
+    // A tool whose service is not linked can only fail. It used to be offered
+    // regardless, which cost schema on every request for every account and let
+    // the model promise to post to a Slack that was never connected.
+    if (t.needs && connected && !connected.includes(t.needs)) return false;
+    // Same reasoning as `needs`, for a provider key rather than a connector.
+    if (t.needsProvider && providers && !providers.includes(t.needsProvider)) return false;
+    if (verytight && t.secondary) return false;
+    return true;
+  });
+
+  if (!tight) return offered;
+  return offered.map((t) => ({ ...t, description: firstSentence(t.description) }));
+}
+
+export const __testing = { firstSentence, TRIM_DESCRIPTIONS_BELOW, DROP_SECONDARY_BELOW };

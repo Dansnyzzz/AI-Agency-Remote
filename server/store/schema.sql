@@ -1,0 +1,492 @@
+-- AI Remote schema. Safe to run repeatedly.
+--
+-- Everything a person owns is scoped by user_id, including the worker that runs
+-- shell commands on their machine. That scoping is the security boundary: one
+-- account must never be able to reach another account's computer.
+
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  email         TEXT NOT NULL UNIQUE,
+  name          TEXT,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'user',   -- 'admin' | 'user'
+  -- sha256 of the user's worker token; the token itself is shown once and never stored.
+  worker_token  TEXT UNIQUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at  TIMESTAMPTZ
+);
+
+-- Added after the initial release; ALTER keeps existing deployments working.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_at      TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_token_limit BIGINT;
+
+-- Two-factor. The shared secret is encrypted with ENCRYPTION_KEY, never stored
+-- in the clear; recovery codes are kept only as digests and burned on use.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret     TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_codes  JSONB;
+
+-- The last 30-second step a TOTP code was accepted for. A code read over
+-- somebody's shoulder is valid for ninety seconds without this; with it, a code
+-- works exactly once.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step  BIGINT;
+
+-- Bumped whenever the password changes. Sessions are stateless signed cookies,
+-- so there is no server-side list to clear — instead the epoch is baked into the
+-- cookie and checked on every request, which makes "change your password" do
+-- what everyone assumes it does: sign the other sessions out.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS session_epoch   INTEGER NOT NULL DEFAULT 1;
+
+-- Single-use, expiring links for email confirmation and password resets.
+-- Only the digest is stored, so a database dump cannot be replayed as a login.
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,                    -- 'verify' | 'reset'
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS auth_tokens_user_idx ON auth_tokens (user_id, kind);
+
+-- The same row also carries a short numeric code, so a confirmation can be
+-- typed in instead of requiring a link click — far easier on a phone.
+ALTER TABLE auth_tokens ADD COLUMN IF NOT EXISTS code_hash TEXT;
+
+-- One row per model call, for the usage page and the monthly quota check.
+CREATE TABLE IF NOT EXISTS usage_events (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chat_id       TEXT,
+  model         TEXT NOT NULL,
+  input_tokens  BIGINT NOT NULL DEFAULT 0,
+  output_tokens BIGINT NOT NULL DEFAULT 0,
+  cost_usd      DOUBLE PRECISION NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS usage_events_user_time_idx ON usage_events (user_id, created_at DESC);
+
+-- Per-user preferences and encrypted provider keys.
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key     TEXT NOT NULL,
+  value   JSONB NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS chats (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL DEFAULT 'New chat',
+  model      TEXT,
+  pinned     BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS chats_user_idx ON chats (user_id, updated_at DESC);
+
+-- Held while an agent loop is running against this conversation. Two tabs — or a
+-- reconnect racing the run it is replacing — would otherwise both drive the same
+-- transcript and interleave their turns into nonsense. The claim is a conditional
+-- UPDATE, so it is atomic across serverless instances as well as tabs.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS run_lock_at TIMESTAMPTZ;
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS run_lock_by TEXT;
+
+-- Kept only so existing databases still satisfy the NOT NULL default; nothing
+-- reads it any more. There was once a tool-free "chat" mode, for models that
+-- could not call tools — but the library refuses to import one of those now, so
+-- the setting could only ever remove abilities for no reason.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'agent';
+
+-- A project: standing instructions, a shelf of sources, and the conversations
+-- that inherit both.
+--
+-- The sources are kept as extracted text rather than as bytes. Everything that
+-- happens to them afterwards is textual — searching for the passage that
+-- answers a question, counting what fits in a window, quoting a line back with
+-- its filename — and a PDF re-parsed on every turn to produce the same
+-- characters is work nobody asked for. The original bytes are not kept at all:
+-- this is a knowledge base, not a file store, and holding a second copy of
+-- somebody's documents is a promise about deletion we would rather not make.
+CREATE TABLE IF NOT EXISTS projects (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  instructions TEXT NOT NULL DEFAULT '',
+  -- Answer from the sources alone, and say so when they do not cover it.
+  grounded     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS projects_user_idx ON projects (user_id, updated_at DESC);
+
+-- Kept at the top of the shelf, whatever the dates say. A project you are in
+-- every day and one you finished in March are not the same thing, and sorting
+-- by when they last changed puts them in the same list in the same order.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Finished, but not thrown away.
+--
+-- Deleting a project takes its sources and unhooks its conversations, which is
+-- the right thing to offer and the wrong thing to reach for when a piece of
+-- work is simply over. Archived projects leave the shelf and keep everything.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS projects_shelf_idx ON projects (user_id, archived_at, pinned, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_files (
+  id         TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  mime       TEXT NOT NULL,
+  bytes      INTEGER NOT NULL,            -- of the original upload
+  pages      INTEGER,                     -- PDFs only
+  text       TEXT NOT NULL,
+  chars      INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS project_files_project_idx ON project_files (project_id, created_at);
+
+-- Which project a conversation belongs to, if any. Null is the ordinary chat
+-- that belongs to nothing, which is most of them.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS chats_project_idx ON chats (project_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id         TEXT PRIMARY KEY,
+  chat_id    TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  seq        BIGINT NOT NULL,
+  role       TEXT NOT NULL,
+  content    JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS messages_chat_seq_idx ON messages (chat_id, seq);
+
+-- Photos and files sent with a message.
+--
+-- In a table of their own rather than inside `messages.content`, and the reason
+-- is the shape of the reads: a conversation is loaded whole on every open, and
+-- searching scans every message body as text. A few screenshots inlined there
+-- would make both of those move megabytes of base64 to answer questions that
+-- never needed it. The message keeps a list of ids; the bytes are fetched only
+-- by whoever actually wants them — the browser for a thumbnail, the provider
+-- layer when it builds a request.
+CREATE TABLE IF NOT EXISTS attachments (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chat_id    TEXT,                        -- set when the message is sent
+  name       TEXT NOT NULL,
+  mime       TEXT NOT NULL,
+  kind       TEXT NOT NULL,               -- image | text | document
+  bytes      INTEGER NOT NULL,
+  data       TEXT NOT NULL,               -- base64
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS attachments_user_idx ON attachments (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS attachments_chat_idx ON attachments (chat_id);
+
+-- Where a file came from: 'upload' is something a person sent, 'generated' is
+-- something the assistant made.
+--
+-- One table for both, rather than a second one that would need its own
+-- ownership check, its own download route and its own sweep. A document the
+-- assistant wrote is a file in the conversation exactly as a photograph is: you
+-- can open it, download it, and ask about it again three turns later.
+ALTER TABLE attachments ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'upload';
+
+-- What a generated file was written from — the Markdown, not the .docx.
+--
+-- Kept because "change the last row of the table" has to start from the words.
+-- Re-reading a .docx back into a document model and editing that would work for
+-- the third paragraph and lose the intent everywhere else; the source is what
+-- was meant, and regenerating from it is exact.
+ALTER TABLE attachments ADD COLUMN IF NOT EXISTS source TEXT;
+CREATE INDEX IF NOT EXISTS attachments_origin_idx ON attachments (chat_id, origin);
+
+-- Bridge between the agent loop and the worker on a user's own PC.
+CREATE TABLE IF NOT EXISTS tool_jobs (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chat_id    TEXT,
+  tool       TEXT NOT NULL,
+  input      JSONB NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'pending',   -- pending | running | done | error
+  result     JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  claimed_at TIMESTAMPTZ,
+  done_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS tool_jobs_queue_idx ON tool_jobs (user_id, status, created_at);
+
+-- Which of the account's computers this job is for. Once somebody can pair a
+-- laptop *and* a desktop, "run this command on my machine" stops being a
+-- complete instruction — and a queue two workers both poll would hand the job
+-- to whichever asked first, which is a coin toss, not a choice. Null means any.
+ALTER TABLE tool_jobs ADD COLUMN IF NOT EXISTS device_id TEXT;
+
+CREATE TABLE IF NOT EXISTS workers (
+  id        TEXT PRIMARY KEY,
+  user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  info      JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS workers_user_idx ON workers (user_id, last_seen DESC);
+
+-- Which computer a worker token belongs to.
+--
+-- There used to be one token per account, in a column on `users`, and pairing a
+-- second machine silently cut off the first — so "sign in anywhere and your
+-- computer is there" was only ever true for one computer. A person has a laptop
+-- and a desktop; a team member has a work machine and a home one. Each gets its
+-- own row, its own token, and can be revoked on its own without disturbing the
+-- others.
+CREATE TABLE IF NOT EXISTS devices (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- sha256 of the device token; the token is shown once and never stored.
+  token_hash TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL,             -- "Phu's laptop", from the machine's hostname
+  info       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen  TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS devices_user_idx ON devices (user_id, revoked_at);
+
+-- Where this computer resolves relative paths, chosen from the app.
+--
+-- It used to be an environment variable read once at startup, which meant
+-- "work on my other project instead" was: stop the worker, edit a file on that
+-- machine, start it again. Fine when the machine is the one you are sitting at,
+-- absurd when the whole point is driving it from a phone. Null means whatever
+-- the machine itself was started with.
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS workspace TEXT;
+
+-- A computer waiting to be adopted.
+--
+-- The worker asks for a code, prints it, and polls. Somebody signed in types
+-- that code into the app, which is what attaches the machine to their account —
+-- so an unauthenticated request can never reach anybody's data, it can only ask
+-- to be claimed. The minted token is held here encrypted for the few seconds
+-- between the claim and the worker's next poll, then the row is deleted.
+CREATE TABLE IF NOT EXISTS pairings (
+  id          TEXT PRIMARY KEY,
+  code_hash   TEXT NOT NULL,
+  user_id     TEXT REFERENCES users(id) ON DELETE CASCADE,   -- null until claimed
+  device_name TEXT NOT NULL,
+  info        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  secret      TEXT,                       -- AES-GCM device token, until collected
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at  TIMESTAMPTZ NOT NULL,
+  claimed_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS pairings_expiry_idx ON pairings (expires_at);
+
+-- The latest frame from each account's browser sandbox — one row per user,
+-- overwritten in place. Only the newest frame matters, so there is no history
+-- to grow unbounded.
+-- `watched_at` is its own column rather than a field inside `meta`: meta is
+-- replaced wholesale by every incoming frame, so a watch marker living there
+-- would be wiped by the very frames it is meant to keep flowing.
+CREATE TABLE IF NOT EXISTS screens (
+  user_id    TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  frame      TEXT,                              -- base64 JPEG
+  meta       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  watched_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE screens ADD COLUMN IF NOT EXISTS watched_at TIMESTAMPTZ;
+
+-- Deployment-wide values that belong to nobody in particular.
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value JSONB NOT NULL
+);
+
+-- A procedure somebody taught the assistant: "how we do a quotation", "how to
+-- file an invoice". The instructions are injected when the skill is relevant,
+-- so a repeated job is described once rather than re-explained every time.
+CREATE TABLE IF NOT EXISTS skills (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL,          -- what it is for; how the model decides to use it
+  instructions TEXT NOT NULL,          -- the actual steps
+  enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+  used_count   INTEGER NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS skills_user_name_idx ON skills (user_id, lower(name));
+
+-- Work to start later, or on a repeating schedule. `next_run_at` is what the
+-- scheduler polls; `cron` being null means it runs once and is done.
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  prompt      TEXT NOT NULL,
+  model       TEXT,
+  cron        TEXT,                     -- 'HH:MM' daily, or 'DOW HH:MM' weekly
+  next_run_at TIMESTAMPTZ NOT NULL,
+  enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  last_run_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_chat   TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS scheduled_due_idx ON scheduled_tasks (enabled, next_run_at);
+
+-- The IANA zone the schedule was written in. Without it "17:00" meant 17:00
+-- wherever the server happened to be — UTC on a deployment — so somebody in
+-- Vietnam asking for five in the afternoon got midnight. The clock a person
+-- means is their own clock.
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS tz TEXT;
+
+-- Credentials for third-party services, encrypted with the same key as the
+-- provider API keys. One row per service per account.
+CREATE TABLE IF NOT EXISTS connectors (
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  service    TEXT NOT NULL,
+  token      TEXT NOT NULL,             -- AES-GCM, never returned to the browser
+  account    TEXT,                      -- whose account it is, for display
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, service)
+);
+
+-- MCP servers an account has plugged in.
+--
+-- This is what turns a fixed tool list into an open one: a server here can add a
+-- hundred tools without a line being added to this repository.
+--
+-- `config` holds the transport and how to reach it. Secrets inside it — bearer
+-- headers, environment variables holding tokens — are encrypted into
+-- `headersCipher` / `envCipher` with the same key as the provider keys, so the raw
+-- JSON is safe to read back into the settings page. See server/mcp/registry.js.
+--
+-- Per account, never global: a stdio server is a program that runs on the machine,
+-- and one account must not be able to make another account's turn execute it.
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,             -- what the user calls it; slugified into tool names
+  config     JSONB NOT NULL,            -- { transport, command, args, url, headersCipher, envCipher }
+  enabled    BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS mcp_servers_user_name_idx ON mcp_servers (user_id, lower(name));
+
+-- The shared model library. Refreshed from OpenRouter once a day, plus whatever
+-- anyone adds by pasting a model id. Shared on purpose: one person finding a
+-- good free model makes it selectable for everyone, with no link to paste.
+CREATE TABLE IF NOT EXISTS shared_models (
+  id             TEXT PRIMARY KEY,               -- 'openrouter/vendor/model:free'
+  provider       TEXT NOT NULL,                  -- which adapter runs it
+  model          TEXT NOT NULL,                  -- the id the provider expects
+  family         TEXT NOT NULL,                  -- anthropic | openai | google | meta | …
+  label          TEXT NOT NULL,
+  description    TEXT,
+  context        BIGINT,
+  price_in       DOUBLE PRECISION,               -- USD per 1M tokens
+  price_out      DOUBLE PRECISION,
+  is_free        BOOLEAN NOT NULL DEFAULT FALSE,
+  released_at    TIMESTAMPTZ,                    -- vendor release date, for "newest first"
+  added_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+  refreshed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS shared_models_sort_idx   ON shared_models (released_at DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS shared_models_family_idx ON shared_models (family, is_free);
+
+-- Whether the model can be shown a picture.
+--
+-- Roughly half of them cannot, and sending an image to one that cannot is not a
+-- degraded answer — the provider rejects the whole request, which surfaced as a
+-- bare "not found" with no hint that the attachment was the problem. Recorded so
+-- the picker can say, the composer can warn, and the request can leave the image
+-- out and explain itself instead of failing.
+ALTER TABLE shared_models ADD COLUMN IF NOT EXISTS vision BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- The most output tokens this model will actually produce.
+--
+-- Every request used to ask for 32000 regardless, because that was the one
+-- number the adapters knew. Forty-five of the models in the catalogue cap lower
+-- than that — `ai21/jamba-large-1.7` at 4096, `amazon/nova-lite-v1` at 5120,
+-- the Qwen 3 family at 8192, DeepSeek at 16000 — so the request was asking for
+-- something the provider had already said it would not do. Recorded here because
+-- OpenRouter publishes it (`top_provider.max_completion_tokens`) and guessing
+-- from the context length gets it wrong in both directions: a 1M-context model
+-- does not have a 1M output budget, and a 16k one does not have 32k.
+--
+-- Null means the provider did not say. `resolveModel` derives a conservative
+-- figure from the context length in that case rather than reaching for 32000.
+ALTER TABLE shared_models ADD COLUMN IF NOT EXISTS max_output INTEGER;
+
+-- Counters behind the login and password-reset throttles.
+--
+-- In a table rather than in memory on purpose: on a serverless deployment each
+-- request may land on a fresh instance, so an in-process counter would reset
+-- itself between attempts and throttle nothing at all. One upsert per attempt is
+-- a small price for a limit that actually holds.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  bucket     TEXT PRIMARY KEY,          -- 'login:1.2.3.4' — action plus identity
+  count      INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rate_limits_expiry_idx ON rate_limits (expires_at);
+
+-- Indexed documents: the assistant's long-term memory of the user's own files.
+--
+-- The embedding is a base64 float32 array in a TEXT column rather than a
+-- `vector` — deliberately. pgvector exists on Neon and does not exist in PGlite,
+-- and this project's whole database story is that a laptop and a deployment run
+-- identical SQL. Similarity is computed in JavaScript over vectors that were
+-- normalised on the way in, which turns cosine into a dot product; for the tens
+-- of thousands of chunks one person's documents amount to, that is a few tens of
+-- milliseconds and no extension to install. Reach for pgvector when somebody has
+-- a million chunks, not before.
+CREATE TABLE IF NOT EXISTS doc_chunks (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source     TEXT NOT NULL,            -- the folder that was indexed, as the user named it
+  path       TEXT NOT NULL,            -- the file this came out of
+  ordinal    INTEGER NOT NULL,         -- which chunk of that file
+  heading    TEXT,                     -- nearest heading above it, when there was one
+  text       TEXT NOT NULL,
+  embedding  TEXT NOT NULL,            -- base64 of a normalised Float32Array
+  dims       INTEGER NOT NULL,
+  model      TEXT NOT NULL,            -- vectors from different models are not comparable
+  mtime      BIGINT,                   -- lets a re-index skip files nobody touched
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS doc_chunks_user_idx ON doc_chunks (user_id, source);
+CREATE UNIQUE INDEX IF NOT EXISTS doc_chunks_place_idx ON doc_chunks (user_id, path, ordinal);
+
+-- Earlier versions of a file the assistant wrote.
+--
+-- `update_file` rewrites in place and keeps the id, which is right: a quotation
+-- with one number changed is the same quotation, and a second nearly-identical
+-- file is how the wrong one gets sent. But rewriting in place also threw the
+-- previous copy away, so "put that number back" meant asking for the whole
+-- document again and hoping.
+--
+-- Every rewrite now files the outgoing copy here first. Only generated files
+-- have them — an upload never changes — and only the bytes plus the Markdown
+-- they were built from, because that pair is what it takes to both show a
+-- version and restore it.
+CREATE TABLE IF NOT EXISTS attachment_versions (
+  id            TEXT PRIMARY KEY,
+  attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+  user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  revision      INTEGER NOT NULL,        -- 1 is the first thing that was written
+  name          TEXT NOT NULL,
+  mime          TEXT NOT NULL,
+  kind          TEXT NOT NULL,           -- same vocabulary as attachments.kind
+  bytes         INTEGER NOT NULL,
+  data          TEXT NOT NULL,           -- base64
+  source        TEXT,                    -- the Markdown it was built from
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS attachment_versions_idx
+  ON attachment_versions (attachment_id, revision DESC);

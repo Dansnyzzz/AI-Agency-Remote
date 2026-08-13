@@ -1,0 +1,5386 @@
+/* ─────────────────────────────────────────────────────────────
+   AI Remote — a dark, terminal-adjacent workspace.
+   Signal green for the assistant, amber for machine activity.
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  --bg: #0b0e11;
+  --bg-elev: #11161b;
+  --surface: #151b21;
+  --surface-2: #1b232a;
+  --line: #232d36;
+  --line-soft: #1a222a;
+
+  --text: #e8eef4;
+  --text-dim: #9aa8b5;
+  --text-faint: #64727f;
+
+  --accent: #5ee6a8;
+  --accent-dim: #2f7f5f;
+  --accent-glow: rgba(94, 230, 168, 0.14);
+  --warn: #ffb454;
+  --danger: #ff6b6b;
+  --info: #6cb6ff;
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  /* The height of a control in a toolbar row — icon buttons, the context ring.
+     A token because the ring has to be exactly as tall as it is wide to be a
+     circle, and two hardcoded 38s are two numbers that can drift apart. */
+  --control-h: 38px;
+  --sidebar-w: 288px;
+  --detail-w: 340px;
+
+  /* System first, so nothing is fetched and nothing is render-blocked. The
+     named families are still honoured if they happen to be installed. */
+  --font: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, 'Liberation Mono',
+    monospace;
+
+  --shadow: 0 18px 50px -16px rgba(0, 0, 0, 0.75);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+
+  /* ── Glass ──────────────────────────────────────────────────
+     What floats over the page — menus, sheets, toasts — is frosted rather
+     than painted: a near-opaque pane, a blur behind it, and a hairline of
+     light along the top edge, because real glass is brightest where it is
+     cut. Tokens rather than hand-mixed rgba()s, so a theme restates them
+     once and every floating surface follows.
+
+     The docked chrome does not use these. The rail, the header and the
+     progress panel have no pane at all — see `.sidebar`. */
+  --glass-solid: rgba(14, 19, 25, 0.88);
+  --glass-line: rgba(255, 255, 255, 0.07);
+  --glass-hi: rgba(255, 255, 255, 0.08);
+  --blur: saturate(1.6) blur(22px);
+
+  /* Hover and selection inside the transparent chrome. A named surface colour
+     is opaque, so using one for a hover state paints a solid grey patch onto a
+     panel that has no background — the row stops belonging to the page behind
+     it. These are ink laid over whatever is there instead. */
+  --tint: rgba(255, 255, 255, 0.055);
+  --tint-2: rgba(255, 255, 255, 0.1);
+
+  /* The aurora behind the page. Bright on dark, near-invisible on light. */
+  --aurora-a: rgba(94, 230, 168, 0.06);
+  --aurora-b: rgba(108, 182, 255, 0.05);
+  --scrim: rgba(0, 0, 0, 0.55);
+
+  /* The sky behind an empty conversation. Violet and indigo at the top fading
+     into the page, three drifting clouds, and stars — see `.galaxy`. */
+  --galaxy-wash: rgba(96, 78, 220, 0.3);
+  --galaxy-1: rgba(124, 92, 255, 0.55);
+  --galaxy-2: rgba(226, 92, 214, 0.36);
+  --galaxy-3: rgba(94, 230, 168, 0.28);
+  --star-ink: rgba(255, 255, 255, 0.92);
+  --star-ink-2: rgba(196, 216, 255, 0.75);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Light theme.
+
+   Every colour in this file already came from a token, so a theme is a
+   second block of tokens rather than a second stylesheet. It was declared
+   in the markup — `data-theme` on <html>, `color-scheme: dark light` in a
+   meta tag — and then never actually written, so the switch pointed at
+   nothing and anyone in a bright room was simply out of luck.
+
+   Two triggers, and the order matters: the media query is the default for
+   somebody who has expressed a preference to their OS, and the explicit
+   `data-theme` wins over it in both directions, because a person who
+   picked a theme in this app meant it.
+   ───────────────────────────────────────────────────────────── */
+:root[data-theme='light'] {
+  --bg: #f7f9fb;
+  --bg-elev: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #eef2f6;
+  --line: #d9e1e9;
+  --line-soft: #e8edf2;
+
+  --text: #101820;
+  --text-dim: #4a5866;
+  --text-faint: #74828f;
+
+  --accent: #10855a;
+  --accent-dim: #7fd3ae;
+  --accent-glow: rgba(16, 133, 90, 0.12);
+  --warn: #b06a00;
+  --danger: #c3352f;
+  --info: #1b6fc4;
+
+  --shadow: 0 18px 44px -20px rgba(16, 30, 45, 0.35);
+  --aurora-a: rgba(16, 133, 90, 0.05);
+  --aurora-b: rgba(27, 111, 196, 0.04);
+  --scrim: rgba(16, 30, 45, 0.35);
+
+  /* Frosted white rather than frosted black. */
+  --glass-solid: rgba(255, 255, 255, 0.92);
+  --glass-line: rgba(16, 30, 45, 0.09);
+  --glass-hi: rgba(255, 255, 255, 0.7);
+  --tint: rgba(16, 30, 45, 0.05);
+  --tint-2: rgba(16, 30, 45, 0.09);
+
+  /* A pastel dawn rather than deep space, and no stars: white points on a
+     near-white page are invisible at best and grubby at worst. */
+  --galaxy-wash: rgba(124, 92, 255, 0.12);
+  --galaxy-1: rgba(124, 92, 255, 0.22);
+  --galaxy-2: rgba(226, 92, 214, 0.15);
+  --galaxy-3: rgba(16, 133, 90, 0.14);
+  --star-ink: transparent;
+  --star-ink-2: transparent;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #f7f9fb;
+    --bg-elev: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #eef2f6;
+    --line: #d9e1e9;
+    --line-soft: #e8edf2;
+
+    --text: #101820;
+    --text-dim: #4a5866;
+    --text-faint: #74828f;
+
+    --accent: #10855a;
+    --accent-dim: #7fd3ae;
+    --accent-glow: rgba(16, 133, 90, 0.12);
+    --warn: #b06a00;
+    --danger: #c3352f;
+    --info: #1b6fc4;
+
+    --shadow: 0 18px 44px -20px rgba(16, 30, 45, 0.35);
+    --aurora-a: rgba(16, 133, 90, 0.05);
+    --aurora-b: rgba(27, 111, 196, 0.04);
+    --scrim: rgba(16, 30, 45, 0.35);
+
+    --glass-solid: rgba(255, 255, 255, 0.92);
+    --glass-line: rgba(16, 30, 45, 0.09);
+    --glass-hi: rgba(255, 255, 255, 0.7);
+    --tint: rgba(16, 30, 45, 0.05);
+    --tint-2: rgba(16, 30, 45, 0.09);
+
+    --galaxy-wash: rgba(124, 92, 255, 0.12);
+    --galaxy-1: rgba(124, 92, 255, 0.22);
+    --galaxy-2: rgba(226, 92, 214, 0.15);
+    --galaxy-3: rgba(16, 133, 90, 0.14);
+    --star-ink: transparent;
+    --star-ink-2: transparent;
+
+    color-scheme: light;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+/* A faint aurora so the near-black background has depth rather than looking flat. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 40rem at 12% -10%, var(--aurora-a), transparent 60%),
+    radial-gradient(50rem 35rem at 105% 0%, var(--aurora-b), transparent 55%);
+  z-index: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.06s;
+}
+.btn:hover { background: #222c35; }
+.btn:active { transform: translateY(1px); }
+.btn--block { width: 100%; }
+.btn--primary {
+  background: var(--accent);
+  color: #06231a;
+  font-weight: 600;
+}
+.btn--primary:hover { background: #74f0b8; }
+.btn--ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--text-dim);
+}
+.btn--ghost:hover { background: var(--surface); color: var(--text); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.icon-btn:hover { background: var(--tint-2); color: var(--text); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 46vw;
+  padding: 6px 11px;
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+  /* Translucent, so the chips belong to the frosted header they sit in rather
+     than looking like solid buttons dropped onto it. */
+  background: var(--tint);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.chip:hover {
+  background: var(--tint-2);
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+.chip--model { color: var(--accent); }
+
+/* A free model, said on the chip.
+ *
+ * A new account starts on one without having chosen it, and the way a free model
+ * fails — rate-limited partway through a long job — is indistinguishable from
+ * the app being broken unless something says which kind of model is answering.
+ * A dot rather than the word, because the chip is already narrow on a phone; the
+ * tooltip and the onboarding step carry the sentence. */
+.chip--free::after {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* ── Gate ────────────────────────────────────────────────────── */
+
+.gate {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.gate__card {
+  position: relative;
+  width: min(380px, 100%);
+  padding: 34px 28px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(180deg, var(--bg-elev), var(--bg));
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.gate__mark { color: var(--accent); }
+.gate__title {
+  margin: 10px 0 4px;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+.gate__sub {
+  margin: 0 0 22px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.gate__input {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-align: center;
+  letter-spacing: 0.16em;
+  font-family: var(--mono);
+}
+.gate__input:focus { border-color: var(--accent-dim); outline: none; }
+.gate__input--text {
+  text-align: left;
+  letter-spacing: normal;
+  font-family: var(--font);
+}
+/* A password box and the eye that unhides it. The button sits inside the
+   field's own padding, so the text never runs underneath it. */
+.gate__field {
+  position: relative;
+  margin-bottom: 12px;
+}
+.gate__field .gate__input { margin-bottom: 0; }
+.gate__input--secret { padding-right: 46px; }
+.gate__reveal {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.gate__reveal:hover { color: var(--text); }
+.gate__reveal:focus-visible { outline: 1px solid var(--accent-dim); }
+.gate__eye {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+/* Show the eye while hidden, the struck-through eye while revealed — the icon
+   names the state you would switch back to. */
+.gate__eye--shown { display: none; }
+.gate__reveal[aria-pressed='true'] .gate__eye--shown { display: block; }
+.gate__reveal[aria-pressed='true'] .gate__eye--hidden { display: none; }
+
+.gate__remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 14px;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.gate__remember input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.gate__remember:hover { color: var(--text); }
+
+.gate__error {
+  margin: 14px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+.gate__note {
+  margin: 14px 0 0;
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.gate__links {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+}
+.gate__switch {
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.gate__switch:hover { color: var(--accent); }
+
+/* Sits above the topbar; used for "confirm your email". */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 180, 84, 0.35);
+  background: rgba(255, 180, 84, 0.09);
+  color: #ffd9a8;
+  font-size: 13.5px;
+}
+.banner .btn { padding: 6px 12px; font-size: 12.5px; }
+
+.banner__form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.banner__form input {
+  width: 108px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  text-align: center;
+  outline: none;
+}
+.banner__form input:focus { border-color: var(--warn); }
+
+/* ── Model browser ───────────────────────────────────────────── */
+
+.sheet--tall {
+  width: min(760px, 100%);
+  max-height: 90dvh;
+}
+/* The model list is the scrolling region in this sheet, so it must be allowed
+   to shrink for the same reason .sheet__body is. */
+#model-results {
+  min-height: 0;
+}
+/**
+ * `minmax(0, 1fr)`, not the default `auto`.
+ *
+ * A grid's automatic column is sized to its widest item's *max-content*, and
+ * the vendor chip row is several thousand pixels of chips. That made the whole
+ * column that wide — stretching the search box far past the dialog edge and
+ * pushing a horizontal scrollbar under everything. The explicit zero minimum
+ * is what lets the column be narrower than its contents want to be.
+ */
+.browser__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search__icon {
+  position: absolute;
+  left: 13px;
+  color: var(--text-faint);
+  font-size: 16px;
+  pointer-events: none;
+}
+.search input {
+  width: 100%;
+  padding: 11px 38px 11px 36px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+}
+.search input:focus {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.search input::-webkit-search-cancel-button { display: none; }
+.search__clear {
+  position: absolute;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.search__clear:hover { background: var(--surface-2); color: var(--text); }
+
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  width: fit-content;
+}
+/* Five providers do not fit a narrow phone, so this one scrolls sideways
+   rather than wrapping into a ragged second row. */
+.seg--scroll {
+  display: flex;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.seg--scroll::-webkit-scrollbar { display: none; }
+.seg__btn {
+  flex: none;
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.seg__btn.is-active { background: var(--surface-2); color: var(--text); }
+
+.browser__row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+/* Without `min-width: 0` a flex item refuses to shrink below its content, so a
+   long row of vendor chips pushed the whole dialog wider than the screen and
+   put a horizontal scrollbar under everything. The chips scroll; the dialog
+   does not. */
+.chips {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.chips::-webkit-scrollbar { display: none; }
+/* Applied only when there is genuinely more to scroll to, so the last chip
+   fades out as an invitation rather than looking clipped by accident. */
+.chips.is-scrollable {
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.chip-btn {
+  flex: none;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chip-btn:hover { color: var(--text); }
+.chip-btn.is-active {
+  background: var(--accent-glow);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.mini-select {
+  flex: none;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.model-group__label {
+  padding: 14px 2px 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.model-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.model-card:hover { border-color: var(--accent-dim); background: var(--surface-2); }
+.model-card.is-current { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.model-card__main { flex: 1; min-width: 0; }
+.model-card__name {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-weight: 500;
+}
+.model-card__id {
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  word-break: break-all;
+}
+.model-card__meta {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-faint);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.tag--free { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-glow); }
+.tag--new { color: var(--warn); border-color: rgba(255, 180, 84, 0.4); }
+
+.browser__foot {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* ── Two-factor enrolment ────────────────────────────────────── */
+
+.qr {
+  display: grid;
+  place-items: center;
+  width: 188px;
+  height: 188px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0d1216;
+}
+.qr svg { width: 100%; height: 100%; }
+
+.codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+  margin: 10px 0 12px;
+  padding: 14px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 12px;
+  background: #0d1216;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  user-select: all;
+}
+
+.meter {
+  height: 7px;
+  margin: 8px 0 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.meter__fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.meter__fill.is-high { background: var(--warn); }
+.meter__fill.is-full { background: var(--danger); }
+
+/* One-time secrets: shown once, monospace, easy to select. */
+.secret {
+  margin: 4px 0 12px;
+  padding: 12px;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-sm);
+  background: #0d1216;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.rows { display: grid; gap: 6px; margin-bottom: 14px; }
+.rows__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+}
+.rows__item code { font-family: var(--mono); font-size: 12.5px; }
+.rows__item .grow { flex: 1; min-width: 0; }
+.rows__item .muted { color: var(--text-faint); font-size: 12px; }
+.rows__item button {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.rows__item button:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ── Shell ───────────────────────────────────────────────────── */
+
+/**
+ * The shell is exactly one screen tall and never scrolls. Only the message
+ * thread does.
+ *
+ * `min-height: 0` on the columns is what makes that true: a grid item defaults
+ * to `min-height: auto`, so both the sidebar and the main column grew to fit
+ * their contents — 5667px for a long conversation — and pushed a scrollbar onto
+ * the whole document. The header and composer scrolled away with it, which is
+ * the opposite of what a chat window should do.
+ */
+.app {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0;
+  height: 100dvh;
+  overflow: hidden;
+  /* Both panels are grid columns, so opening or collapsing either is a change
+     to this one property — which means one transition covers the sidebar
+     folding to a rail and the detail rail sliding in, and they cannot get out
+     of step with each other. */
+  transition: grid-template-columns 240ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* The detail rail is a third column that collapses to nothing rather than
+   being display:none, so opening and closing it can animate. */
+.app.is-detail {
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--detail-w);
+}
+.app > .sidebar,
+.app > .main,
+.app > .detail {
+  min-height: 0;
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 18;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+}
+
+/**
+ * The menu rail: no background of its own.
+ *
+ * It used to be painted `rgba(11, 14, 17, 0.7)` — a near-black over a near-black
+ * that came out a *different* near-black, so the column read as a grey strip
+ * bolted to the side of the page. Tinting it slightly less, or frosting it,
+ * only moves the shade; it does not stop there being two shades. The fix is to
+ * have one: the panels are transparent and the page's own backdrop — aurora,
+ * sky and all — runs underneath them, edge to edge.
+ *
+ * What separates them is the one line each, and nothing else. `::after` rather
+ * than a border so it can be a gradient that fades out towards the bottom:
+ * present enough to say where the panel ends, not a rule drawn across the
+ * window.
+ */
+.sidebar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px;
+  background: transparent;
+}
+.sidebar::after,
+.detail::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--glass-line) 12%, var(--glass-line) 78%, transparent);
+}
+.sidebar::after { right: 0; }
+.detail::before { left: 0; }
+.sidebar__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.brand {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+.brand svg { flex: none; }
+/* The mark is a bitmap now, so it needs the sizing a drawn glyph carried in its
+   own viewBox. `object-fit: contain` keeps a logo that is not exactly square
+   from being stretched into one. */
+.brand__mark {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+.gate__mark img {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+}
+
+/* Open, the logo is a logo: no hover-swap, nothing to click. The header's own
+   right edge carries the button that closes the menu, which is where a person
+   looks for it. Only the collapsed rail, which has no right edge to speak of,
+   folds that job back into the mark. */
+.brand[disabled] {
+  cursor: default;
+  opacity: 1;
+}
+.sidebar__collapse { display: inline-grid; }
+.app.is-rail .sidebar__collapse { display: none; }
+
+/* The mark and the toggle share one square.
+   Collapsed, the rail is a column of icons and the logo was the only one that
+   did nothing — while the button to bring the menu back sat underneath it,
+   needing a tooltip to say so. Hovering the logo now swaps in the panel glyph
+   in the same place: no second row, nothing to hunt for, and the affordance is
+   the picture rather than a label that appears somewhere else. */
+.brand__mark,
+.brand__toggle {
+  transition: opacity 140ms ease;
+}
+.brand__toggle {
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translateY(-50%);
+  color: var(--accent);
+  opacity: 0;
+}
+/* Scoped to the rail: a disabled button still matches :hover, so without this
+   the open menu's logo would flicker into a panel glyph that does nothing. */
+.app.is-rail .brand:hover .brand__mark,
+.app.is-rail .brand:focus-visible .brand__mark {
+  opacity: 0;
+}
+.app.is-rail .brand:hover .brand__toggle,
+.app.is-rail .brand:focus-visible .brand__toggle {
+  opacity: 1;
+}
+.sidebar__close { display: none; }
+
+/* ── The rail: one row per destination ───────────────────────── */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rail__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.rail__item svg { flex: none; }
+.rail__item:hover { background: var(--tint); color: var(--text); }
+.rail__item--primary { color: var(--accent); }
+.rail__item--primary:hover { background: var(--accent-glow); color: var(--accent); }
+.rail__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/**
+ * Collapsed to a rail of icons.
+ *
+ * Everything stays in the DOM and keeps its `title`, so the icons remain
+ * reachable and explain themselves on hover; only the labels and the
+ * conversation list go. The width lives on `.app` because it is a grid column
+ * there — setting it on `.sidebar` alone would leave a gap where the old
+ * column used to be.
+ */
+.app.is-rail {
+  --sidebar-w: 68px;
+}
+/* Hidden outright rather than faded: a label that is still laid out while the
+   column narrows wraps into two lines on the way, which looks like a glitch
+   rather than a transition. */
+.app.is-rail .rail__label,
+.app.is-rail .chats,
+.app.is-rail .brand span {
+  display: none;
+}
+.app.is-rail .sidebar {
+  padding: 14px 10px;
+}
+.app.is-rail .sidebar__head {
+  flex-direction: column;
+  gap: 10px;
+}
+.app.is-rail .rail__item {
+  justify-content: center;
+  padding: 10px 0;
+}
+/* Centred in the rail, and mirrored so the glyph reads as "expand". */
+.app.is-rail .brand {
+  justify-content: center;
+}
+.app.is-rail .brand__toggle {
+  left: 50%;
+  transform: translate(-50%, -50%) scaleX(-1);
+}
+
+.chats {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 2px -6px;
+  padding: 0 6px;
+}
+.chat-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 2px;
+  border-radius: 10px;
+  transition: background 0.15s;
+}
+.chat-row:hover { background: var(--tint); }
+.chat-row.is-active {
+  background: var(--tint-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.chat-row.is-active .chat-item { color: var(--text); }
+
+.chat-item {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-dim);
+  text-align: left;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.chat-row:hover .chat-item { color: var(--text); }
+
+.chat-row__menu {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+}
+.chat-row:hover .chat-row__menu,
+.chat-row__menu:focus-visible { opacity: 1; }
+.chat-row__menu:hover { background: var(--tint-2); color: var(--text); }
+
+/* Touch devices have no hover, so the affordance must always be visible. */
+@media (hover: none) {
+  .chat-row__menu { opacity: 1; }
+}
+/* ── Row actions ─────────────────────────────────────────────── */
+
+.menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 208px;
+  padding: 6px;
+  border: 1px solid var(--glass-line);
+  border-radius: 14px;
+  background: var(--glass-solid);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  /* The lit top edge again, this time as an inset shadow — a popover has no
+     spare pseudo-element and the effect is one line either way. */
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-hi);
+}
+.menu__item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.menu__item:hover,
+.menu__item:focus-visible {
+  background: var(--tint-2);
+  outline: none;
+}
+.menu__item svg { flex: none; }
+.menu__item--danger { color: var(--danger); }
+.menu__item--danger:hover { background: rgba(255, 107, 107, 0.12); }
+/* The shortcut letter, pushed to the right edge like a native menu. */
+.menu__key {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+.menu__sep {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--line-soft);
+}
+
+/* Inline rename: the row becomes its own text field, so renaming never needs a
+   dialog that the browser might refuse to show. */
+.chat-item--editing {
+  padding: 8px 10px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+/* A button that has asked and is waiting for the second click. */
+.is-armed {
+  border-color: var(--danger) !important;
+  color: var(--danger) !important;
+}
+
+.chat-row__pin {
+  flex: none;
+  margin-right: 6px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.chats__label {
+  padding: 12px 11px 5px;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.sidebar__foot {
+  display: grid;
+  gap: 8px;
+  padding-bottom: var(--safe-b);
+}
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.dot.is-online {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.dot.is-offline { background: var(--text-faint); }
+
+/* ── Main column ─────────────────────────────────────────────── */
+
+/**
+ * Flex, not grid, and deliberately.
+ *
+ * Grid rows are positional, but three of this column's children — the
+ * unverified-email banner, the screen mirror, the approval prompt — are
+ * conditionally hidden, and a hidden element leaves the grid entirely. So which
+ * child landed on the flexible row depended on what happened to be visible, and
+ * with everything hidden the composer got it and was pushed off the bottom of
+ * the screen. In a flex column the thread claims the free space by name.
+ */
+.main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.main > * {
+  flex: none;
+}
+
+/**
+ * The composer floats over the transcript.
+ *
+ * Sitting in the column below it would be simpler, but then the last message
+ * stops dead at the composer's top edge and the conversation reads as though it
+ * ends there. Overlaid, messages scroll away underneath and fade out, which is
+ * what makes a long thread feel like one continuous surface.
+ *
+ * The gradient itself must not swallow scroll gestures, so the wrapper is
+ * transparent to the pointer and only the controls inside it are not.
+ */
+.dock {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--bg) 42%);
+}
+.dock > * {
+  pointer-events: auto;
+}
+
+/* ── The detail rail ─────────────────────────────────────────── */
+
+/* The progress panel. Same deal as the rail, mirrored: transparent, one line. */
+.detail {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: transparent;
+}
+/* Collapsed the column is zero-width, so hide the contents rather than letting
+   them spill across the conversation. */
+.app:not(.is-detail) .detail { visibility: hidden; }
+.detail__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 14px 12px 14px 18px;
+  border-bottom: 1px solid var(--glass-line);
+}
+.detail__title { font-weight: 600; letter-spacing: -0.01em; }
+.detail__count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.detail__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+/* ── The plan, ticked off as it goes ─────────────────────────── */
+
+.progress {
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+.progress:empty { display: none; }
+.progress li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 7px 8px;
+  border-radius: 9px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.progress li span:first-child {
+  flex: none;
+  width: 16px;
+  text-align: center;
+}
+.progress .is-done { color: var(--text-faint); }
+.progress .is-done span:last-child { text-decoration: line-through; }
+.progress .is-done span:first-child { color: var(--accent); }
+/* A tint rather than a fill: an opaque row on a translucent panel reads as a
+   sticker somebody put on the glass. */
+.progress .is-active {
+  background: var(--accent-glow);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--text);
+  font-weight: 500;
+}
+.progress .is-active span:first-child { color: var(--accent); }
+
+/* The panel before there is anything to show. Left as a bare paragraph it read
+   as a page that had failed to load; boxed, it reads as a slot waiting to be
+   filled — which is what it is. */
+#progress-empty {
+  margin: 0;
+  padding: 14px 15px;
+  border: 1px dashed var(--glass-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 34%, transparent);
+}
+
+/* ── The browser sandbox, mirrored ────────────────────────────── */
+
+.screen {
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #080b0d;
+}
+.screen__bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px 7px 11px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12.5px;
+}
+.screen__live {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+/* Pulses only while frames are actually arriving, so the dot means something. */
+.screen__live.is-live {
+  background: var(--danger);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% { opacity: 0.35; }
+}
+.screen__title {
+  flex: none;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.screen__title { flex: 1; max-width: none; }
+/* Under the frame rather than in the bar: the rail is narrow and a URL is long. */
+/* One row per open tab, above the address row, the way a browser stacks them. */
+/* Scrollable *and* seen to be.
+ *
+ * This had `overflow-x: auto` with the scrollbar hidden on both engines, so with
+ * five tabs open the row genuinely scrolled and nothing said so — the tabs past
+ * the right edge simply did not appear to exist. A thin bar is the whole fix:
+ * the strip is 30px tall and 6px of it is a price worth paying for tabs you can
+ * reach. `overlay` keeps it off the tab row on engines that support it. */
+.screen__tabs {
+  display: flex;
+  gap: 3px;
+  padding: 5px 6px 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  scrollbar-gutter: stable;
+}
+.screen__tabs::-webkit-scrollbar {
+  height: 6px;
+  background: transparent;
+}
+.screen__tabs::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--line);
+}
+.screen__tabs::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+.screen__tab {
+  flex: none;
+  max-width: 140px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px 8px 0 0;
+  background: var(--surface);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.screen__tab:hover { color: var(--text); }
+.screen__tab.is-active {
+  border-color: var(--line);
+  border-bottom-color: transparent;
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.screen.is-collapsed .screen__tabs { display: none; }
+
+/* The address row, above the picture where a browser keeps it. */
+.screen__nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-elev);
+}
+.screen__navbtn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.screen__navbtn:hover { background: var(--surface-2); color: var(--text); }
+.screen__url {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.screen.is-collapsed .screen__nav { display: none; }
+.screen__frame {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #05070a;
+}
+.screen__frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  outline: none;
+  /* An <img> is draggable by default, so pressing on the chart and pulling
+     started a native image drag — a ghost of the picture following the cursor —
+     and the mousedown never became a gesture we could forward. Panning a chart
+     was impossible for that reason alone. */
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* While you hold the controls, say so — a click landing in a page the assistant
+   is using should never be a surprise. */
+.screen.is-driving {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+/* Grab, not point: the panel takes drags as well as clicks, and the cursor is
+   the only thing that says so before you try. */
+.screen.is-driving .screen__frame img { cursor: grab; }
+.screen.is-driving.is-dragging .screen__frame img { cursor: grabbing; }
+.icon-btn.is-active { color: var(--accent); background: var(--accent-glow); }
+.screen.is-collapsed .screen__frame { display: none; }
+
+/* Full-size view: the frame fills the window so detail is readable.
+ *
+ * Flex rather than grid, and that is the whole fix. This was
+ * `grid-template-rows: auto 1fr` over a panel with *four* children — bar, tab
+ * strip, address bar, frame — so the `1fr` landed on the tab strip and the
+ * picture was pushed into an implicit auto row with nothing left to occupy.
+ * Expanding the panel made the thing you wanted to see disappear. A column that
+ * gives the last child the remaining space cannot be miscounted, however many
+ * rows the bar grows later. */
+.screen.is-expanded {
+  position: fixed;
+  inset: 0;
+  /* Above the sidebar (18) and the composer dock, below the toasts (60).
+     While expanded the panel is a child of <body> — see `setExpanded()` — so
+     this is compared against the page rather than against the detail rail it
+     normally lives in, whose own stacking context used to bury it. */
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  background: #05070a;
+}
+.screen.is-expanded .screen__bar,
+.screen.is-expanded .screen__tabs,
+.screen.is-expanded .screen__nav {
+  flex: none;
+}
+.screen.is-expanded .screen__frame {
+  flex: 1;
+  /* Without this a flex child refuses to shrink below its content, and an image
+     taller than the window pushes the whole panel off the bottom. */
+  min-height: 0;
+}
+/* Fit the picture inside whatever is left, never crop it and never overflow. */
+.screen.is-expanded .screen__frame img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/**
+ * The header, and no line under it.
+ *
+ * It never needed one. The transcript is a flex sibling *below* this bar with
+ * its own scrolling box, so nothing has ever passed underneath it — the blur
+ * and the opaque backing were guarding against an overlap that does not happen,
+ * and the border was drawing a third seam across a window that already had two.
+ * Transparent, the title and the chips simply sit on the page.
+ */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: transparent;
+}
+.topbar__menu { display: none; }
+.topbar__title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar__right {
+  display: flex;
+  gap: 7px;
+}
+
+/* ── Scrollbars that are not furniture ───────────────────────────
+ *
+ * Windows draws a permanent light-grey trough with stepper arrows. Against a
+ * near-black transcript it reads as a panel edge that is part of the design,
+ * except it is not — it is a control that only matters for the second you are
+ * using it, and the rest of the time it is a pale stripe down a dark page.
+ *
+ * Why the arrows were still there.
+ *
+ * This block used to set `scrollbar-width` and `scrollbar-color` *and* the
+ * `::-webkit-scrollbar` rules below, on the assumption that the standard
+ * properties covered Firefox and the pseudo-elements covered Chrome. They do
+ * not coexist: Chromium takes the standard properties as a declaration that
+ * you want the *native* scrollbar, and drops every `::-webkit-scrollbar` rule
+ * on the element — including `::-webkit-scrollbar-button { display: none }`.
+ * What you then get on Windows 11 is Chrome's Fluent scrollbar, which draws a
+ * stepper arrow at each end. The rule meant to remove them was the reason they
+ * appeared.
+ *
+ * So the pseudo-elements are the default and the standard properties are
+ * fenced behind `@supports not selector(::-webkit-scrollbar)` — true only in
+ * engines that have no pseudo-elements to use. The negation is deliberate:
+ * a browser too old to evaluate `selector()` at all fails the query, which
+ * leaves it on the webkit path it almost certainly wants.
+ */
+
+/* Every scrolling region in the app, not only the ones tagged `.scroll-quiet`:
+   a sheet body or a code block with steppers on it is the same eyesore. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+/* The track is the page. Anything else is a seam. */
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* Drawn inside the padding box, so the transparent border is what turns a
+   10px-wide bar into a 6px pill floating clear of the edge. */
+::-webkit-scrollbar-thumb {
+  background-color: var(--line);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--text-faint); }
+/* The stepper arrows Windows insists on. There is nowhere for them to go that
+   does not look like a button somebody put there on purpose. */
+::-webkit-scrollbar-button { display: none; }
+
+/**
+ * `.scroll-quiet` goes one further: nothing at all at rest.
+ *
+ * A thumb is a control that matters for the second you are using it, and the
+ * rest of the time it is a pale stripe down a dark page. `.is-scrolling` is
+ * put on by a scroll listener and taken off shortly after the scrolling stops,
+ * which is also what makes it vanish once you reach the end and let go.
+ *
+ * Overlay, not inline: `scrollbar-gutter` is deliberately not set, so the thumb
+ * floats over the content and the text does not shift sideways when it appears.
+ */
+.scroll-quiet::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  transition: background-color 250ms ease;
+}
+.scroll-quiet:hover::-webkit-scrollbar-thumb,
+.scroll-quiet.is-scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--line);
+}
+.scroll-quiet::-webkit-scrollbar-thumb:hover { background-color: var(--text-faint); }
+
+/* Firefox, and anything else without the pseudo-elements. */
+@supports not selector(::-webkit-scrollbar) {
+  .scroll-quiet {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 250ms ease;
+  }
+  .scroll-quiet:hover,
+  .scroll-quiet.is-scrolling {
+    scrollbar-color: var(--line) transparent;
+  }
+}
+
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The bottom pad is the dock's real measured height, kept in step by a
+     ResizeObserver — the composer grows as you type and a fixed guess would
+     either hide the last message or leave a gap under it. */
+  padding: 26px 0 calc(var(--dock-h, 96px) + 14px);
+  scroll-behavior: smooth;
+}
+
+/* ── The galaxy: what an empty conversation sits under ───────── */
+
+/*
+ * A first screen with nothing on it is still a first impression, and a flat
+ * near-black rectangle makes the app look switched off. So the empty state gets
+ * a sky: a violet wash at the top, three slow clouds, and two layers of stars
+ * drifting at different speeds.
+ *
+ * Everything here is decorative and everything here is conditional. The layer
+ * is `aria-hidden`, transparent to the pointer, and both faded out *and* paused
+ * once a conversation exists — an animation nobody can see is just a warm
+ * laptop. It sits behind the topbar and both side panels, so the colour reaches
+ * every edge of the window rather than stopping at a seam.
+ */
+.galaxy {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  background: linear-gradient(180deg, var(--galaxy-wash), transparent 58%);
+  transition: opacity 700ms ease, visibility 0s linear 700ms;
+}
+.app.is-fresh .galaxy {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity 900ms ease, visibility 0s;
+}
+/* Everything above the sky. `.dock` sets its own stacking already. */
+.topbar,
+.thread {
+  position: relative;
+  z-index: 1;
+}
+
+.galaxy__cloud,
+.galaxy__stars {
+  position: absolute;
+  will-change: transform;
+}
+
+.galaxy__cloud {
+  border-radius: 50%;
+  filter: blur(72px);
+  animation: cloud-drift 30s ease-in-out infinite alternate;
+}
+.galaxy__cloud--a {
+  top: -22vh;
+  left: -12vw;
+  width: 58vw;
+  height: 58vh;
+  background: radial-gradient(circle, var(--galaxy-1), transparent 68%);
+}
+.galaxy__cloud--b {
+  top: -16vh;
+  right: -14vw;
+  width: 52vw;
+  height: 52vh;
+  background: radial-gradient(circle, var(--galaxy-2), transparent 66%);
+  animation-duration: 38s;
+  animation-direction: alternate-reverse;
+}
+.galaxy__cloud--c {
+  top: 14vh;
+  left: 26vw;
+  width: 44vw;
+  height: 40vh;
+  background: radial-gradient(circle, var(--galaxy-3), transparent 70%);
+  animation-duration: 46s;
+  animation-delay: -12s;
+}
+
+/* Two tiled fields at different scales, so the near one slides past the far
+   one and the sky has depth. Each travels exactly one tile before repeating,
+   which is what makes the loop invisible. */
+.galaxy__stars {
+  inset: -12%;
+  background-repeat: repeat;
+}
+.galaxy__stars--near {
+  background-image:
+    radial-gradient(1.6px 1.6px at 12% 18%, var(--star-ink), transparent 62%),
+    radial-gradient(1.4px 1.4px at 74% 9%, var(--star-ink), transparent 62%),
+    radial-gradient(1.2px 1.2px at 43% 61%, var(--star-ink-2), transparent 62%),
+    radial-gradient(1.5px 1.5px at 88% 46%, var(--star-ink), transparent 62%),
+    radial-gradient(1.1px 1.1px at 26% 85%, var(--star-ink-2), transparent 62%),
+    radial-gradient(1.3px 1.3px at 62% 34%, var(--star-ink), transparent 62%);
+  background-size: 420px 420px;
+  animation: star-near 150s linear infinite;
+}
+.galaxy__stars--far {
+  background-image:
+    radial-gradient(1px 1px at 8% 42%, var(--star-ink-2), transparent 60%),
+    radial-gradient(1px 1px at 34% 12%, var(--star-ink-2), transparent 60%),
+    radial-gradient(0.9px 0.9px at 57% 78%, var(--star-ink), transparent 60%),
+    radial-gradient(1px 1px at 81% 24%, var(--star-ink-2), transparent 60%),
+    radial-gradient(0.8px 0.8px at 94% 66%, var(--star-ink-2), transparent 60%);
+  background-size: 260px 260px;
+  opacity: 0.7;
+  animation: star-far 230s linear infinite, twinkle 9s ease-in-out infinite alternate;
+}
+
+/* After the shorthands above, not before: `animation: …` resets play-state to
+   running, so a paused rule declared earlier is quietly overwritten and the sky
+   keeps animating behind a conversation nobody is looking at it through. */
+.galaxy__cloud,
+.galaxy__stars {
+  animation-play-state: paused;
+}
+.app.is-fresh .galaxy__cloud,
+.app.is-fresh .galaxy__stars {
+  animation-play-state: running;
+}
+
+@keyframes cloud-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(5vw, 4vh, 0) scale(1.16); }
+}
+@keyframes star-near {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-420px, -420px, 0); }
+}
+@keyframes star-far {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(260px, -260px, 0); }
+}
+@keyframes twinkle {
+  from { opacity: 0.42; }
+  to { opacity: 0.85; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The global reduce rule collapses durations to almost nothing, which for an
+   infinite animation is a loop running flat out. These simply stop. */
+@media (prefers-reduced-motion: reduce) {
+  .galaxy__cloud,
+  .galaxy__stars,
+  .empty > *,
+  .suggestion {
+    animation: none !important;
+  }
+}
+
+.empty {
+  display: grid;
+  align-content: center;
+  max-width: 660px;
+  min-height: min(58vh, 520px);
+  margin: 4vh auto 0;
+  padding: 0 22px;
+  text-align: center;
+}
+.empty > * {
+  animation: rise 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.empty p { animation-delay: 90ms; }
+.empty .suggestions { animation-delay: 180ms; }
+.empty h2 {
+  margin: 0 0 10px;
+  font-size: clamp(24px, 4.4vw, 34px);
+  letter-spacing: -0.03em;
+  /* Lit from the accent rather than painted flat — it picks up the sky behind
+     it without needing a second colour that only works in one theme. */
+  background: linear-gradient(96deg, var(--text) 18%, var(--accent) 62%, var(--info));
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+.empty p {
+  margin: 0 auto 26px;
+  max-width: 46ch;
+  color: var(--text-dim);
+}
+.suggestions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+/* Glass rather than a solid card, so the sky shows through and the row belongs
+   to the screen it is sitting on. */
+.suggestion {
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  backdrop-filter: blur(10px);
+  color: var(--text-dim);
+  text-align: left;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.suggestion:hover {
+  border-color: var(--accent-dim);
+  color: var(--text);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px -14px var(--accent-glow);
+}
+
+/* ── Messages ────────────────────────────────────────────────── */
+
+.msg {
+  max-width: 780px;
+  margin: 0 auto 22px;
+  padding: 0 22px;
+}
+.msg--user {
+  /* A column so the copy and edit row can sit under the bubble rather than
+     beside it, still hard against the right edge. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.msg--user .bubble {
+  max-width: 82%;
+  padding: 11px 15px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Copy and edit: present only while you are pointing at the message.
+   The row keeps its height whether or not it is visible — fading in is one
+   thing, but a transcript that shifts under the pointer as you move down it is
+   another, and the second is unusable. */
+.msg__actions {
+  display: flex;
+  gap: 2px;
+  height: 26px;
+  margin-top: 3px;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+.msg--user:hover .msg__actions {
+  opacity: 1;
+}
+/*
+ * Keyboard focus reveals them too — but only keyboard focus.
+ *
+ * This was `:focus-within`, which a mouse click also satisfies: pressing Copy
+ * left the button focused, so the row stayed lit after the pointer had moved
+ * away, on that message, until something else was clicked. `:focus-visible`
+ * is the distinction the browser already draws between "I tabbed here" and "I
+ * clicked here", which is exactly the one wanted.
+ */
+.msg--user:has(.msg__action:focus-visible) .msg__actions {
+  opacity: 1;
+}
+.msg--user.is-editing .msg__actions { visibility: hidden; }
+.msg__action {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s;
+}
+.msg__action:hover { background: var(--surface-2); color: var(--text); }
+.msg__action.is-done { color: var(--accent); }
+/* No hover on a touch screen, so there is nothing to reveal — they simply stay. */
+@media (hover: none) {
+  .msg__actions { opacity: 1; }
+}
+
+/* The bubble while it is being rewritten. */
+.msg--user.is-editing .bubble {
+  width: min(680px, 100%);
+  max-width: 100%;
+}
+.bubble__edit {
+  width: 100%;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+  outline: none;
+  scrollbar-width: none;
+}
+.bubble__edit::-webkit-scrollbar { display: none; }
+.bubble__editrow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.msg__role {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.msg__role .dot { width: 6px; height: 6px; background: var(--accent); }
+
+.prose { word-break: break-word; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose p { margin: 0 0 13px; }
+.prose h1, .prose h2, .prose h3, .prose h4 {
+  margin: 22px 0 9px;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+}
+.prose h1 { font-size: 21px; }
+.prose h2 { font-size: 18px; }
+.prose h3 { font-size: 16px; }
+.prose ul, .prose ol { margin: 0 0 13px; padding-left: 22px; }
+.prose li { margin-bottom: 5px; }
+.prose a { color: var(--accent); text-underline-offset: 3px; }
+.prose blockquote {
+  margin: 0 0 13px;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--line);
+  color: var(--text-dim);
+}
+.prose hr { margin: 20px 0; border: 0; border-top: 1px solid var(--line); }
+.prose code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+.prose table {
+  width: 100%;
+  margin-bottom: 13px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.prose th, .prose td {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+}
+.prose th { background: var(--surface); }
+
+.codeblock {
+  position: relative;
+  margin: 0 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #0d1216;
+  overflow: hidden;
+}
+.codeblock__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 6px 13px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.codeblock pre {
+  margin: 0;
+  padding: 13px;
+  overflow-x: auto;
+}
+.codeblock code {
+  padding: 0;
+  background: none;
+  font-family: var(--mono);
+  font-size: 12.8px;
+  line-height: 1.6;
+}
+.copy-btn {
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+.copy-btn:hover { color: var(--accent); border-color: var(--accent-dim); }
+
+/* ── Reasoning + tools ───────────────────────────────────────── */
+
+details.block {
+  margin: 0 0 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+details.block > summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 13px;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+details.block > summary::-webkit-details-marker { display: none; }
+details.block > summary::after {
+  content: '›';
+  margin-left: auto;
+  color: var(--text-faint);
+  transition: transform 0.15s;
+}
+details.block[open] > summary::after { transform: rotate(90deg); }
+details.block .block__body {
+  padding: 0 13px 13px;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+details.block pre {
+  margin: 0;
+  padding: 11px;
+  border-radius: 8px;
+  background: #0d1216;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool__name {
+  color: var(--warn);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.tool__arg {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool__time { color: var(--text-faint); font-size: 11.5px; }
+.tool--error .tool__name { color: var(--danger); }
+
+.spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--line);
+  border-top-color: var(--warn);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.plan {
+  margin: 0 0 14px;
+  padding: 13px 15px;
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  background: var(--bg-elev);
+}
+.plan h4 {
+  margin: 0 0 9px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.plan li {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  margin-bottom: 5px;
+  list-style: none;
+  font-size: 13.5px;
+}
+.plan ul { margin: 0; padding: 0; }
+.plan .is-done { color: var(--text-faint); text-decoration: line-through; }
+.plan .is-active { color: var(--accent); }
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 780px;
+  margin: 0 auto 18px;
+  padding: 0 22px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.status-line .spinner { border-top-color: var(--accent); }
+
+/* ── Approval ────────────────────────────────────────────────── */
+
+.approval {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 13px 22px;
+  border: 1px solid var(--warn);
+  border-radius: 14px;
+  background: rgba(255, 180, 84, 0.07);
+}
+.approval__list {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12.2px;
+}
+.approval__actions { display: flex; gap: 8px; }
+.warn-text { color: var(--warn); }
+
+/* ── Composer ────────────────────────────────────────────────── */
+
+/* No background of its own — the dock above supplies the fade, and a second
+   gradient here would show as a hard seam across it. */
+.composer {
+  padding: 10px 22px calc(14px + var(--safe-b));
+}
+.composer__box {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 780px;
+  margin: 0 auto;
+  /* Even on both sides now that the left holds two controls rather than one. */
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  /* Opaque, because the transcript now scrolls behind it. */
+  background: var(--surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.15s;
+}
+.composer__box:focus-within {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.composer textarea {
+  flex: 1;
+  max-height: 42vh;
+  /* Matched to the round controls beside it. The box aligns on `flex-end` so
+     the buttons stay at the bottom as the text grows — but at rest a 38.5px
+     textarea against 36px buttons left the whole row a couple of pixels out of
+     true, which reads as the buttons sitting high rather than as the text
+     sitting low. */
+  min-height: 36px;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  resize: none;
+  outline: none;
+  font-size: 15px;
+  line-height: 1.5;
+  /* No scrollbar in the writing box.
+     Windows draws a classic bar *with arrow buttons* — a little grey stepper
+     that appeared inside the composer and looked like a control you were
+     supposed to press. It showed up on an empty box too: autosize sets the
+     height from `scrollHeight`, which is a rounded integer, so a line that is
+     really 22.5px tall leaves the element believing it overflows by half a
+     pixel. It still scrolls with the wheel and the keyboard when the text is
+     genuinely long; there is simply nothing drawn. */
+  scrollbar-width: none;
+}
+.composer textarea::-webkit-scrollbar { display: none; }
+.composer__actions { display: flex; gap: 6px; }
+/* Round, and quiet until there is something to send.
+   A permanently lit button is a permanently lit button: it stops meaning
+   "ready" and becomes part of the furniture. Grey while the box is empty and
+   green the moment it is not turns the control into an answer to "will this
+   do anything if I press it". */
+.icon-btn--send {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: 17px;
+  font-weight: 700;
+  transition: background 0.15s, color 0.15s, transform 0.06s;
+}
+.icon-btn--send.is-ready {
+  background: var(--accent);
+  color: #06231a;
+}
+.icon-btn--send.is-ready:hover { background: #74f0b8; }
+.icon-btn--send:active { transform: scale(0.94); }
+.icon-btn--send:disabled { background: var(--surface-2); color: var(--text-faint); cursor: not-allowed; }
+
+.icon-btn--stop {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--danger);
+}
+
+/* The attachment button, on the other side of the box. */
+.icon-btn--attach {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  flex: none;
+}
+.icon-btn--attach svg { display: block; }
+.icon-btn--attach:hover { background: var(--surface-2); color: var(--accent); }
+
+/* The context ring, beside the attach button rather than up in the header.
+   Sized to match it: two round controls of different diameters sitting next to
+   each other is the kind of thing you cannot name but can see. */
+.composer__box .gauge {
+  width: 36px;
+  height: 36px;
+  padding: 3px;
+  border-color: transparent;
+  background: transparent;
+}
+.composer__box .gauge.has-number {
+  width: auto;
+  padding: 3px 10px 3px 6px;
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+.composer__box .gauge:hover { border-color: var(--accent-dim); }
+
+.composer__meta {
+  max-width: 780px;
+  margin: 7px auto 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-align: center;
+  min-height: 16px;
+}
+
+/* ── Settings sheet ──────────────────────────────────────────── */
+
+/**
+ * One dialog, one scrollbar.
+ *
+ * A <dialog> carries `overflow: auto` from the browser's own stylesheet, so a
+ * sheet whose contents were taller than its max-height grew a scrollbar of its
+ * own — on top of the one on the scrolling region inside it, and a horizontal
+ * one whenever a flex row refused to shrink. Making the sheet a flex column
+ * that never scrolls leaves exactly one scrolling element: the body.
+ */
+.sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(660px, 100%);
+  max-height: 88dvh;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--glass-line);
+  border-radius: 18px;
+  background: var(--glass-solid);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  color: var(--text);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-hi);
+}
+/* A closed <dialog> is hidden by the browser's own `display: none`, which any
+   author rule — including the `display: flex` above — silently overrides. Put
+   it back, or every closed sheet keeps its full height in the layout and drags
+   a scrollbar onto the whole page. */
+.sheet:not([open]) {
+  display: none;
+}
+/* Everything except the body keeps its natural height and never shrinks. */
+.sheet__head,
+.sheet__tabs,
+.browser__controls,
+.browser__foot {
+  flex: none;
+}
+.sheet::backdrop { background: rgba(0, 0, 0, 0.62); backdrop-filter: blur(3px); }
+.sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.sheet__head h2 { margin: 0; font-size: 17px; }
+/* Nine tabs do not fit a narrow sheet, so this scrolls sideways — deliberately,
+   and without a scrollbar sitting under the row. The fade is the affordance. */
+.sheet__tabs {
+  display: flex;
+  gap: 3px;
+  padding: 10px 12px 0;
+  border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+.sheet__tabs::-webkit-scrollbar { display: none; }
+.tab {
+  padding: 8px 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-faint);
+  font-size: 13.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+/* `min-height: 0` is what actually lets this scroll: a flex child defaults to
+   min-height:auto and would otherwise grow to fit its content instead. */
+.sheet__body {
+  flex: 1;
+  min-height: 0;
+  padding: 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.panel { display: none; }
+.panel.is-active { display: block; }
+
+.field { margin-bottom: 15px; }
+.field label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.field input,
+.field select,
+.field textarea,
+.row select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  outline: none;
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus { border-color: var(--accent-dim); }
+.field textarea { resize: vertical; font-family: var(--font); }
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.row select { flex: 1; }
+
+.hint { color: var(--text-faint); font-size: 12.5px; line-height: 1.6; }
+.steps { padding-left: 20px; color: var(--text-dim); font-size: 13.5px; }
+.steps li { margin-bottom: 10px; }
+.steps code, .hint code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.steps pre {
+  margin: 7px 0 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #0d1216;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.provider {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 13px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.provider__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.provider__name { font-weight: 600; }
+.badge {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--line);
+  color: var(--text-faint);
+}
+.badge--ok { color: var(--accent); border-color: var(--accent-dim); }
+.provider__row { display: flex; gap: 8px; }
+.provider__row input {
+  flex: 1;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  outline: none;
+}
+
+/* ── Toasts ──────────────────────────────────────────────────── */
+
+/* Anchored to the top: the bottom of the screen belongs to the composer, and a
+   stack of messages down there covers the send button exactly when you want it. */
+.toasts {
+  position: fixed;
+  left: 50%;
+  top: 14px;
+  z-index: 60;
+  display: grid;
+  gap: 8px;
+  width: min(560px, calc(100vw - 28px));
+  justify-items: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.toast {
+  max-width: 100%;
+  padding: 10px 16px;
+  border: 1px solid var(--glass-line);
+  border-radius: 12px;
+  background: var(--glass-solid);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--glass-hi);
+  font-size: 13.5px;
+  line-height: 1.45;
+  animation: drop 0.2s ease-out;
+}
+.toast--error { border-color: var(--danger); color: #ffd4d4; }
+@keyframes drop {
+  from { opacity: 0; transform: translateY(-8px); }
+}
+
+/* ── Getting started ──────────────────────────────────────────────
+ *
+ * Deliberately plain. This is the first thing a new account sees and the whole
+ * job is to be read once and dismissed, so nothing here animates, nothing
+ * scrolls sideways, and the two decisions on screen — carry on, or skip — are
+ * the only things that look pressable. */
+.sheet--onb { width: min(560px, 100%); }
+.onb { padding: 22px 24px 20px; }
+.onb__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.onb__head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 17px;
+}
+.onb__count {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+/* A fixed floor so stepping between a short panel and a tall one does not make
+   the dialog jump under the pointer that is about to press Continue again. */
+.onb__body { min-height: 268px; padding-top: 12px; }
+.onb__title {
+  margin: 0 0 8px;
+  font-size: 15.5px;
+  font-weight: 600;
+}
+.onb__body p { margin: 0 0 10px; line-height: 1.55; }
+.onb__list {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  line-height: 1.55;
+}
+.onb__list li { margin-bottom: 7px; }
+/* The sentence that states a trade-off. Marked, because the honest caveat is the
+   one people skim past, and it is the one that saves them an afternoon. */
+.onb__tip {
+  padding: 10px 12px;
+  border-left: 2px solid var(--warn);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.onb__state {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 13.5px;
+}
+.onb__state.is-done { border-color: var(--accent-dim); }
+.onb__state.is-todo { border-color: var(--warn); }
+.onb__state.is-free { border-color: var(--accent-dim); }
+/* The three sample questions. Full-width rows rather than a grid: they are
+   sentences of different lengths, and a grid would either clip them or leave a
+   ragged hole. */
+.onb__tries {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.onb__try {
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.onb__try:hover {
+  border-color: var(--accent-dim);
+  background: var(--surface-2);
+}
+.onb__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+.onb__spacer { flex: 1; }
+
+@media (max-width: 860px) {
+  .onb { padding: 18px 16px 16px; }
+  .onb__body { min-height: 0; }
+}
+
+
+/* ── Suggested MCP servers ────────────────────────────────────────
+ *
+ * A grid of cards rather than a dropdown: each one needs a sentence to be
+ * choosable at all, and a <select> cannot carry one. */
+.mcp-cat {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.mcp-cat__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.mcp-cat__item:hover { border-color: var(--accent-dim); background: var(--surface-2); }
+.mcp-cat__name { font-size: 13.5px; font-weight: 600; }
+.mcp-cat__blurb { color: var(--text-dim); font-size: 11.5px; line-height: 1.45; }
+.mcp-cat__needs {
+  align-self: flex-start;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+
+/* ── A picture drawn into the transcript ──────────────────────────
+ *
+ * The height is the awkward part. The frame is sandboxed with no scripting on
+ * purpose, so nothing inside it can measure itself and report back — which means
+ * the height has to be decided from out here. A generous default with room to
+ * grow beats a scrollbar around a diagram: a cropped picture is worse than a tall
+ * box, and most of what lands here is one screenful of SVG. */
+.widget {
+  margin: 10px 0 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+.widget__caption {
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.widget__frame {
+  display: block;
+  width: 100%;
+  /* Tall enough for an ordinary diagram, and it scrolls rather than crops if the
+     content genuinely exceeds it. */
+  height: 340px;
+  max-height: 70vh;
+  border: 0;
+  background: transparent;
+}
+@media (max-width: 860px) {
+  .widget__frame { height: 260px; }
+}
+
+/* ── Mobile ──────────────────────────────────────────────────── */
+
+@media (max-width: 860px) {
+  .app,
+  .app.is-detail { grid-template-columns: 1fr; }
+
+  .sidebar {
+    position: fixed;
+    z-index: 20;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(84vw, var(--sidebar-w));
+    /* Opaque here, unlike the docked column. On a phone the drawer slides over
+       the conversation rather than sitting beside it, and a transparent panel
+       with a transcript legible through it is not a panel. */
+    background: var(--bg-elev);
+    box-shadow: var(--shadow);
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+  }
+  .app.is-open .sidebar { transform: none; }
+
+  /* No room for a third column on a phone, so the rail slides over from the
+     right the way the sidebar slides in from the left. */
+  .detail {
+    position: fixed;
+    z-index: 20;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(88vw, 380px);
+    background: var(--bg-elev);
+    box-shadow: var(--shadow);
+    transform: translateX(102%);
+    transition: transform 0.22s ease;
+  }
+  .app.is-detail .detail {
+    transform: none;
+    visibility: visible;
+  }
+  .sidebar__close { display: inline-grid; }
+  /* The drawer either is or is not; collapsing it to a rail on a phone would
+     leave a column of icons over the conversation for no gain. */
+  .sidebar__collapse { display: none; }
+
+  .topbar__menu { display: inline-grid; }
+  .msg, .status-line { padding-inline: 16px; }
+  .composer { padding-inline: 14px; }
+  .chip { max-width: 34vw; }
+  .sheet { max-height: 92dvh; border-radius: 18px 18px 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   "There is a new model"
+
+   A modal, because it asks a question with two different answers —
+   and centred, because a corner toast is something you dismiss by
+   reflex rather than read. Narrower than the other sheets: it holds
+   one thing to decide about, and a wide column of facts is harder to
+   scan than a short one.
+   ───────────────────────────────────────────────────────────── */
+.sheet--news {
+  width: min(460px, 100%);
+  max-height: 86dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.news {
+  padding: 26px 26px 22px;
+}
+
+.news__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.news__badge {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--accent-glow);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.news__vendor {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.news__title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.news__id {
+  margin: 0 0 18px;
+}
+.news__id code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+/* Label above value rather than beside it: the values are long enough that two
+   columns would wrap into a mess on a phone. */
+.news__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px 16px;
+  margin: 0 0 18px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.news__facts dt {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.news__facts dd {
+  margin: 3px 0 0;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.news__body {
+  margin: 0 0 16px;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.6;
+  /* Vendor blurbs run long; keep the buttons above the fold. */
+  max-height: 10.5em;
+  overflow-y: auto;
+}
+
+.news__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+.news__actions .btn { flex: 1; }
+
+.news__small {
+  margin: 12px 0 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* ── paired computers ──────────────────────────────────────── */
+
+/* The status dot sits inside a row here rather than in the sidebar, so it needs
+   to hold its size against a flex parent that would otherwise squash it. */
+.rows__item > .dot {
+  flex: none;
+}
+
+.rows__item .tag {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-dim);
+  background: var(--accent-glow);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+/* "Use this one" is an ordinary action; only Unpair is destructive, and the
+   shared `.rows__item button:hover` rule turns everything red. */
+.rows__item button[data-use-device]:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+/* A collapsed escape hatch for the manual token path. */
+.fold {
+  margin-top: 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.fold > summary {
+  padding: 11px 14px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
+  user-select: none;
+}
+.fold > summary:hover { color: var(--text); }
+.fold[open] > summary { border-bottom: 1px solid var(--line-soft); }
+.fold > :not(summary) { padding: 0 14px; }
+.fold > :last-child { padding-bottom: 14px; }
+
+/* The label above each computer's working-folder box. Small and quiet: the row
+   below it is the thing you interact with. */
+.device__label {
+  display: block;
+  margin: 14px 0 6px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* The status dot sits inline with a computer's name here, so it must not be
+   stretched by the flex row it lives in. */
+.provider__name > .dot {
+  display: inline-block;
+  flex: none;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Attached photos and files
+
+   Above the composer rather than inside it. A thumbnail strip that
+   grows sideways inside the box would fight the text for room, and
+   the whole point of a preview is being able to see the thing.
+   ───────────────────────────────────────────────────────────── */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 780px;
+  margin: 0 auto 8px;
+}
+
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 240px;
+  padding: 6px 8px 6px 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.attachment--failed { border-color: var(--danger); }
+
+.attachment__thumb {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+/* No thumbnail to show, so the extension stands in for one. */
+.attachment__icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.attachment__body { min-width: 0; }
+.attachment__name {
+  display: block;
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment__meta {
+  display: block;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.attachment--failed .attachment__meta { color: var(--danger); }
+
+.attachment__remove {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+.attachment__remove:hover { background: var(--surface-2); color: var(--danger); }
+
+/* Dragging a file anywhere over the window is the other way people attach one,
+   so the whole app acknowledges it rather than one small target. */
+.app.is-dropping .composer__box {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* ── attachments inside a sent message ─────────────────────── */
+
+.bubble__files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.bubble__files:last-child { margin-bottom: 0; }
+
+.bubble__image {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.bubble__file {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 220px;
+  padding: 5px 10px 5px 5px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  font-size: 12.5px;
+}
+.bubble__file > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bubble__file-ext {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.bubble__text { white-space: pre-wrap; word-break: break-word; }
+
+/* ── the Computers chip and its sheet ──────────────────────── */
+
+.chip--pair .dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+}
+
+.sheet--pair { width: min(520px, 100%); }
+.sheet--pair .sheet__body { padding: 20px 22px 24px; }
+.sheet--pair h3 { margin: 22px 0 6px; font-size: 14px; }
+.sheet--pair h3:first-of-type { margin-top: 0; }
+
+/* The code this machine is offering. Big and monospaced because it is meant to
+   be read across a room or typed on a phone. */
+.pair-offer {
+  margin-bottom: 22px;
+  padding: 16px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 12px;
+  background: var(--accent-glow);
+}
+.pair-offer .hint { margin: 0 0 10px; }
+.pair-offer .hint:last-child { margin: 10px 0 0; }
+
+.pair-code {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pair-code code {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-align: center;
+  user-select: all;
+}
+.pair-code .btn { flex: none; }
+
+/* The code box, typed into rather than read from. */
+#pair-code {
+  font-family: var(--mono);
+  font-size: 16px;
+  letter-spacing: 0.14em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* The composer's "this model cannot see images" line.
+   Amber rather than red: nothing has failed yet, and it is still perfectly
+   reasonable to send the message and let the assistant say so. */
+.composer__warn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 780px;
+  margin: 0 auto 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  background: rgba(255, 180, 84, 0.08);
+  color: var(--warn);
+  font-size: 12.5px;
+}
+.composer__warn button {
+  flex: none;
+  margin-left: auto;
+  padding: 4px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--warn);
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer__warn button:hover { background: rgba(255, 180, 84, 0.16); }
+
+/* "sees images" in the model picker. The one capability whose absence fails the
+   whole request rather than just answering worse. */
+.tag--vision {
+  border-color: var(--info);
+  color: var(--info);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   The context gauge
+
+   A ring rather than a number, because the shape reads without
+   being read: a quarter full is obviously fine. The number joins
+   in past halfway, which is when it starts to matter.
+   ───────────────────────────────────────────────────────────── */
+/*
+ * Round while it is only a ring.
+ *
+ * The padding used to lean right to leave room for a number that is absent most
+ * of the time, and the row stretches its controls to a common height — so the
+ * quiet state came out 36 wide by 38 tall with the ring 6px from one edge and
+ * 10px from the other. Small numbers, but a circle inside a not-quite-circle is
+ * exactly the kind of thing the eye catches without being able to name.
+ *
+ * So: symmetric padding, centred contents, and a square the size of every other
+ * control in the row. `aspect-ratio` cannot do this job — the row stretches its
+ * items, so the height is not definite when the width is being resolved and the
+ * ratio is quietly ignored. The number state stops being square and pads for
+ * text instead.
+ */
+.gauge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: var(--control-h);
+  height: var(--control-h);
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.gauge.has-number {
+  width: auto;
+  /* Less on the ring's side than the number's: a stroked circle reads as
+     lighter than digits do, so equal padding would look lopsided. */
+  padding: 4px 11px 4px 7px;
+}
+.gauge:hover { border-color: var(--accent-dim); color: var(--text); }
+
+.gauge__track { stroke: var(--line); }
+.gauge__fill {
+  stroke: var(--accent);
+  /* The dash length is the value; animating it makes the ring fill rather than
+     jump, which is what makes it read as a gauge at all. */
+  transition: stroke-dasharray 400ms cubic-bezier(0.4, 0, 0.2, 1), stroke 300ms;
+}
+.gauge.is-warm .gauge__fill { stroke: var(--warn); }
+.gauge.is-warm { color: var(--warn); border-color: rgba(255, 180, 84, 0.4); }
+.gauge.is-hot .gauge__fill { stroke: var(--danger); }
+.gauge.is-hot { color: var(--danger); border-color: rgba(255, 107, 107, 0.45); }
+
+.gauge__label:empty { display: none; }
+
+/* ── projects ────────────────────────────────────────────────── */
+
+/* The header chip. Green when the answers are held to the sources, plain when
+   the project is only instructions and a folder. */
+.chip--project { border-color: var(--line); }
+.chip--project.is-grounded {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.project-card {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.project-card:hover { border-color: var(--accent-dim); transform: translateY(-1px); }
+.project-card__name { font-weight: 600; }
+.project-card__meta {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.project-card__note {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One source, or one of a project's conversations. */
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-bottom: 6px;
+  color: var(--text);
+  text-align: left;
+  font-size: 13.5px;
+}
+.source-row--chat { cursor: pointer; }
+.source-row--chat:hover { border-color: var(--accent-dim); }
+.source-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-row__meta {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.btn--small { padding: 5px 9px; font-size: 12px; }
+.btn--back { margin-bottom: 14px; }
+.section-head {
+  margin: 22px 0 6px;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* ── the approval policy, beside send ──────────────────────── */
+
+.policy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.policy:hover { border-color: var(--accent-dim); color: var(--text); }
+/* Only the policy that runs everything looks like it. An amber control is a
+   reminder, and a reminder that is always lit stops being one. */
+.policy.is-loud { border-color: rgba(255, 180, 84, 0.5); color: var(--warn); }
+.policy.is-quiet { color: var(--text-faint); }
+.policy__icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+
+/* On a narrow screen the word goes and the glyph carries the meaning — which
+   is only true if the glyph itself stays, so this names the label rather than
+   every span in the chip. */
+@media (max-width: 560px) {
+  .policy #policy-label { display: none; }
+  .policy { padding: 0 10px; }
+}
+
+/* ── menus with a description under each choice ────────────── */
+
+.menu--policy,
+.menu--context {
+  width: min(320px, calc(100vw - 16px));
+}
+.menu__head {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.menu__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+.menu__hint {
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: normal;
+}
+.menu__item.is-active { color: var(--accent); }
+.menu__item.is-active .menu__hint { color: var(--accent-dim); }
+
+/* The glyph sits in its own column so the descriptions under each label all
+   start on the same line, however tall the row above it grew. */
+.menu__icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  align-self: start;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  color: var(--text-dim);
+}
+.menu__item.is-active .menu__icon { color: var(--accent); }
+.menu__check {
+  margin-left: auto;
+  align-self: start;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+/* A setting rather than a choice, so it is fenced off below the modes. */
+.menu__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 5px;
+  padding: 9px 12px 4px;
+  border-top: 1px solid var(--line-soft);
+}
+.menu__foot-name {
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.effort-dots {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+/* Five steps drawn as five dots: the ones you have passed stay lit but small,
+   so the row reads as a level and not as five unrelated buttons. */
+.effort-dot {
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--line);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+}
+.effort-dot:hover { background: var(--text-dim); }
+.effort-dot.is-under { background: var(--accent-dim); }
+.effort-dot.is-on {
+  background: var(--accent);
+  transform: scale(1.5);
+}
+.effort-dot:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
+
+/* ── where a conversation was folded up ────────────────────── */
+
+.compacted {
+  max-width: 780px;
+  margin: 18px auto;
+}
+/* A rule with the reason written into it, rather than a gap that looks like
+   something went missing — because something did, and this says what. */
+.compacted__line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-align: center;
+  white-space: nowrap;
+}
+.compacted__line::before,
+.compacted__line::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.compacted__fold { margin-top: 10px; }
+
+/* ─────────────────────────────────────────────────────────────
+   Documents: the cards, and the viewer that opens them
+
+   A Word file, a spreadsheet and a deck cannot be drawn by a
+   browser, so the server reads them and hands over structure.
+   Everything below is how that structure looks: a page, a grid,
+   a stack of slides. Nothing here fetches or renders a foreign
+   stylesheet — the markup is built from escaped text.
+   ───────────────────────────────────────────────────────────── */
+
+/* ── a file the assistant made, in the transcript ───────────── */
+
+.filecard {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 10px 0 4px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.filecard:hover { border-color: var(--accent-dim); }
+
+.filecard__icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.filecard__body { min-width: 0; flex: 1; }
+.filecard__name {
+  display: block;
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filecard__meta {
+  display: block;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+/* Small and quiet: the card itself is the affordance, and two loud buttons on
+   every document would compete with the conversation around them. */
+.filecard__btn {
+  flex: none;
+  padding: 6px 11px;
+  font-size: 12.5px;
+  text-decoration: none;
+}
+
+/* An attachment chip is a button now, so it needs a button's manners back. */
+.bubble__file {
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.bubble__file:hover { background: rgba(0, 0, 0, 0.34); }
+.bubble__thumb {
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  line-height: 0;
+  cursor: pointer;
+}
+.bubble__thumb:hover { outline: 2px solid var(--accent-dim); outline-offset: 1px; }
+
+/* ── the chip that lists them ───────────────────────────────── */
+
+.chip--files::before {
+  content: '';
+  width: 12px;
+  height: 13px;
+  flex: none;
+  background: currentColor;
+  /* A page with a folded corner, drawn rather than shipped as an image. */
+  clip-path: polygon(0 0, 66% 0, 100% 32%, 100% 100%, 0 100%);
+  opacity: 0.55;
+}
+
+/* ── the viewer ─────────────────────────────────────────────── */
+
+.viewer__ident { min-width: 0; }
+.viewer__ident h2 {
+  overflow: hidden;
+  font-size: 15.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viewer__meta {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+.viewer__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: none;
+}
+.viewer__actions .btn { padding: 7px 13px; font-size: 12.5px; text-decoration: none; }
+
+.viewer__body { padding: 0; }
+.viewer__loading {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 40px 22px;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+.viewer__empty { padding: 40px 22px; color: var(--text-dim); font-size: 13.5px; }
+.viewer__note {
+  padding: 10px 22px 18px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.viewer__code {
+  margin: 0;
+  padding: 18px 22px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.viewer__frame {
+  display: block;
+  width: 100%;
+  height: 78dvh;
+  border: 0;
+  background: #fff;
+}
+.viewer__image {
+  display: grid;
+  place-items: center;
+  padding: 22px;
+}
+.viewer__image img { max-width: 100%; max-height: 74dvh; border-radius: 10px; }
+
+/* ── a Word document, as a page ─────────────────────────────── */
+
+.doc {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 34px 30px 60px;
+  font-size: 14.5px;
+  line-height: 1.72;
+}
+.doc h1, .doc h2, .doc h3, .doc h4, .doc h5, .doc h6 {
+  margin: 1.7em 0 .5em;
+  line-height: 1.3;
+}
+.doc h1 { margin-top: 0; font-size: 1.75em; }
+.doc h2 { font-size: 1.35em; }
+.doc h3 { font-size: 1.15em; }
+.doc p, .doc ul, .doc ol, .doc table, .doc pre, .doc blockquote { margin: 0 0 1em; }
+.doc ul, .doc ol { padding-left: 1.5em; }
+.doc li { margin: .25em 0; }
+.doc li > ul, .doc li > ol { margin: .25em 0; }
+.doc blockquote {
+  margin-left: 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--line);
+  color: var(--text-dim);
+  font-style: italic;
+}
+.doc code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: .9em;
+}
+.doc pre {
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  overflow-x: auto;
+}
+.doc pre code { padding: 0; background: none; }
+.doc hr { border: 0; border-top: 1px solid var(--line); margin: 1.8em 0; }
+.doc a { color: var(--info); }
+.doc table { border-collapse: collapse; width: 100%; font-size: .94em; }
+.doc th, .doc td {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.doc th { background: var(--surface-2); }
+/* Where a page ended in the original, kept visible rather than silently
+   flattened — it is the difference between one page and four. */
+.doc .pagebreak {
+  height: 0;
+  margin: 1.8em 0;
+  border-top: 1px dashed var(--line);
+  break-after: page;
+}
+
+/* ── a spreadsheet, as a grid ───────────────────────────────── */
+
+.grid-wrap { overflow: auto; max-height: 74dvh; }
+.grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.grid th, .grid td {
+  min-width: 96px;
+  max-width: 380px;
+  padding: 5px 9px;
+  border-right: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grid td.is-number { text-align: right; font-family: var(--mono); font-size: 12px; }
+/* The header row and the row numbers stay put, because a spreadsheet whose
+   column letters scroll away is a wall of values with no addresses. */
+.grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-width: 0;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-weight: 500;
+  text-align: center;
+}
+.grid__rownum {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 44px;
+  width: 44px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-weight: 500;
+  text-align: right;
+}
+.grid__corner {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  min-width: 44px;
+  width: 44px;
+  background: var(--surface-2);
+}
+
+/* The sheet tabs, along the top of a workbook. */
+.viewer__sheets {
+  display: flex;
+  gap: 3px;
+  flex: none;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.viewer__sheets::-webkit-scrollbar { display: none; }
+.sheet-tab {
+  padding: 7px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sheet-tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── a deck, as slides ──────────────────────────────────────── */
+
+.slides {
+  display: grid;
+  gap: 16px;
+  padding: 20px 22px 30px;
+}
+.slide {
+  position: relative;
+  padding: 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  /* The shape of the thing being previewed, so a deck reads as a deck. */
+  aspect-ratio: 16 / 9;
+  overflow: auto;
+}
+.slide__no {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.slide h3 { margin: 0 0 14px; font-size: 19px; line-height: 1.3; }
+.slide ul { margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+.slide li { margin: 5px 0; }
+.slide li.lvl-1 { margin-left: 18px; color: var(--text-dim); font-size: 13.5px; }
+.slide li.lvl-2 { margin-left: 36px; color: var(--text-dim); font-size: 13px; }
+.slide li.lvl-3, .slide li.lvl-4 { margin-left: 54px; color: var(--text-faint); font-size: 12.5px; }
+.slide__table { margin-top: 12px; border-collapse: collapse; font-size: 13px; }
+.slide__table th, .slide__table td { padding: 5px 9px; border: 1px solid var(--line); text-align: left; }
+.slide__notes {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  color: var(--text-faint);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.slide__notes span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+/* ── printing, which is also how a PDF gets made ────────────── */
+
+/* There is no PDF writer on the server: one that got Vietnamese right would
+   need a Unicode font embedded, and a document with boxes where the diacritics
+   were is worse than no document at all. The browser already has the fonts and
+   a perfectly good PDF exporter behind its print dialog, so that is the road —
+   and this is what makes what comes out of it the document rather than the
+   application around it. */
+@media print {
+  body.is-printing > *:not(#filepane),
+  body.is-printing .filepane__bar,
+  body.is-printing .filepane__versions,
+  body.is-printing .viewer__sheets,
+  body.is-printing .toasts {
+    display: none !important;
+  }
+  /* Every one of these undoes something that would otherwise cost pages.
+     `position: fixed` prints the first screenful and stops — the element is
+     pinned to the viewport, and a viewport is one page. `height: 100dvh`
+     does the same by another route, and every `overflow` in the chain
+     clips whatever did not fit. A document that printed page one and
+     silently dropped the other eleven is the failure this prevents. */
+  body.is-printing #filepane {
+    position: static !important;
+    inset: auto !important;
+    display: block;
+    width: auto !important;
+    height: auto !important;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: #fff;
+    box-shadow: none;
+    color: #000;
+    overflow: visible !important;
+  }
+  body.is-printing .filepane__body {
+    height: auto !important;
+    max-height: none;
+    padding: 0;
+    background: #fff;
+    overflow: visible !important;
+  }
+  body.is-printing .doc { max-width: none; padding: 0; color: #000; }
+  body.is-printing .grid-wrap { max-height: none; overflow: visible !important; }
+
+  /* Repeat a table's header on every page it spans, and never split a row
+     across the fold. Both are what makes a printed spreadsheet readable. */
+  body.is-printing .grid thead { display: table-header-group; }
+  body.is-printing .grid tr,
+  body.is-printing .doc table tr { break-inside: avoid; }
+  body.is-printing .doc table thead { display: table-header-group; }
+
+  /* A heading alone at the bottom of a page, or one orphaned line at the top
+     of the next, is the difference between a document and a printout. */
+  body.is-printing .doc h1,
+  body.is-printing .doc h2,
+  body.is-printing .doc h3 { break-after: avoid; }
+  body.is-printing .doc p,
+  body.is-printing .doc li { orphans: 2; widows: 2; }
+
+  /* Links keep their colour but lose the underline-blue that reads as broken
+     on paper; the address itself is not printed, because a footnote after
+     every link in a quotation is noise. */
+  body.is-printing .doc a { color: #000; text-decoration: underline; }
+
+  /* The running page and the editor cannot be printed usefully — a frame is
+     a live document this stylesheet does not reach into, and a textarea
+     prints its first visible rows and nothing else. Saying so beats handing
+     somebody a blank sheet. */
+  body.is-printing .viewer__frame,
+  body.is-printing .editor { display: none !important; }
+  body.is-printing .grid th,
+  body.is-printing .grid td { border-color: #bbb; color: #000; }
+  body.is-printing .grid thead th,
+  body.is-printing .grid__rownum,
+  body.is-printing .grid__corner { position: static; background: #eee; }
+  body.is-printing .slide {
+    page-break-after: always;
+    border-color: #bbb;
+    background: #fff;
+    color: #000;
+  }
+  body.is-printing .viewer__code { color: #000; }
+}
+
+/* ── what is waiting to be sent ─────────────────────────────── */
+
+/* Typed while the assistant was working. It sits above the composer rather than
+   going straight in: most of what people type during a long turn is the next
+   thing, not a correction, and having it land mid-task derails work that was
+   going fine. Visible, because a message that has silently gone nowhere is
+   indistinguishable from one that was lost. */
+/* Glass, and tucked *under* the composer so the two read as one control: what
+   you have typed is not a separate widget hovering above the box, it is the top
+   of the box, still waiting to go in. The negative bottom margin slides the
+   composer's own opaque surface over the seam, which is what joins them. */
+.queue {
+  display: grid;
+  gap: 6px;
+  max-width: 780px;
+  margin: 0 auto -18px;
+  padding: 9px 10px 24px;
+  border: 1px solid var(--glass-line);
+  border-bottom: 0;
+  border-radius: 20px 20px 0 0;
+  background: var(--glass-solid);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+
+/**
+ * Three columns, and the middle one is `minmax(0, 1fr)` rather than `1fr`.
+ *
+ * That single token is the bug the user hit. A grid item's automatic minimum is
+ * its *min-content* width, so `1fr` is really "at least as wide as the longest
+ * thing inside me". One long pasted message grew this row to 1729px inside a
+ * 780px container and carried "Send now" and the delete button around 900px off
+ * the right-hand edge of the screen. Both controls were rendered the whole time
+ * and neither could be reached, which is indistinguishable from their not
+ * existing — and that is exactly how it was reported.
+ *
+ * `minmax(0, 1fr)` lets the column shrink below its content, so the text clamps
+ * and the buttons stay where they belong.
+ */
+.queue__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+/* A slow pulse: this is waiting, not working. */
+.queue__wait {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  /* The row aligns on `start` now that the text can be two lines, so the dot
+     needs nudging down to sit on the first line rather than above it. */
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  animation: queue-wait 1.8s ease-in-out infinite;
+}
+@keyframes queue-wait {
+  0%, 100% { opacity: .35; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .queue__wait { animation: none; opacity: .8; }
+}
+
+.queue__body { min-width: 0; }
+
+/**
+ * Two lines, then a control.
+ *
+ * It used to be one line with an ellipsis, which reads as truncation but is
+ * really concealment: a paragraph you typed became "đảm bảo tất cả các file…"
+ * with no way to check what you had actually queued. Two lines is enough to
+ * recognise it, and the rest is one press away.
+ *
+ * `pre-wrap` keeps the line breaks that were typed; `anywhere` is what stops a
+ * pasted path or URL with no spaces in it from becoming a single unbreakable
+ * word and re-creating the overflow this component just got fixed for.
+ */
+.queue__text {
+  margin: 0;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--text-dim);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.queue__item.is-open .queue__text {
+  display: block;
+  /* Long enough to read, short enough that the composer never leaves the
+     screen — the point of expanding is not to lose the box you type in. */
+  max-height: 38vh;
+  overflow: auto;
+}
+
+.queue__more {
+  margin-top: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.queue__more:hover { color: var(--accent); }
+.queue__more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.queue__actions { display: flex; align-items: center; gap: 6px; }
+.queue__files { color: var(--text-faint); font-size: 11.5px; }
+
+.queue__now {
+  flex: none;
+  white-space: nowrap;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.queue__now:hover { border-color: var(--accent-dim); color: var(--accent); }
+
+.queue__drop {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+.queue__drop:hover { background: var(--surface-2); color: var(--danger); }
+
+/* ── several keys for one provider ──────────────────────────── */
+
+/* Shown as a list because they are used as one: tried in order, first one that
+   is not refused answers. The key itself never reaches the browser — the last
+   four characters and the date are enough to tell one from another, which is
+   the only thing this screen has to help you do. */
+.keylist {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.keyrow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px 6px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--bg);
+  font-size: 12.5px;
+}
+
+.keyrow__no {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+.keyrow__hint { font-family: var(--mono); color: var(--text-dim); }
+.keyrow__when { margin-left: auto; color: var(--text-faint); font-size: 11px; }
+.keyrow__badge {
+  padding: 1px 7px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 10.5px;
+}
+.keyrow__drop {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+.keyrow__drop:hover { background: var(--surface-2); color: var(--danger); }
+
+/* ── artifacts ──────────────────────────────────────────────── */
+
+/* Everything the assistant has made, across every conversation. The card in
+   the transcript covers the next five seconds; this covers next week, when the
+   file is what you remember and the chat it came from is not. */
+.artifact {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.artifact:hover { border-color: var(--accent-dim); }
+
+.artifact__ext {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+.artifact__body { min-width: 0; flex: 1; }
+.artifact__name {
+  display: block;
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact__meta {
+  display: block;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact__btn { flex: none; padding: 6px 11px; font-size: 12.5px; text-decoration: none; }
+.artifact__drop {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+}
+.artifact__drop:hover { background: var(--surface-2); color: var(--danger); }
+.artifact__drop.is-armed {
+  width: auto;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #0b0e11;
+  font-size: 11px;
+}
+
+/* ── an artifact, running ───────────────────────────────────── */
+
+/* White behind it: a page written for the web expects a page's background, and
+   the app's dark surface showing through unstyled markup is not what the author
+   of the artifact saw. */
+.viewer__run { background: #fff; }
+
+/* ── editing one ────────────────────────────────────────────── */
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  height: 72dvh;
+}
+.editor__box {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px;
+  border: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  resize: none;
+  outline: none;
+  white-space: pre;
+  tab-size: 2;
+}
+.editor__bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.editor__hint { flex: 1; color: var(--text-faint); font-size: 11.5px; }
+.editor__save { flex: none; padding: 7px 15px; font-size: 12.5px; }
+
+/* ── which models actually run ──────────────────────────────── */
+
+.audit {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12.5px;
+}
+.audit:last-child { border-bottom: 0; }
+.audit__id { font-family: var(--mono); font-size: 12px; }
+.audit__why {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge--bad { color: var(--danger); border-color: var(--danger); }
+
+/* ── the workspace, from the interface ──────────────────────── */
+
+.sheet--workspace { width: min(920px, 100%); }
+.workspace__body { padding: 0; }
+
+/* Where you are, and the way back up. */
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.crumbs::-webkit-scrollbar { display: none; }
+.crumbs__step {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.crumbs__step:hover { background: var(--tint); color: var(--text); }
+.crumbs__sep { color: var(--text-faint); }
+.crumbs__here { padding: 2px 6px; color: var(--accent); }
+
+.entries { display: grid; }
+
+.entry {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--line-soft);
+}
+.entry:hover { background: var(--tint); }
+
+.entry__main,
+.entry--up {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 16px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.entry--up { border-bottom: 1px solid var(--line-soft); color: var(--text-faint); }
+
+.entry__icon {
+  width: 20px;
+  flex: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  text-align: center;
+}
+.entry--dir .entry__icon { color: var(--warn); }
+
+.entry__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.entry__link {
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.entry__meta,
+.entry__when {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.entry__meta { width: 64px; text-align: right; }
+.entry__when { width: 64px; text-align: right; }
+
+.entry__drop {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  margin-right: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+/* Hidden until the row is under the pointer: a delete button on every line of a
+   file listing is an accident looking for somewhere to happen. */
+.entry:hover .entry__drop { color: var(--text-faint); }
+.entry__drop:hover { background: var(--surface-2); color: var(--danger); }
+.entry__drop.is-armed {
+  width: auto;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #0b0e11;
+  font-size: 11px;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Shelves: Projects, Artifacts, Scheduled
+
+   Pages rather than dialogs. You go to a shelf, look through what
+   is on it, and pick one — a sheet floating over the transcript is
+   the wrong shape for that: small, temporary, and implying you were
+   in the middle of something.
+
+   One shell for all three. The header is identical in each — a
+   title, a way to search, a way to order, and the one button that
+   makes a new thing — and three copies of it would drift apart.
+   ───────────────────────────────────────────────────────────── */
+
+.page {
+  flex: 1;
+  min-height: 0;
+  padding: 34px 40px 80px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.page__head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: 1120px;
+  margin: 0 auto 6px;
+}
+
+/**
+ * A serif title, and the only one in the application.
+ *
+ * The chat is a working surface and reads in the interface font; a shelf is a
+ * place you arrive at, and the change of voice at the top of it is what says
+ * so without a word of explanation.
+ */
+.page__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: Georgia, 'Times New Roman', 'Noto Serif', serif;
+  font-size: 34px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.page__tools {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.page__icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: var(--tint);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.page__icon:hover { background: var(--tint-2); color: var(--text); }
+
+
+/* The sort and filter control: a pill that opens a menu, never a <select>,
+   because a native dropdown is a different piece of furniture on every
+   platform and this row has to read as one thing. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 15px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--tint);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pill:hover { background: var(--tint-2); color: var(--text); }
+.pill strong { color: var(--text); font-weight: 500; }
+.pill::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-left: 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  opacity: 0.7;
+}
+
+/* The one button that makes a new thing. White, because there is exactly one
+   of them per shelf and it should be obvious which. */
+.page__new {
+  flex: none;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 13.5px;
+}
+
+/* The menus these controls open. Anchored under the row rather than positioned
+   by script: there is only ever one open, and it belongs to this header. */
+.page__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid var(--glass-line);
+  border-radius: 14px;
+  background: var(--glass-solid);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
+}
+.page__menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.page__menu button:hover { background: var(--tint); }
+.page__menu button.is-active { color: var(--accent); }
+
+.page__lede {
+  max-width: 1120px;
+  margin: 0 auto 22px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.page__lede code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.page__body { max-width: 1120px; margin: 0 auto; }
+
+/* ── the grid of cards ──────────────────────────────────────── */
+
+.cards {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+.cards--wide { grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 150px;
+  padding: 22px 24px;
+  border: 1px solid var(--line-soft);
+  border-radius: 16px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.card:hover { border-color: var(--line); background: var(--surface-2); }
+
+.card__name {
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.card__note {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+/* The date sits at the foot of the card whatever else is in it, so a row of
+   cards of different heights still reads along one line. */
+.card__when {
+  margin-top: auto;
+  padding-top: 12px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+.card__facts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+/* ── an artifact card, which leads with what is in it ───────── */
+
+.card--artifact { padding: 0; overflow: hidden; min-height: 250px; }
+
+/* A window onto the thing itself, cut off rather than scaled: a shrunken
+   screenshot of a document is unreadable, while its first four lines at their
+   real size tell you which document it is. */
+.card__peek {
+  height: 150px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg);
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+  mask-image: linear-gradient(to bottom, #000 62%, transparent);
+}
+.card__peek--code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre;
+  word-break: break-all;
+}
+.card__peek--empty {
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  mask-image: none;
+}
+.card__peek h1, .card__peek h2, .card__peek h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.card__peek p, .card__peek li { margin: 0 0 5px; }
+.card__peek table { border-collapse: collapse; font-size: 11px; }
+.card__peek td, .card__peek th { border: 1px solid var(--line-soft); padding: 2px 5px; }
+
+.card__foot { display: flex; flex-direction: column; gap: 6px; padding: 16px 20px 18px; }
+
+/* ── an empty shelf ─────────────────────────────────────────── */
+
+.blank {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 70px 20px 60px;
+  text-align: center;
+}
+.blank__ring {
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-faint);
+}
+.blank__say { color: var(--text-dim); font-size: 14.5px; }
+
+/* The rule under an empty state, before the suggestions: a soft edge rather
+   than a hard one, because what follows is an offer and not a section. */
+.blank__rule {
+  height: 1px;
+  margin: 46px 0 34px;
+  background: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 12px);
+}
+
+/* ── things you could schedule ──────────────────────────────── */
+
+.ideas {
+  display: grid;
+  gap: 26px 40px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+.idea {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.idea__mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border: 1px solid var(--line-soft);
+  border-radius: 11px;
+  color: var(--text-dim);
+}
+.idea:hover .idea__mark { border-color: var(--accent-dim); color: var(--accent); }
+.idea__name { font-size: 14.5px; font-weight: 600; }
+.idea__what { margin: 3px 0 6px; color: var(--text-dim); font-size: 13px; line-height: 1.55; }
+.idea__when { display: flex; align-items: center; gap: 6px; color: var(--text-faint); font-size: 12px; }
+
+/* ── the notice above a shelf ───────────────────────────────── */
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 30px;
+  padding: 15px 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background: var(--surface);
+  font-size: 13.5px;
+}
+.notice__say { flex: 1; color: var(--text-dim); }
+
+/* ── a row on a shelf that has things on it ─────────────────── */
+
+.task {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background: var(--surface);
+  margin-bottom: 10px;
+}
+.task__body { flex: 1; min-width: 0; }
+.task__name { font-size: 14.5px; font-weight: 600; }
+.task__what {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task__when { display: flex; align-items: center; gap: 7px; margin-top: 6px; color: var(--text-faint); font-size: 12px; }
+.task__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.task--off .task__dot { background: var(--text-faint); }
+.task__act {
+  flex: none;
+  padding: 7px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.task__act:hover { border-color: var(--accent-dim); color: var(--accent); }
+.task__act.is-armed { border-color: var(--danger); background: var(--danger); color: #0b0e11; }
+
+/* ── a switch, for the one setting a shelf carries ──────────── */
+
+.switch {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  flex: none;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+.switch[aria-pressed='true'] { background: var(--accent-dim); }
+.switch[aria-pressed='true']::after { background: var(--accent); transform: translateX(18px); }
+@media (prefers-reduced-motion: reduce) {
+  .switch::after { transition: none; }
+}
+
+/* ── a form in a sheet: the two create dialogs ──────────────── */
+
+.sheet--form { width: min(560px, 100%); }
+.sheet--form .sheet__body { padding: 22px 26px 26px; }
+.form__label {
+  display: block;
+  margin: 0 0 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.form__label span { color: var(--danger); }
+.form__group { margin-bottom: 18px; }
+.form__group input,
+.form__group textarea,
+.form__group select {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+.form__group textarea { min-height: 96px; resize: vertical; line-height: 1.6; }
+.form__group input:focus,
+.form__group textarea:focus,
+.form__group select:focus { border-color: var(--accent-dim); }
+.form__row { display: flex; gap: 10px; align-items: center; }
+.form__row .form__group { flex: 1; margin-bottom: 0; }
+.form__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+.form__foot .btn { padding: 10px 20px; border-radius: 10px; }
+.form__aside { margin-top: -8px; color: var(--text-faint); font-size: 12.5px; line-height: 1.6; }
+
+/* ── narrow screens ─────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  .page { padding: 22px 18px 90px; }
+  .page__title { font-size: 26px; }
+  .page__head { flex-wrap: wrap; gap: 10px; }
+  .page__tools { width: 100%; justify-content: flex-end; }
+  .find { width: 100%; order: -1; }
+  .cards { grid-template-columns: 1fr; }
+  .ideas { grid-template-columns: 1fr; }
+}
+
+/* ── searching across the workspace ─────────────────────────── */
+
+/* The workspace header keeps its field always visible — unlike a shelf, you
+   come here already knowing you want to grep. */
+.workspace__find {
+  width: 230px;
+  padding: 8px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.workspace__find:focus { border-color: var(--accent-dim); }
+
+.hits { margin-bottom: 14px; }
+.hits__count { padding: 12px 16px 4px; }
+.hits__file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 16px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.hits__file:hover { background: var(--tint); }
+.hits__n {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+.hits__line {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 4px 16px 4px 30px;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.hits__line:hover { background: var(--tint); color: var(--text); }
+.hits__no { flex: none; width: 40px; color: var(--text-faint); text-align: right; }
+.hits__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+.hits__text mark { background: var(--accent-glow); color: var(--accent); border-radius: 3px; }
+
+/* Rename and move are one control, because they are one operation. */
+.entry__act {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: transparent;
+  font-size: 13px;
+  cursor: pointer;
+}
+.entry:hover .entry__act { color: var(--text-faint); }
+.entry__act:hover { background: var(--surface-2); color: var(--accent); }
+
+/* ── the search field a shelf grows when you ask for one ────── */
+
+/* One affordance, not two: pressing the magnifier replaces it with this, and
+   clearing puts the magnifier back. Both on screen at once read as two
+   different searches. */
+.find {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: min(320px, 42vw);
+  padding: 0 12px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.find__mark { flex: none; color: var(--text-faint); }
+.find input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+.find__clear {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+.find__clear:hover { background: var(--surface-2); color: var(--text); }
+
+/* ── what a project card offers on hover ────────────────────── */
+
+.card { position: relative; }
+
+/* A project card is a div with `role="button"` rather than a real one, because
+   it has a button of its own inside it and a button cannot nest. That costs the
+   free focus ring, so it is put back by hand. */
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Room at the top right for the pin and the ⋮, so a long name does not run
+   underneath them. */
+.cards--wide .card__name { padding-right: 76px; }
+
+.card__more {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: transparent;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+/* Hidden until the card is under the pointer — a menu button on every card is
+   furniture on a shelf whose whole job is to be scanned. Focus reveals it too,
+   or it would be reachable by keyboard and invisible. */
+.card:hover .card__more,
+.card__more:focus-visible { color: var(--text-dim); }
+.card__more:hover { background: var(--line); color: var(--text); }
+
+.card__pin {
+  position: absolute;
+  top: 18px;
+  right: 52px;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+/* The menu it opens. Positioned by script against the card it belongs to. */
+.cardmenu {
+  position: fixed;
+  z-index: 40;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--glass-line);
+  border-radius: 14px;
+  background: var(--glass-solid);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
+}
+.cardmenu button {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.cardmenu button:hover { background: var(--tint); }
+.cardmenu button.is-danger { color: var(--danger); }
+.cardmenu hr { margin: 5px 8px; border: 0; border-top: 1px solid var(--line-soft); }
+
+/* ── one project, opened ────────────────────────────────────── */
+
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.crumb button {
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.crumb button:hover { color: var(--text); }
+
+/* A pin that is set has to look set, or the menu entry that says "Unpin" is the
+   only way to find out. */
+.page__icon.is-on { background: var(--tint); color: var(--accent); }
+
+.project__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 26px;
+}
+.project__name {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: Georgia, 'Times New Roman', 'Noto Serif', serif;
+  font-size: 30px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+/* Two columns: what you do here, and what this project knows. */
+.project__grid {
+  display: grid;
+  gap: 26px;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  align-items: start;
+}
+
+/* The box that starts a conversation in this project. */
+.starter {
+  padding: 18px 20px 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+}
+.starter textarea {
+  width: 100%;
+  min-height: 72px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+.starter__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.starter__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--tint);
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.starter__send {
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #0b0e11;
+  font-size: 15px;
+  cursor: pointer;
+}
+.starter__send:disabled { background: var(--surface-2); color: var(--text-faint); cursor: default; }
+
+.project__empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* The cards down the right: instructions, memory, context. */
+.panel-card {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.panel-card:last-child { border-bottom: 0; }
+.project__side {
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.panel-card__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.panel-card__name { flex: 1; font-size: 15px; font-weight: 600; }
+.panel-card__add {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-dim);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.panel-card__add:hover { background: var(--tint); color: var(--text); }
+.panel-card__say { color: var(--text-faint); font-size: 12.5px; line-height: 1.6; }
+.panel-card__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.panel-card textarea {
+  width: 100%;
+  min-height: 110px;
+  margin-top: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+}
+.panel-card__foot { display: flex; gap: 8px; margin-top: 10px; }
+.panel-card__foot .btn { padding: 7px 14px; font-size: 12.5px; }
+
+/* A source on the shelf, and the dashed target you can drop one onto. */
+.source {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+.source:last-of-type { border-bottom: 0; }
+.source__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source__size { flex: none; color: var(--text-faint); font-size: 11.5px; }
+.source__drop {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+.source__drop:hover { background: var(--surface-2); color: var(--danger); }
+
+.dropzone {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 26px 16px;
+  margin-top: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-align: center;
+  cursor: pointer;
+}
+.dropzone:hover, .dropzone.is-over { border-color: var(--accent-dim); color: var(--text-dim); }
+
+.chatline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.chatline:hover { border-color: var(--accent-dim); }
+.chatline__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.chatline__when { flex: none; color: var(--text-faint); font-size: 12px; }
+
+@media (max-width: 900px) {
+  .project__grid { grid-template-columns: 1fr; }
+}
+
+/* ── a file, open in the rail ───────────────────────────────── */
+
+/* The panel takes the whole rail rather than stacking under the plan: a
+   document and a checklist sharing a 380px column is neither of them. The rail
+   keeps its own header for Progress, so this one is hidden while a file is up. */
+.app.is-filepane .detail__head,
+.app.is-filepane .detail__body > .progress,
+.app.is-filepane .detail__body > .hint,
+.app.is-filepane .detail__body > .screen { display: none; }
+.app.is-filepane .detail__body { padding: 0; overflow: hidden; }
+
+.filepane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.filepane__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 9px 10px 9px 12px;
+  border-bottom: 1px solid var(--glass-line);
+}
+
+/* Eye / code, the way Claude's panel switches between what a file *is* and what
+   it is made of. Icons rather than words because the bar also has to hold a
+   filename and an action. */
+.filepane__modes {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.fmode {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.fmode:hover { color: var(--text); }
+.fmode.is-active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 0.2); }
+
+.filepane__ident {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.filepane__name {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filepane__kind {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* One button that does the obvious thing, and an arrow for the rest. Pressing
+   "Open in Word" should not first require choosing it from a list. */
+.filepane__act {
+  display: flex;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.filepane__do,
+.filepane__more {
+  border: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.filepane__do { padding: 6px 11px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filepane__more { padding: 6px 7px; border-left: 1px solid var(--line); font-size: 10px; }
+.filepane__do:hover, .filepane__more:hover { background: var(--line); }
+.filepane__do:disabled { color: var(--text-faint); cursor: default; }
+
+/* Which saved draft is on screen. */
+.filepane__versions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.filepane__versions::-webkit-scrollbar { display: none; }
+.filepane__vlabel { flex: none; color: var(--text-faint); font-size: 11px; }
+.vchip {
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.vchip:hover { border-color: var(--accent-dim); color: var(--text); }
+.vchip.is-active { border-color: var(--accent); color: var(--accent); }
+.vchip--restore { margin-left: auto; border-color: var(--accent-dim); color: var(--accent); }
+
+.filepane__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+/* Full size. The panel is moved to <body> first — see `expand()` — because
+   `.detail` has a transform and is therefore a containing block for `fixed`,
+   which is what used to draw an expanded panel underneath the sidebar. */
+.filepane.is-full {
+  position: fixed;
+  inset: 0;
+  /* Above the sidebar (18) and the dock, below the toasts (60). */
+  z-index: 50;
+  height: 100dvh;
+  border-radius: 0;
+}
+.filepane.is-full .filepane__body { padding: 0; }
+.filepane.is-full .viewer__frame { height: 100%; }
+.filepane.is-full .doc { max-width: 52rem; }
+
+/* In the rail the frame gets whatever is left rather than a fixed slice of the
+   viewport — 78dvh inside a panel that is not the window overflows it. */
+.filepane .viewer__frame { height: 100%; min-height: 320px; }
+.filepane .viewer__image img { max-height: none; }
+.filepane .doc { padding: 26px 22px 50px; }
+.filepane .viewer__sheets { flex: none; border-top: 1px solid var(--line-soft); border-bottom: 0; }
+.filepane .editor { height: 100%; }
+
+/* A narrow window has no room for two columns, so the panel takes the screen —
+   which is what the expanded state already is. */
+@media (max-width: 900px) {
+  .filepane {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    height: 100dvh;
+  }
+}
+
+/* ── figures in a document ──────────────────────────────────── */
+
+/* A picture out of a .docx. Centred and given room, because a figure in a
+   report is a paragraph-level thing rather than something inline — and capped
+   by height as well as width, or one tall diagram fills the panel and hides
+   the text it belongs to. */
+.doc .figure {
+  margin: 22px 0;
+  text-align: center;
+}
+.doc .figure img {
+  max-width: 100%;
+  max-height: 60vh;
+  height: auto;
+  border-radius: 6px;
+  background: #fff;
+}
+.doc .figure figcaption {
+  margin-top: 7px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* A picture whose bytes could not be served — an external one, or a format
+   that is not an image at all. Said plainly rather than left as a broken icon. */
+.doc .figure__missing {
+  margin: 16px 0;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  font-style: italic;
+  text-align: center;
+}
+
+/* Printed, a figure must not be sliced across the fold. */
+@media print {
+  body.is-printing .doc .figure { break-inside: avoid; }
+  body.is-printing .doc .figure img { max-height: none; }
+}
