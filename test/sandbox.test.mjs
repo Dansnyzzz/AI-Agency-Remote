@@ -44,6 +44,17 @@ const FORM = `<!doctype html><title>New Vessel Schedule: FCL</title>
 const server = http
   .createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html');
+    // Two routes for the isolation checks: one hands out a cookie, the other
+    // reports back whichever cookie arrived.
+    if (req.url === '/set-cookie') {
+      res.setHeader('Set-Cookie', 'who=chatA; Path=/');
+      res.end('<title>signed in</title><p>ok</p>');
+      return;
+    }
+    if (req.url === '/read-cookie') {
+      res.end('<title>who am i</title><p>cookie:[' + (req.headers.cookie || '') + ']</p>');
+      return;
+    }
     res.end(req.url === '/form' ? FORM : PAGE);
   })
   .listen(5397);
@@ -221,14 +232,26 @@ section('each conversation browses on its own');
   check('and the other does not see the first', !/LOGIFORCE360/.test(b), b.replace(/\n/g, ' ').slice(0, 90));
   check('while each still sees its own', /5397/.test(a) && /5397/.test(b));
 
-  // Cookies are the half that matters for sign-ins, and they live on the
-  // context rather than the tab — so this is what "signed in over there does
-  // not sign me in over here" actually rests on.
-  const cookieIn = async (chatId) => {
-    const sessions = browserSessions();
-    return sessions.find((s) => s.key === chatId);
-  };
-  check('each conversation has a session of its own', !!(await cookieIn('chat-A')) && !!(await cookieIn('chat-B')));
+  check(
+    'each conversation has a session of its own',
+    !!browserSessions().find((s) => s.key === 'chat-A') && !!browserSessions().find((s) => s.key === 'chat-B'),
+  );
+
+  /**
+   * Cookies are the half that matters for sign-ins, and they live on the context
+   * rather than the tab — so this is what "signed in over there does not sign me
+   * in over here" actually rests on. Proved rather than assumed: separate tabs
+   * say nothing by themselves about separate credentials.
+   */
+  const read = (t) => (/cookie:\[([^\]]*)\]/.exec(t) || [])[1] ?? '';
+  await tools.browser_open({ url: 'http://127.0.0.1:5397/set-cookie' }, at('chat-A'));
+  const carriedByA = read(
+    say(await tools.browser_open({ url: 'http://127.0.0.1:5397/read-cookie', replace_tab: true }, at('chat-A'))),
+  );
+  const carriedByB = read(say(await tools.browser_open({ url: 'http://127.0.0.1:5397/read-cookie' }, at('chat-B'))));
+
+  check('a cookie set in one conversation is carried there', /who=chatA/.test(carriedByA), carriedByA || '(none)');
+  check('and is not carried into the other', !/who=chatA/.test(carriedByB), carriedByB || '(none)');
 
   const same = say(await tools.browser_tabs({}, at('chat-A')));
   check('coming back to a conversation finds it as it was', /5397/.test(same));
