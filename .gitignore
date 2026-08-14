@@ -10,3 +10,9 @@ data/
 .vercel
 .DS_Store
 *.log
+
+# Orphans left by a FUSE mount when a file is deleted while something still has
+# it open — stale copies of files that already exist properly. Two of these were
+# committed once by a `git add -A`; ignoring the pattern is what stops that
+# being possible again.
+.fuse_hidden*
