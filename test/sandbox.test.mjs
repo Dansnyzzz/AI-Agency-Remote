@@ -70,10 +70,18 @@ if (!browser) {
   process.exit(0);
 }
 
+/**
+ * Browser tools answer with `{ text, shot }` — the text the model reads, and a
+ * thumbnail for the transcript. Unwrapped here rather than at thirty call sites,
+ * and tolerant of a plain string so a tool that has nothing to illustrate needs
+ * no special case.
+ */
+const say = (result) => String(result?.text ?? result ?? '');
+
 const { BROWSER_IMPLEMENTATIONS: tools, closeBrowser } = await import('../worker/browser.js');
 
 section('a page whose real interface is inside a frame');
-const opened = await tools.browser_open({ url: 'http://127.0.0.1:5397/' });
+const opened = say(await tools.browser_open({ url: 'http://127.0.0.1:5397/' }));
 {
   check('the top document is listed', /\[\d+\] button\s+Home/.test(opened), 'the easy half');
 
@@ -94,11 +102,11 @@ section('and they can actually be acted on');
   const ref = Number(/\[(\d+)\] input\s+Vessel/.exec(opened)?.[1]);
   check('the field has a number', Number.isInteger(ref), `${ref}`);
 
-  const typed = await tools.browser_type({ ref, text: 'COSCO EXCELLENCE' });
+  const typed = say(await tools.browser_type({ ref, text: 'COSCO EXCELLENCE' }));
   check('typing into it works', /Typed into \[\d+\]/.test(typed), typed.split('\n')[0]);
 
   // The value has to be in the frame, not merely reported as typed.
-  const listing = await tools.browser_look({});
+  const listing = say(await tools.browser_look({}));
   check('and the value lands in the frame', /COSCO EXCELLENCE/.test(listing), 'the listing reads the field back');
 
   let refused = null;
@@ -108,7 +116,7 @@ section('and they can actually be acted on');
 
 section('the numbering is one sequence across the whole page');
 {
-  const listing = await tools.browser_look({});
+  const listing = say(await tools.browser_look({}));
   const refs = [...listing.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
   const unique = new Set(refs);
   // Numbering per-document would restart at 1 inside the frame, and two
@@ -122,21 +130,21 @@ section('opening a page keeps the one that was open');
   // The old default reused the tab, so a lookup destroyed whatever was already
   // there — a half-filled form, a video somebody was listening to — and the
   // model had to remember to prevent it every single time.
-  const opened = await tools.browser_open({ url: 'http://127.0.0.1:5397/form' });
+  const opened = say(await tools.browser_open({ url: 'http://127.0.0.1:5397/form' }));
   check('a second page opens beside the first', /2 open/.test(opened), opened.split('\n')[0]);
 
-  const list = await tools.browser_tabs({});
+  const list = say(await tools.browser_tabs({}));
   check('both tabs are there', (list.match(/\[\d+\]/g) || []).length === 2, list.replace(/\n/g, ' '));
   check('and the new one has focus', /\[2\]\s*←/.test(list), list.replace(/\n/g, ' '));
 
   // Still possible to say "reuse this one" when the page is finished with.
-  const replaced = await tools.browser_open({ url: 'http://127.0.0.1:5397/', replace_tab: true });
+  const replaced = say(await tools.browser_open({ url: 'http://127.0.0.1:5397/', replace_tab: true }));
   check('replace_tab reuses the current tab', !/3 open/.test(replaced), replaced.split('\n')[0]);
-  const after = await tools.browser_tabs({});
+  const after = say(await tools.browser_tabs({}));
   check('so the count does not grow', (after.match(/\[\d+\]/g) || []).length === 2);
 
   await tools.browser_switch({ tab: 1 });
-  const back = await tools.browser_tabs({});
+  const back = say(await tools.browser_tabs({}));
   check('and switching back works', /\[1\]\s*←/.test(back), back.replace(/\n/g, ' '));
 }
 
@@ -180,7 +188,7 @@ section('the mirror follows the acted-on tab without raising the window');
 
   // Reading and clicking a background tab has to work too, or "the mirror is
   // live" would be true and useless.
-  const listing = await tools.browser_look({});
+  const listing = say(await tools.browser_look({}));
   check('a background tab can still be read', /LOGIFORCE360/i.test(listing), listing.split('\n')[1] || '');
 
   frames = 0;
@@ -188,6 +196,55 @@ section('the mirror follows the acted-on tab without raising the window');
   check('and acting on it still produces frames', frames > 0, `${frames} frames`);
 
   await tools.browser_close_tab({ tab: 2 });
+}
+
+/**
+ * One conversation's browsing must not be another's.
+ *
+ * Everything above this point drives a single conversation, which is exactly
+ * how the leak survived: with one chat there is nothing to leak into. With two,
+ * a tab opened in one appeared in the other's `browser_tabs`, a sign-in in one
+ * signed the other in, and `browser_close` in either shut both.
+ */
+section('each conversation browses on its own');
+{
+  const { browserSessions } = await import('../worker/browser.js');
+  const at = (chatId) => ({ chatId });
+
+  await tools.browser_open({ url: 'http://127.0.0.1:5397/' }, at('chat-A'));
+  await tools.browser_open({ url: 'http://127.0.0.1:5397/form' }, at('chat-B'));
+
+  const a = say(await tools.browser_tabs({}, at('chat-A')));
+  const b = say(await tools.browser_tabs({}, at('chat-B')));
+
+  check('one conversation does not see the other tabs', !/Save|Vessel/.test(a), a.replace(/\n/g, ' ').slice(0, 90));
+  check('and the other does not see the first', !/LOGIFORCE360/.test(b), b.replace(/\n/g, ' ').slice(0, 90));
+  check('while each still sees its own', /5397/.test(a) && /5397/.test(b));
+
+  // Cookies are the half that matters for sign-ins, and they live on the
+  // context rather than the tab — so this is what "signed in over there does
+  // not sign me in over here" actually rests on.
+  const cookieIn = async (chatId) => {
+    const sessions = browserSessions();
+    return sessions.find((s) => s.key === chatId);
+  };
+  check('each conversation has a session of its own', !!(await cookieIn('chat-A')) && !!(await cookieIn('chat-B')));
+
+  const same = say(await tools.browser_tabs({}, at('chat-A')));
+  check('coming back to a conversation finds it as it was', /5397/.test(same));
+
+  // Closing is per conversation too. This was the loudest symptom: finishing in
+  // one chat shut the browser somebody was still using in another.
+  await tools.browser_close({}, at('chat-A'));
+  const survivor = say(await tools.browser_tabs({}, at('chat-B')));
+  check('closing one leaves the other open', /5397/.test(survivor), survivor.replace(/\n/g, ' ').slice(0, 90));
+
+  // A sub-agent has no chatId. It is part of work already in flight rather than
+  // a conversation, so they share one bucket instead of each opening a browser.
+  await tools.browser_open({ url: 'http://127.0.0.1:5397/' }, { chatId: null });
+  await tools.browser_open({ url: 'http://127.0.0.1:5397/' }, {});
+  const shared = browserSessions().filter((s) => s.key === 'shared');
+  check('sub-agents share a single bucket', shared.length === 1, `${shared.length}`);
 }
 
 await closeBrowser();

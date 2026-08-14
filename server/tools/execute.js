@@ -136,7 +136,10 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
     if (usesInProcessTools(user)) {
       const impl = (await inProcessImplementations(user))[name];
       if (!impl) return { isError: true, content: `Tool "${name}" has no implementation.` };
-      const output = await impl(input || {});
+      // The same second argument the worker passes, so a locally-run server and
+      // a paired machine behave identically — a difference here would show up as
+      // "it isolates conversations on my laptop but not on the VM".
+      const output = await impl(input || {}, { chatId: chatId ?? null });
 
       /**
        * The same two result shapes the worker's job runner handles.

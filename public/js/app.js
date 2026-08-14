@@ -3189,64 +3189,6 @@ $('pair-copy').addEventListener('click', async () => {
   }
 });
 
-/**
- * Which browser the assistant drives on one computer.
- *
- * The three choices are genuinely different tools, not settings, so each is
- * labelled with what it *costs* rather than what it is called — "signed in to
- * nothing" is the fact that decides whether `sandbox` is any use for the job in
- * hand. And a choice that cannot work on this machine says so where it is made:
- * offering `attach` with no debugging port open produces a tool call that fails
- * a minute later, in a conversation, where nobody can connect it back to this
- * dropdown.
- */
-function browserPicker(device) {
-  const id = escapeText(device.id);
-  const chosen = device.browserMode || 'sandbox';
-  const caps = device.browser || null;
-
-  // The machine's own report, when it has made one. Before the first heartbeat
-  // there is nothing, and claiming to know would be worse than admitting we do not.
-  const attachable = caps ? !!caps.attachable : null;
-  const port = caps?.cdpPort || 9222;
-  const running = caps?.mode || null;
-
-  const options = [
-    ['sandbox', t('browser.sandbox')],
-    ['profile', t('browser.profile')],
-    ['attach', t('browser.attach')],
-  ]
-    .map(
-      ([value, label]) =>
-        `<option value="${value}"${value === chosen ? ' selected' : ''}>${escapeText(label)}</option>`,
-    )
-    .join('');
-
-  let note;
-  if (chosen === 'attach' && attachable === false) {
-    note = `<span class="warn-text">${escapeText(t('browser.attachMissing').replace('{port}', port))}</span>`;
-  } else if (chosen === 'attach') {
-    note = escapeText(t('browser.attachHint').replace('{port}', port));
-  } else if (chosen === 'profile') {
-    note = escapeText(t('browser.profileHint'));
-  } else {
-    note = escapeText(t('browser.sandboxHint'));
-  }
-
-  // Chosen here, adopted there. Same honesty as the workspace row above: a
-  // machine that has been offline since the change should not be drawn as
-  // though it had already obeyed.
-  if (running && running !== chosen) {
-    note += ` <span class="hint">${escapeText(t('browser.pending'))}</span>`;
-  }
-
-  return `<label class="device__label" for="br-${id}">${escapeText(t('browser.label'))}</label>
-    <div class="provider__row">
-      <select id="br-${id}" data-browser="${id}">${options}</select>
-    </div>
-    <p class="hint" data-browser-status="${id}">${note}</p>`;
-}
-
 async function loadDevices() {
   const { devices, localCode } = await api.devices();
   renderLocalCode(localCode);
@@ -3307,8 +3249,6 @@ async function loadDevices() {
                 : 'It will report where it is working once it connects.'
         }</p>
 
-        ${browserPicker(d)}
-
         <div class="row">
           ${
             d.online && d.id !== activeId
@@ -3357,31 +3297,6 @@ async function loadDevices() {
         btn.disabled = false;
       }
     });
-  }
-
-  for (const select of host.querySelectorAll('[data-browser]')) {
-    select.addEventListener('change', async () => {
-      const id = select.dataset.browser;
-      const status = host.querySelector(`[data-browser-status="${id}"]`);
-      const previous = select.dataset.previous || 'sandbox';
-      select.disabled = true;
-      try {
-        await api.setDeviceBrowser(id, select.value);
-        status.textContent = t('browser.saved');
-        select.dataset.previous = select.value;
-        // Long enough for a heartbeat to land, so the note stops saying
-        // "waiting" once the machine has actually switched.
-        setTimeout(loadDevices, 16_000);
-      } catch (err) {
-        // Put the control back where it was. Leaving it showing a choice the
-        // server refused is the interface telling a lie about the machine.
-        select.value = previous;
-        status.textContent = err.message;
-      } finally {
-        select.disabled = false;
-      }
-    });
-    select.dataset.previous = select.value;
   }
 
   host.querySelector('#unpin-device')?.addEventListener('click', async () => {

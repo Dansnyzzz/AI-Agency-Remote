@@ -368,7 +368,15 @@ async function runJob(job) {
     return;
   }
   try {
-    const output = await impl(job.input || {});
+    /**
+     * Which conversation this belongs to.
+     *
+     * The browser tools use it to keep one conversation's tabs, cookies and
+     * sign-ins away from another's — see `sessionFor` in browser.js. Every other
+     * implementation takes one argument and simply ignores this one, which is
+     * why adding it needed no changes anywhere else.
+     */
+    const output = await impl(job.input || {}, { chatId: job.chatId ?? null });
 
     /**
      * Two shapes, and the second one is new.
@@ -417,28 +425,8 @@ let identityConfirmed = false;
  */
 let appliedWorkspace = null;
 let workspaceComplaint = '';
-let appliedBrowserMode = null;
-
-/**
- * Which browser this computer drives, chosen in the app and arriving the same
- * way the workspace does. Applying it closes whatever browser is open — see
- * `setBrowserMode` for why carrying the old one over would be a lie.
- */
-async function applyBrowserMode(wanted) {
-  const next = wanted || 'sandbox';
-  if (next === appliedBrowserMode) return;
-  appliedBrowserMode = next;
-
-  const { setBrowserMode } = await import('./browser.js');
-  const applied = await setBrowserMode(next);
-  console.log(`  Browser is now "${applied}".`);
-}
 
 function applyConfig(config) {
-  applyBrowserMode(config?.browserMode).catch((err) => {
-    console.error(`  Could not switch browser: ${err?.message || err}`);
-  });
-
   const wanted = config?.workspace || null;
   if (wanted === appliedWorkspace) return;
 

@@ -67,7 +67,6 @@ import {
   listDevices,
   revokeDevice,
   setDeviceWorkspace,
-  setDeviceBrowserMode,
   localPairingCode,
   startEnrolment,
   previewEnrolment,
@@ -388,12 +387,7 @@ export function createApp() {
          * matched nothing and quietly did nothing at all.
          */
         deviceId: req.workerDevice?.id || null,
-        config: {
-          workspace: device?.workspace ?? null,
-          // Null reads as "sandbox" on the worker, which is the right default
-          // for every computer that has never opened this setting.
-          browserMode: device?.browser_mode ?? null,
-        },
+        config: { workspace: device?.workspace ?? null },
       });
     }),
   );
@@ -1057,25 +1051,6 @@ export function createApp() {
           `AIR_TOKEN='${token}' AIR_SERVER='${base}' AIR_REPO='${repo}' ` +
           `bash -c "$(curl -fsSL ${base}/setup.sh)"`,
       });
-    }),
-  );
-
-  /**
-   * Which browser this computer drives.
-   *
-   * Same channel as the workspace above — stored here, collected by the machine
-   * on its next heartbeat — because there is no inbound connection to push it
-   * down and there does not need to be.
-   */
-  api.put(
-    '/devices/:id/browser',
-    wrap(async (req, res) => {
-      try {
-        const device = await setDeviceBrowserMode(req.user.id, req.params.id, req.body?.mode);
-        res.json({ device: { id: device.id, name: device.name, browserMode: device.browser_mode } });
-      } catch (err) {
-        res.status(400).json({ error: err.message });
-      }
     }),
   );
 

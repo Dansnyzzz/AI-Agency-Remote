@@ -416,63 +416,6 @@ section('the working folder is changed from the app');
   check("another account cannot move somebody else's computer", theirs.status === 400, `got ${theirs.status}`);
 }
 
-// ── which browser a computer drives ─────────────────────────────────
-//
-// Three genuinely different browsers — a clean sandbox, a profile that stays
-// signed in, and the person's own running Chrome — chosen per machine and
-// carried down the one channel that exists, the heartbeat reply.
-section('the browser is chosen per computer');
-{
-  const auth = { Authorization: `Bearer ${laptopToken}` };
-
-  const before = (await alice.call('GET', '/api/devices')).json.devices[0];
-  check('a fresh device has made no choice', before.browserMode === null, String(before.browserMode));
-
-  // Null has to read as "sandbox" on the machine. Every computer paired before
-  // this setting existed has null, and they must not all lose their browser.
-  const first = await anon.call('POST', '/api/worker/heartbeat', { info: { platform: 'win32 x64' } }, auth);
-  check(
-    'and is told nothing, which the worker reads as the sandbox',
-    first.json?.config?.browserMode === null,
-    JSON.stringify(first.json?.config),
-  );
-
-  const nonsense = await alice.call('PUT', `/api/devices/${laptopId}/browser`, { mode: 'firefox' });
-  check('a browser that does not exist is refused', nonsense.status === 400, `got ${nonsense.status}`);
-  // Refused at the API rather than stored and ignored on the machine: a setting
-  // that saves and then does nothing is worse than one that says no.
-  check('and says so', /not a browser/i.test(nonsense.json?.error || ''), nonsense.json?.error);
-
-  for (const mode of ['profile', 'attach', 'sandbox']) {
-    const set = await alice.call('PUT', `/api/devices/${laptopId}/browser`, { mode });
-    check(`"${mode}" is accepted`, set.status === 200, JSON.stringify(set.json));
-    check('and remembered', set.json?.device?.browserMode === mode, set.json?.device?.browserMode);
-
-    const beat = await anon.call('POST', '/api/worker/heartbeat', { info: { platform: 'win32 x64' } }, auth);
-    check(
-      'and reaches the machine on its next heartbeat',
-      beat.json?.config?.browserMode === mode,
-      JSON.stringify(beat.json?.config),
-    );
-  }
-
-  // What the machine can actually offer, so the picker can say "nothing is
-  // listening on that port" where the choice is made rather than failing later
-  // inside a conversation.
-  await anon.call('POST', '/api/worker/heartbeat', {
-    info: { platform: 'win32 x64', browser: { mode: 'sandbox', channels: ['chrome'], attachable: false, cdpPort: 9222 } },
-  }, auth);
-  const reported = (await alice.call('GET', '/api/devices')).json.devices[0];
-  check('the machine reports what it has', reported.browser?.channels?.[0] === 'chrome', JSON.stringify(reported.browser));
-  check('including whether anything is attachable', reported.browser?.attachable === false, JSON.stringify(reported.browser));
-  // Chosen and adopted are different facts, exactly as with the workspace: the
-  // app must not draw a machine as having switched when it has not.
-  check('and what it is really running', reported.browser?.mode === 'sandbox', reported.browser?.mode);
-
-  const stolen = await bob.call('PUT', `/api/devices/${laptopId}/browser`, { mode: 'attach' });
-  check("another account cannot change somebody else's browser", stolen.status === 400, `got ${stolen.status}`);
-}
-
 // ── setting a computer up from a link ───────────────────────────────
 //
 // Pairing, run the other way: the token is minted by a signed-in person and
@@ -621,8 +564,8 @@ section('attaching to a browser that is already running');
     const at = source.indexOf(`async function ${name}(`);
     return at < 0 ? '' : source.slice(at, source.indexOf('\n}', at));
   };
-  check('browser_tabs connects before answering', /ensureAttached\(\)/.test(body('browserTabs')));
-  check('and so does browser_look', /ensureAttached\(\)/.test(body('browserLook')));
+  check('browser_tabs connects before answering', /ensureAttached\(s\)/.test(body('browserTabs')));
+  check('and so does browser_look', /ensureAttached\(s\)/.test(body('browserLook')));
   check(
     'and only in attach mode — launching a browser to answer a question is a surprise',
     /mode !== 'attach'/.test(body('ensureAttached')),
@@ -633,7 +576,7 @@ section('attaching to a browser that is already running');
    * after `closeBrowser()` the browser was still serving on its debugging port
    * with every tab intact. These pin the three lines that make that true.
    */
-  const closing = body('closeBrowser');
+  const closing = body('closeSession');
   check('closing in attach mode disconnects rather than closes', /const borrowed = mode === 'attach'/.test(closing));
   check('and never closes the context holding their tabs', /if \(borrowed\)/.test(closing));
   check(

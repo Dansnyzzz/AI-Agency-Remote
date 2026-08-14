@@ -88,21 +88,6 @@ export const vi = {
   'devices.unpin': 'Theo máy tôi đang ngồi',
   'devices.unpinned': 'Sẽ dùng máy bạn đang ngồi.',
 
-  /* ── trình duyệt mà máy tính đó điều khiển ───────────────────────── */
-  'browser.label': 'Trình duyệt',
-  'browser.sandbox': 'Sandbox — trình duyệt sạch, chưa đăng nhập gì',
-  'browser.profile': 'Hồ sơ riêng — giữ nguyên đăng nhập cho lần sau',
-  'browser.attach': 'Chrome của bạn — chính cái bạn đang mở',
-  'browser.sandboxHint':
-    'Một trình duyệt mới với hồ sơ trắng. Không có gì của bạn trong đó, và không lưu lại gì.',
-  'browser.profileHint':
-    'Một hồ sơ riêng nằm trên máy đó. Đăng nhập một lần qua khung xem trực tiếp là nhớ mãi. Cookie là thật, và nó nằm trên máy đó.',
-  'browser.attachHint':
-    'Điều khiển đúng Chrome bạn đang mở, kèm mọi tài khoản bạn đang đăng nhập. Chrome phải được khởi động kèm --remote-debugging-port={port}.',
-  'browser.attachMissing':
-    'Không có gì đang lắng nghe ở cổng {port} trên máy đó. Thoát hẳn Chrome, rồi mở lại kèm --remote-debugging-port={port} — hoặc chọn trình duyệt khác ở đây.',
-  'browser.pending': 'Đang chờ máy đó nhận thay đổi.',
-  'browser.saved': 'Đã lưu. Máy đó sẽ chuyển trong khoảng mười lăm giây.',
   'chat.planCount': '{done}/{total}',
 
   // Tin nhắn gõ trong lúc trợ lý còn đang chạy, chờ phía trên khung soạn cho

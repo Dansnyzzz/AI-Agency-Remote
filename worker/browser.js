@@ -24,10 +24,113 @@ import path from 'node:path';
 import { claim, publishFrame, release, watcherPreference } from './screen.js';
 import { dataDir } from './paths.js';
 
-let browser = null;
-let context = null;
-let page = null;
-let screencast = null;
+/**
+ * One browsing session — the tabs, cookies and sign-ins of one conversation.
+ *
+ * This used to be four variables at the top of the file, which meant one
+ * browser for the whole machine. With a single conversation nothing looked
+ * wrong; with two, a tab opened in one appeared in the other's `browser_tabs`,
+ * a sign-in in one signed the other in, and `browser_close` in either shut both.
+ * That is state leaking between pieces of work that have nothing to do with
+ * each other.
+ *
+ * A `BrowserContext` per conversation rather than a browser per conversation:
+ * a context has its own cookies, its own `localStorage` and its own tabs —
+ * everything an incognito window has — for roughly 20–50MB, against ~250MB for
+ * another Chrome process. Five conversations cost about 150MB instead of over a
+ * gigabyte of somebody's laptop. What is given up is crash isolation, not
+ * session isolation, and session isolation is the thing being asked for.
+ */
+function newSession(key) {
+  return {
+    key,
+    browser: null,
+    context: null,
+    page: null,
+    screencast: null,
+    castingHd: false,
+    // Read once per frame would be a round trip into the page; it changes far
+    // more slowly than the pixels do.
+    lastTitle: '',
+    usedAt: Date.now(),
+  };
+}
+
+const sessions = new Map();
+
+/**
+ * Which session a conversation gets — and why only `sandbox` gets its own.
+ *
+ * `profile` wraps **one** signed-in profile directory, and Chrome holds an
+ * exclusive lock on it. Splitting it per conversation would mean a profile
+ * each, which destroys the only reason it exists: sign in once, stay signed in.
+ *
+ * `attach` wraps **one** real Chrome belonging to the user. There is nothing
+ * there to split.
+ *
+ * So: the disposable one is per conversation; the two that wrap a real identity
+ * are singular. A sub-agent runs with no `chatId` — it is part of the work
+ * already in flight rather than a conversation of its own — so they share one
+ * bucket instead of each opening a browser.
+ */
+const sessionKey = (chatId) => (mode === 'sandbox' ? chatId || 'shared' : 'single');
+
+/**
+ * How many conversations may hold a browser at once, and for how long.
+ *
+ * Both are part of the feature rather than tuning to do later: something that
+ * opens a browser per conversation and never closes one eats a machine's memory
+ * over an afternoon. The oldest idle session goes when the limit is reached, and
+ * a session nobody has touched for ten minutes goes on its own.
+ */
+const MAX_SESSIONS = Math.min(Math.max(Number(process.env.BROWSER_MAX_SESSIONS) || 6, 1), 24);
+const SESSION_IDLE_MS = Math.max(Number(process.env.BROWSER_IDLE_MS) || 10 * 60 * 1000, 30_000);
+
+/** Close whatever has gone cold, then make room if there is still none. */
+async function evict() {
+  const now = Date.now();
+  for (const s of [...sessions.values()]) {
+    if (now - s.usedAt > SESSION_IDLE_MS) await closeSession(s).catch(() => {});
+  }
+  while (sessions.size >= MAX_SESSIONS) {
+    const oldest = [...sessions.values()].sort((a, b) => a.usedAt - b.usedAt)[0];
+    if (!oldest) break;
+    await closeSession(oldest).catch(() => {});
+  }
+}
+
+/** The session for this conversation, opened if it is not there yet. */
+async function sessionFor(chatId) {
+  const key = sessionKey(chatId);
+  let s = sessions.get(key);
+
+  if (!s) {
+    await evict();
+    s = newSession(key);
+    sessions.set(key, s);
+  }
+  s.usedAt = Date.now();
+  return s;
+}
+
+/**
+ * What is open, for tests and for the worker's own reporting.
+ *
+ * Exposed because "each conversation gets its own" is a claim that has to be
+ * checkable — and because the eviction rules below are the difference between a
+ * feature and a memory leak, so something has to be able to watch them work.
+ */
+export const browserSessions = () =>
+  [...sessions.values()].map((s) => ({ key: s.key, open: !!s.page && !s.page.isClosed(), usedAt: s.usedAt }));
+
+/**
+ * One Chrome process behind every sandbox session.
+ *
+ * Contexts are cheap; processes are not. Kept at module scope rather than on a
+ * session because every sandbox session shares it — closing one conversation's
+ * context must not take the browser down with it.
+ */
+let sandboxBrowser = null;
 
 /**
  * Which browser the assistant drives — chosen per computer, from the app.
@@ -99,9 +202,20 @@ export async function setBrowserMode(next) {
  * (`launchPersistentContext` returns the context itself), so that test reports
  * "nothing is open" while tabs sit open in front of you.
  */
-const contextIsLive = () => !!context && (mode === 'profile' || !!browser?.isConnected());
+const contextIsLive = (s) => !!s.context && (mode === 'profile' || !!s.browser?.isConnected());
 
-export const browserIsOpen = () => !!page && !page.isClosed() && contextIsLive();
+/**
+ * Is there a page to act on?
+ *
+ * Two shapes on purpose. Given a session it answers about that conversation.
+ * Given nothing — which is how `workerInfo()` calls it on every heartbeat — it
+ * answers "is any conversation browsing", because that is what the indicator in
+ * the app reports.
+ */
+export const browserIsOpen = (s) => {
+  const live = (each) => !!each.page && !each.page.isClosed() && contextIsLive(each);
+  return s ? live(s) : [...sessions.values()].some(live);
+};
 
 /** Whether something is listening on a TCP port here, without connecting to it twice. */
 function portOpen(port, host = '127.0.0.1', timeoutMs = 350) {
@@ -247,21 +361,30 @@ const noBrowser = (err) =>
   );
 
 /** `sandbox` — a fresh browser with nothing of yours in it. */
-async function openSandbox() {
+async function openSandbox(s) {
   const { chromium } = await import('playwright-core');
   const { headless, args } = launchOptions();
 
-  let lastError;
-  for (const options of CHANNELS) {
-    try {
-      browser = await chromium.launch({ ...options, headless, args });
-      context = await browser.newContext({ viewport: VIEWPORT, userAgent: USER_AGENT });
-      return context;
-    } catch (err) {
-      lastError = err;
+  // One Chrome for every sandbox conversation; a context each. Launching a
+  // second process per conversation would cost ~250MB against ~30MB, for an
+  // isolation guarantee nobody asked for.
+  if (!sandboxBrowser?.isConnected()) {
+    let lastError;
+    sandboxBrowser = null;
+    for (const options of CHANNELS) {
+      try {
+        sandboxBrowser = await chromium.launch({ ...options, headless, args });
+        break;
+      } catch (err) {
+        lastError = err;
+      }
     }
+    if (!sandboxBrowser) throw noBrowser(lastError);
   }
-  throw noBrowser(lastError);
+
+  s.browser = sandboxBrowser;
+  s.context = await sandboxBrowser.newContext({ viewport: VIEWPORT, userAgent: USER_AGENT });
+  return s.context;
 }
 
 /**
@@ -275,7 +398,7 @@ async function openSandbox() {
  * profile is one somebody signs into by hand through the live panel, and a page
  * letterboxed inside its own window is awkward to use that way.
  */
-async function openProfile() {
+async function openProfile(s) {
   const { chromium } = await import('playwright-core');
   const { headless, args } = launchOptions();
   const dir = profileDir();
@@ -284,15 +407,15 @@ async function openProfile() {
   let lastError;
   for (const options of CHANNELS) {
     try {
-      browser = null;
-      context = await chromium.launchPersistentContext(dir, {
+      s.browser = null;
+      s.context = await chromium.launchPersistentContext(dir, {
         ...options,
         headless,
         args,
         viewport: VIEWPORT,
         userAgent: USER_AGENT,
       });
-      return context;
+      return s.context;
     } catch (err) {
       lastError = err;
     }
@@ -314,12 +437,12 @@ async function openProfile() {
  *   **Nothing is closed on the way out.** See `closeBrowser`: these are the
  *   user's tabs and the user's browser, and this code borrowed them.
  */
-async function openAttached() {
+async function openAttached(s) {
   const { chromium } = await import('playwright-core');
   const endpoint = cdpEndpoint();
 
   try {
-    browser = await chromium.connectOverCDP(endpoint);
+    s.browser = await chromium.connectOverCDP(endpoint);
   } catch (err) {
     throw new Error(
       `No browser is listening on ${endpoint}. Start Chrome with --remote-debugging-port=${CDP_PORT} ` +
@@ -328,18 +451,18 @@ async function openAttached() {
     );
   }
 
-  const existing = browser.contexts();
+  const existing = s.browser.contexts();
   if (!existing.length) {
     // A Chrome with a debugging port but no context is one that is shutting
     // down. Say so, rather than opening an incognito window and calling it
     // the user's browser.
-    await browser.close().catch(() => {});
-    browser = null;
+    await s.browser.close().catch(() => {});
+    s.browser = null;
     throw new Error(`Chrome at ${endpoint} has no open window to work in. Open a tab and try again.`);
   }
 
-  context = existing[0];
-  return context;
+  s.context = existing[0];
+  return s.context;
 }
 
 /**
@@ -350,19 +473,19 @@ async function openAttached() {
  * fixes the thing that made this feel broken — asking for a news site while
  * music was playing used to navigate the only tab there was, killing the audio.
  */
-async function ensureContext() {
-  if (contextIsLive()) return context;
+async function ensureContext(s) {
+  if (contextIsLive(s)) return s.context;
 
-  context = null;
-  browser = null;
+  s.context = null;
+  s.browser = null;
 
-  if (mode === 'profile') await openProfile();
-  else if (mode === 'attach') await openAttached();
-  else await openSandbox();
+  if (mode === 'profile') await openProfile(s);
+  else if (mode === 'attach') await openAttached(s);
+  else await openSandbox(s);
 
   // A page opened by the site itself — target="_blank", window.open — is a tab
   // the user would see appear, so treat it as one and follow it.
-  context.on('page', (opened) => {
+  s.context.on('page', (opened) => {
     opened.setDefaultTimeout(20_000);
   });
 
@@ -381,12 +504,12 @@ async function ensureContext() {
    *              blank one sitting in `browser_tabs` forever, where the model
    *              has to reason about a tab that means nothing.
    */
-  if (mode !== 'sandbox' && !browserIsOpen()) {
-    const open = context.pages().filter((p) => !p.isClosed());
-    if (open.length) await focusPage(open[0]);
+  if (mode !== 'sandbox' && !browserIsOpen(s)) {
+    const open = s.context.pages().filter((p) => !p.isClosed());
+    if (open.length) await focusPage(s, open[0]);
   }
 
-  return context;
+  return s.context;
 }
 
 /**
@@ -416,18 +539,18 @@ async function ensureContext() {
  * where `launch` puts it, sound still comes out of the machine's speakers, and
  * the frames still arrive.
  */
-async function focusPage(next) {
-  if (page === next) return page;
-  page = next;
-  page.setDefaultTimeout(20_000);
-  await startScreencast();
-  return page;
+async function focusPage(s, next) {
+  if (s.page === next) return s.page;
+  s.page = next;
+  s.page.setDefaultTimeout(20_000);
+  await startScreencast(s);
+  return s.page;
 }
 
 /** Every open tab, in the order Chrome has them. */
-function tabs() {
-  if (!contextIsLive()) return [];
-  return context.pages().filter((p) => !p.isClosed());
+function tabs(s) {
+  if (!contextIsLive(s)) return [];
+  return s.context.pages().filter((p) => !p.isClosed());
 }
 
 /**
@@ -438,36 +561,46 @@ function tabs() {
  * another at a glance, and the active tab's real title is already in the bar
  * above. Anything more would cost a promise per tab per repaint.
  */
-function tabSummary() {
-  return tabs().map((p, i) => {
+function tabSummary(s) {
+  return tabs(s).map((p, i) => {
     let host = '';
     try {
       host = new URL(p.url()).host.replace(/^www\./, '');
     } catch {
       host = 'new tab';
     }
-    return { index: i + 1, host, active: p === page };
+    return { index: i + 1, host, active: p === s.page };
   });
 }
 
 /**
- * Let go of the browser.
+ * Let go of one conversation's browser.
  *
  * **In `attach` mode this must not close anything.** The context holds the
  * user's tabs and the browser is the one they are using; closing either would
  * take down their work because a tool call finished. Attached means borrowed —
  * the screencast stops, the connection is dropped, and their Chrome carries on
  * exactly as it was.
+ *
+ * **In `sandbox` mode only the context closes.** The Chrome process is shared
+ * by every conversation, so closing it here would shut the browser of every
+ * other conversation that happens to be using one. It goes when the last
+ * session does — see `closeBrowser`.
  */
-export async function closeBrowser() {
-  await stopScreencast();
-  release('browser');
+async function closeSession(s) {
+  await stopScreencast(s);
+  sessions.delete(s.key);
 
   const borrowed = mode === 'attach';
-  const held = { browser, context };
-  context = null;
-  page = null;
-  browser = null;
+  const held = { browser: s.browser, context: s.context };
+  s.context = null;
+  s.page = null;
+  s.browser = null;
+
+  if (streaming === s) {
+    streaming = null;
+    release('browser');
+  }
 
   if (borrowed) {
     // `close()` on a CDP connection disconnects this client without touching
@@ -485,12 +618,30 @@ export async function closeBrowser() {
   } catch {
     /* already gone */
   }
-  try {
-    // Null in `profile` mode: a persistent context *is* the browser, and closing
-    // it above has already shut the process down.
-    await held.browser?.close();
-  } catch {
-    /* already gone */
+
+  // In `profile` mode the persistent context *is* the browser, so closing it
+  // above already stopped the process. In `sandbox` the process is shared, and
+  // is only shut once nothing is left holding it.
+  if (mode === 'sandbox' && !sessions.size && sandboxBrowser) {
+    const done = sandboxBrowser;
+    sandboxBrowser = null;
+    await done.close().catch(() => {});
+  }
+}
+
+/**
+ * Let go of everything — used when the mode changes and at shutdown.
+ *
+ * A session opened as a sandbox is not the signed-in profile somebody has just
+ * asked for, so carrying any of them across a mode change would quietly do the
+ * work in the wrong browser while the interface said otherwise.
+ */
+export async function closeBrowser() {
+  for (const s of [...sessions.values()]) await closeSession(s).catch(() => {});
+  if (sandboxBrowser) {
+    const done = sandboxBrowser;
+    sandboxBrowser = null;
+    await done.close().catch(() => {});
   }
 }
 
@@ -534,7 +685,8 @@ async function publishLatest(payload) {
       const next = queued;
       queued = null;
       await publishFrame(next);
-      applyPreference();
+      // Only the session that owns the panel can change its resolution.
+      if (streaming) applyPreference(streaming);
     }
   } finally {
     inFlight = false;
@@ -542,7 +694,7 @@ async function publishLatest(payload) {
 }
 
 /** How many pixels to capture, and how hard to compress them. */
-function castOptions(hd) {
+function castOptions(s, hd) {
   const scale = hd ? Number(process.env.SCREEN_HD_SCALE) || 2 : 1;
   return {
     format: 'jpeg',
@@ -558,8 +710,14 @@ function castOptions(hd) {
   };
 }
 
-/** Whether the stream currently running is the high-resolution one. */
-let castingHd = false;
+/**
+ * Which session currently owns the live panel.
+ *
+ * There is one screen to watch, so one session streams at a time: whichever
+ * acted most recently. `screen.js` already knows how to hand the channel over,
+ * so that is reused rather than a second mechanism built beside it.
+ */
+let streaming = null;
 
 /**
  * Follow the panel between its two sizes.
@@ -568,18 +726,24 @@ let castingHd = false;
  * any other way, so this happens on the frame *after* somebody presses expand —
  * one frame of the old size, then the new one.
  */
-function applyPreference() {
+function applyPreference(s) {
   const wanted = !!watcherPreference().hd;
-  if (wanted === castingHd || !screencast) return;
-  castingHd = wanted;
-  screencast.send('Page.startScreencast', castOptions(wanted)).catch(() => {});
+  if (wanted === s.castingHd || !s.screencast) return;
+  s.castingHd = wanted;
+  s.screencast.send('Page.startScreencast', castOptions(s, wanted)).catch(() => {});
 }
 
-async function startScreencast() {
-  await stopScreencast();
-  await claim('browser', stopScreencast);
+async function startScreencast(s) {
+  await stopScreencast(s);
 
-  const cdp = await page.context().newCDPSession(page);
+  // Taking the panel from whichever conversation had it. Without this, two
+  // conversations browsing at once would both push frames and the viewer would
+  // see them interleaved.
+  if (streaming && streaming !== s) await stopScreencast(streaming).catch(() => {});
+  streaming = s;
+  await claim('browser', () => stopScreencast(s));
+
+  const cdp = await s.page.context().newCDPSession(s.page);
   // Without Page.enable the screencast starts but delivers exactly one frame.
   await cdp.send('Page.enable');
 
@@ -590,18 +754,18 @@ async function startScreencast() {
     publishLatest({
       frame: data,
       source: 'browser',
-      url: page?.url() ?? '',
-      title: lastTitle,
-      tabs: tabSummary(),
+      url: s.page?.url() ?? '',
+      title: s.lastTitle,
+      tabs: tabSummary(s),
       width: metadata?.deviceWidth || VIEWPORT.width,
       height: metadata?.deviceHeight || VIEWPORT.height,
     });
   });
 
-  castingHd = !!watcherPreference().hd;
-  await cdp.send('Page.startScreencast', castOptions(castingHd));
+  s.castingHd = !!watcherPreference().hd;
+  await cdp.send('Page.startScreencast', castOptions(s, s.castingHd));
 
-  screencast = cdp;
+  s.screencast = cdp;
 }
 
 /**
@@ -611,16 +775,16 @@ async function startScreencast() {
  * a page that has finished loading produces none. Without this the user would
  * watch an action complete and see nothing change, because nothing did.
  */
-async function pushStill() {
-  if (!browserIsOpen()) return;
+async function pushStill(s) {
+  if (!browserIsOpen(s)) return;
   try {
-    const shot = await page.screenshot({ type: 'jpeg', quality: Number(process.env.SCREEN_QUALITY) || 55 });
+    const shot = await s.page.screenshot({ type: 'jpeg', quality: Number(process.env.SCREEN_QUALITY) || 55 });
     await publishFrame({
       frame: shot.toString('base64'),
       source: 'browser',
-      url: page.url(),
-      title: lastTitle,
-      tabs: tabSummary(),
+      url: s.page.url(),
+      title: s.lastTitle,
+      tabs: tabSummary(s),
       width: VIEWPORT.width,
       height: VIEWPORT.height,
     });
@@ -629,10 +793,10 @@ async function pushStill() {
   }
 }
 
-async function stopScreencast() {
-  if (!screencast) return;
-  const cdp = screencast;
-  screencast = null;
+async function stopScreencast(s) {
+  if (!s.screencast) return;
+  const cdp = s.screencast;
+  s.screencast = null;
   try {
     await cdp.send('Page.stopScreencast');
     await cdp.detach();
@@ -640,10 +804,6 @@ async function stopScreencast() {
     /* the page is already gone, which is the same outcome */
   }
 }
-
-// Reading the title inside the frame handler would mean a round trip into the
-// page for every frame; it changes far more slowly than the pixels do.
-let lastTitle = '';
 
 // ── looking at the page ───────────────────────────────────────────────
 
@@ -741,10 +901,10 @@ const MAX_TEXT = 5_000;
  * so without checking the frame element itself the listing fills up with
  * controls nobody can see — Lightning keeps a good number of those around.
  */
-async function visibleFrames() {
-  const out = [page.mainFrame()];
-  for (const frame of page.frames()) {
-    if (frame === page.mainFrame() || frame.isDetached()) continue;
+async function visibleFrames(s) {
+  const out = [s.page.mainFrame()];
+  for (const frame of s.page.frames()) {
+    if (frame === s.page.mainFrame() || frame.isDetached()) continue;
     try {
       const element = await frame.frameElement();
       const box = await element.boundingBox();
@@ -772,12 +932,12 @@ async function visibleFrames() {
  * Numbering runs across the frames as one sequence, so `[7]` means one thing on
  * the page rather than one thing per document.
  */
-async function snapshotAll() {
-  const frames = await visibleFrames();
+async function snapshotAll(s) {
+  const frames = await visibleFrames(s);
   const elements = [];
   const texts = [];
   let offset = 0;
-  let url = page.url();
+  let url = s.page.url();
   let title = '';
 
   for (const frame of frames) {
@@ -787,7 +947,7 @@ async function snapshotAll() {
     } catch {
       continue; // navigated away mid-read; the next look will catch it
     }
-    if (frame === page.mainFrame()) {
+    if (frame === s.page.mainFrame()) {
       url = snap.url;
       title = snap.title;
       if (snap.text) texts.push(snap.text);
@@ -864,8 +1024,8 @@ function describe(snapshot, note) {
 const SHOT_WIDTH = 320;
 const SHOT_MAX_BYTES = 40 * 1024;
 
-async function thumbnail() {
-  if (!browserIsOpen()) return null;
+async function thumbnail(s) {
+  if (!browserIsOpen(s)) return null;
 
   let cdp = null;
   try {
@@ -876,7 +1036,7 @@ async function thumbnail() {
      * mean opening a canvas page in the user's own browser, in `attach` mode, to
      * shrink a picture. Chrome will simply render it small if asked.
      */
-    cdp = await page.context().newCDPSession(page);
+    cdp = await s.page.context().newCDPSession(s.page);
     const { data } = await cdp.send('Page.captureScreenshot', {
       format: 'jpeg',
       quality: Math.min(Math.max(Number(process.env.STEP_SHOT_QUALITY) || 45, 10), 90),
@@ -908,15 +1068,15 @@ async function thumbnail() {
  * both shapes — see `runJob` — so tools that have nothing to illustrate carry on
  * returning plain text.
  */
-async function report(note) {
+async function report(s, note) {
   // A moment for the page to settle after an action before we look at it.
-  await page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
-  await page.waitForTimeout(350);
+  await s.page.waitForLoadState('domcontentloaded', { timeout: 10_000 }).catch(() => {});
+  await s.page.waitForTimeout(350);
 
-  const snapshot = await snapshotAll();
-  lastTitle = snapshot.title || '';
-  await pushStill();
-  return { text: describe(snapshot, note), shot: await thumbnail() };
+  const snapshot = await snapshotAll(s);
+  s.lastTitle = snapshot.title || '';
+  await pushStill(s);
+  return { text: describe(snapshot, note), shot: await thumbnail(s) };
 }
 
 /**
@@ -929,13 +1089,13 @@ async function report(note) {
  * failure mode is pressing the wrong button on somebody else's screen. Refusing
  * is cheap; guessing is not.
  */
-async function elementFor(ref) {
+async function elementFor(s, ref) {
   const n = Number(ref);
   if (!Number.isInteger(n) || n < 1) {
     throw new Error('`ref` must be one of the numbers from the latest page listing.');
   }
 
-  for (const frame of await visibleFrames()) {
+  for (const frame of await visibleFrames(s)) {
     const target = frame.locator(`[data-air-ref="${n}"]`);
     const count = await target.count().catch(() => 0);
     if (count === 1) return target.first();
@@ -953,13 +1113,14 @@ async function elementFor(ref) {
 
 // ── the tools ─────────────────────────────────────────────────────────
 
-async function browserOpen({ url, replace_tab: replaceTab, new_tab: newTab }) {
+async function browserOpen({ url, replace_tab: replaceTab, new_tab: newTab }, job) {
+  const s = await sessionFor(job?.chatId);
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) {
     throw new Error('Give a full http(s) URL, for example https://www.youtube.com.');
   }
 
-  const ctx = await ensureContext();
+  const ctx = await ensureContext(s);
   // A new tab unless told otherwise. Reusing the one tab is how a video the
   // user was listening to got closed to make room for a news site, and how a
   // half-filled form vanished to look something up — and the model had to
@@ -974,13 +1135,13 @@ async function browserOpen({ url, replace_tab: replaceTab, new_tab: newTab }) {
    * the session — a tab the model has to reason about that means nothing, and
    * one the user watches accumulate.
    */
-  const blankHere = browserIsOpen() && /^about:blank$|^chrome:\/\/newtab/.test(page.url());
+  const blankHere = browserIsOpen(s) && /^about:blank$|^chrome:\/\/newtab/.test(s.page.url());
   const reuse = replaceTab === true || newTab === false || blankHere;
-  if (!reuse || !browserIsOpen()) await focusPage(await ctx.newPage());
+  if (!reuse || !browserIsOpen(s)) await focusPage(s, await ctx.newPage());
 
-  await page.goto(target, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
-  const count = tabs().length;
-  return report(`Opened ${target}${count > 1 ? ` in a new tab (${count} open)` : ''}.`);
+  await s.page.goto(target, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+  const count = tabs(s).length;
+  return report(s, `Opened ${target}${count > 1 ? ` in a new tab (${count} open)` : ''}.`);
 }
 
 /**
@@ -998,38 +1159,41 @@ async function browserOpen({ url, replace_tab: replaceTab, new_tab: newTab }) {
  * then dutifully open a *new* tab, which is precisely what attaching is meant
  * to avoid.
  */
-async function ensureAttached() {
-  if (mode !== 'attach' || contextIsLive()) return;
-  await ensureContext();
+async function ensureAttached(s) {
+  if (mode !== 'attach' || contextIsLive(s)) return;
+  await ensureContext(s);
 }
 
-async function browserTabs() {
-  await ensureAttached();
-  const open = tabs();
+async function browserTabs(input, job) {
+  const s = await sessionFor(job?.chatId);
+  await ensureAttached(s);
+  const open = tabs(s);
   if (!open.length) return 'No tabs are open.';
 
   const titles = await Promise.all(
     open.map(async (p, i) => {
       const title = await p.title().catch(() => '');
-      return `  [${i + 1}]${p === page ? ' ←' : '  '} ${title || '(untitled)'}\n       ${p.url()}`;
+      return `  [${i + 1}]${p === s.page ? ' ←' : '  '} ${title || '(untitled)'}\n       ${p.url()}`;
     }),
   );
   return ['Open tabs (← is the one you are acting on):', '', ...titles].join('\n');
 }
 
-async function browserSwitch({ tab }) {
-  const open = tabs();
+async function browserSwitch({ tab }, job) {
+  const s = await sessionFor(job?.chatId);
+  const open = tabs(s);
   const index = Number(tab);
   if (!Number.isInteger(index) || index < 1 || index > open.length) {
     throw new Error(`There is no tab ${tab}. Call browser_tabs to see what is open.`);
   }
-  await focusPage(open[index - 1]);
-  return report(`Switched to tab ${index}.`);
+  await focusPage(s, open[index - 1]);
+  return report(s, `Switched to tab ${index}.`);
 }
 
-async function browserCloseTab({ tab }) {
-  const open = tabs();
-  const index = tab == null ? open.indexOf(page) + 1 : Number(tab);
+async function browserCloseTab({ tab }, job) {
+  const s = await sessionFor(job?.chatId);
+  const open = tabs(s);
+  const index = tab == null ? open.indexOf(s.page) + 1 : Number(tab);
   if (!Number.isInteger(index) || index < 1 || index > open.length) {
     throw new Error(`There is no tab ${tab}. Call browser_tabs to see what is open.`);
   }
@@ -1046,42 +1210,46 @@ async function browserCloseTab({ tab }) {
 
   const closing = open[index - 1];
   await closing.close().catch(() => {});
-  const left = tabs();
+  const left = tabs(s);
   if (!left.length) {
-    page = null;
+    s.page = null;
     return 'Closed the last tab. The sandbox has nothing open now.';
   }
-  if (closing === page) await focusPage(left[0]);
-  return report(`Closed tab ${index}. ${left.length} still open.`);
+  if (closing === s.page) await focusPage(s, left[0]);
+  return report(s, `Closed tab ${index}. ${left.length} still open.`);
 }
 
-async function browserLook() {
-  await ensureAttached();
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  return report('Current page:');
+async function browserLook(input, job) {
+  const s = await sessionFor(job?.chatId);
+  await ensureAttached(s);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  return report(s, 'Current page:');
 }
 
-async function browserClick({ ref, description }) {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  const target = await elementFor(ref);
+async function browserClick({ ref, description }, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  const target = await elementFor(s, ref);
   await target.scrollIntoViewIfNeeded().catch(() => {});
   await target.click({ timeout: 15_000 });
-  return report(`Clicked [${ref}]${description ? ` (${description})` : ''}.`);
+  return report(s, `Clicked [${ref}]${description ? ` (${description})` : ''}.`);
 }
 
-async function browserType({ ref, text, submit = false }) {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  const target = await elementFor(ref);
+async function browserType({ ref, text, submit = false }, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  const target = await elementFor(s, ref);
   await target.click({ timeout: 15_000 }).catch(() => {});
   await target.fill(String(text ?? ''), { timeout: 15_000 });
-  if (submit) await page.keyboard.press('Enter');
-  return report(`Typed into [${ref}]${submit ? ' and pressed Enter' : ''}.`);
+  if (submit) await s.page.keyboard.press('Enter');
+  return report(s, `Typed into [${ref}]${submit ? ' and pressed Enter' : ''}.`);
 }
 
-async function browserPress({ key }) {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  await page.keyboard.press(String(key || 'Enter'));
-  return report(`Pressed ${key}.`);
+async function browserPress({ key }, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  await s.page.keyboard.press(String(key || 'Enter'));
+  return report(s, `Pressed ${key}.`);
 }
 
 /**
@@ -1094,22 +1262,24 @@ async function browserPress({ key }) {
  * `goBack` resolves to null when there is nothing in the history, which is worth
  * saying rather than reporting a move that did not happen.
  */
-async function browserBack() {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  const response = await page
+async function browserBack(input, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  const response = await s.page
     .goBack({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT })
     .catch(() => null);
-  if (!response) return report('There was nothing to go back to; the page has not moved.');
-  return report('Went back.');
+  if (!response) return report(s, 'There was nothing to go back to; the page has not moved.');
+  return report(s, 'Went back.');
 }
 
-async function browserForward() {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  const response = await page
+async function browserForward(input, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  const response = await s.page
     .goForward({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT })
     .catch(() => null);
-  if (!response) return report('There was nothing to go forward to; the page has not moved.');
-  return report('Went forward.');
+  if (!response) return report(s, 'There was nothing to go forward to; the page has not moved.');
+  return report(s, 'Went forward.');
 }
 
 /**
@@ -1122,9 +1292,10 @@ async function browserForward() {
  * Matched on the visible label first, because that is what the listing shows and
  * therefore what the model has to work from, then on the underlying value.
  */
-async function browserSelect({ ref, value }) {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  const target = await elementFor(ref);
+async function browserSelect({ ref, value }, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  const target = await elementFor(s, ref);
   const wanted = String(value ?? '');
 
   await target.scrollIntoViewIfNeeded().catch(() => {});
@@ -1146,34 +1317,37 @@ async function browserSelect({ ref, value }) {
       );
     }
   }
-  return report(`Chose "${wanted}" in [${ref}].`);
+  return report(s, `Chose "${wanted}" in [${ref}].`);
 }
 
 /** Hover, for menus that only exist while the pointer is on them. */
-async function browserHover({ ref }) {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  const target = await elementFor(ref);
+async function browserHover({ ref }, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  const target = await elementFor(s, ref);
   await target.scrollIntoViewIfNeeded().catch(() => {});
   await target.hover({ timeout: 10_000 });
-  return report(`Hovering over [${ref}]. Anything that only appears on hover is in the listing below.`);
+  return report(s, `Hovering over [${ref}]. Anything that only appears on hover is in the listing below.`);
 }
 
-async function browserScroll({ direction = 'down', amount = 1 }) {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
+async function browserScroll({ direction = 'down', amount = 1 }, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
   const steps = Math.min(Math.max(Number(amount) || 1, 1), 10);
   const delta = (direction === 'up' ? -1 : 1) * VIEWPORT.height * 0.85 * steps;
-  await page.mouse.wheel(0, delta);
-  await page.waitForTimeout(400);
-  return report(`Scrolled ${direction}.`);
+  await s.page.mouse.wheel(0, delta);
+  await s.page.waitForTimeout(400);
+  return report(s, `Scrolled ${direction}.`);
 }
 
-async function browserWait({ seconds = 3 }) {
-  if (!browserIsOpen()) throw new Error('No page is open. Use browser_open first.');
-  const s = Math.min(Math.max(Number(seconds) || 3, 1), 30);
+async function browserWait({ seconds = 3 }, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) throw new Error('No page is open. Use browser_open first.');
+  const wait = Math.min(Math.max(Number(seconds) || 3, 1), 30);
   // Nothing to pump here any more — the screencast pushes frames on its own
   // clock, so a video plays at video speed while this simply waits.
-  await page.waitForTimeout(s * 1000);
-  return report(`Waited ${s} seconds while the user watched.`);
+  await s.page.waitForTimeout(wait * 1000);
+  return report(s, `Waited ${wait} seconds while the user watched.`);
 }
 
 /**
@@ -1185,8 +1359,9 @@ async function browserWait({ seconds = 3 }) {
  * and the user's browser are different programs, and only one of them is ours
  * to shut.
  */
-async function browserClose() {
-  if (!browserIsOpen()) {
+async function browserClose(input, job) {
+  const s = await sessionFor(job?.chatId);
+  if (!browserIsOpen(s)) {
     return (
       'There was no sandbox open, so nothing was closed.\n\n' +
       'If the user is looking at a page you opened with `open_url`, that is their own browser — ' +
@@ -1195,11 +1370,14 @@ async function browserClose() {
     );
   }
   const borrowed = mode === 'attach';
-  await closeBrowser();
+  // This conversation's browser, not every conversation's. `closeBrowser` shuts
+  // all of them and belongs to shutdown and mode changes — calling it here meant
+  // finishing in one chat closed a browser somebody was still using in another.
+  await closeSession(s);
   return borrowed
     ? 'Let go of the user\'s browser. Their tabs are untouched and still open — this only stopped ' +
         'driving them, and the screen panel will stop updating.'
-    : 'Closed the sandbox browser. The screen panel will stop updating.';
+    : 'Closed the sandbox browser for this conversation. The screen panel will stop updating.';
 }
 
 /**
@@ -1214,8 +1392,9 @@ async function browserClose() {
  * place.
  */
 export async function userInput({ type, x, y, toX, toY, button = 'left', key, text, deltaY }) {
-  if (!browserIsOpen()) throw new Error('Nothing is open in the sandbox.');
-  const cdp = await page.context().newCDPSession(page);
+  const s = await sessionFor(null);
+  if (!browserIsOpen(s)) throw new Error('Nothing is open in the sandbox.');
+  const cdp = await s.page.context().newCDPSession(s.page);
   try {
     const toPixels = (value, extent) => Math.round(Math.min(Math.max(Number(value) || 0, 0), 1) * extent);
     const px = toPixels(x, VIEWPORT.width);
@@ -1268,7 +1447,7 @@ export async function userInput({ type, x, y, toX, toY, button = 'left', key, te
         button: 'left',
         buttons: 0,
       });
-      await pushStill();
+      await pushStill(s);
       return 'dragged';
     }
 
@@ -1299,29 +1478,29 @@ export async function userInput({ type, x, y, toX, toY, button = 'left', key, te
       return 'scrolled';
     }
     if (type === 'text') {
-      await page.keyboard.insertText(String(text ?? ''));
+      await s.page.keyboard.insertText(String(text ?? ''));
       return 'typed';
     }
     if (type === 'key') {
-      await page.keyboard.press(String(key || 'Enter'));
+      await s.page.keyboard.press(String(key || 'Enter'));
       return 'pressed';
     }
     // Navigation, so the panel is a browser window rather than a picture of
     // one. Watching an assistant take a wrong turn and being unable to press
     // Back is a strange kind of helplessness.
     if (type === 'back') {
-      await page.goBack({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
-      await pushStill();
+      await s.page.goBack({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+      await pushStill(s);
       return 'back';
     }
     if (type === 'forward') {
-      await page.goForward({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
-      await pushStill();
+      await s.page.goForward({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+      await pushStill(s);
       return 'forward';
     }
     if (type === 'reload') {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
-      await pushStill();
+      await s.page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
+      await pushStill(s);
       return 'reloaded';
     }
     // Switching tabs from the strip. The assistant reads whichever tab is
@@ -1329,13 +1508,13 @@ export async function userInput({ type, x, y, toX, toY, button = 'left', key, te
     // "look at this one instead" is a thing you should be able to say by
     // pressing a tab rather than by typing a sentence.
     if (type === 'tab') {
-      const open = tabs();
+      const open = tabs(s);
       const index = Number(key);
       if (!Number.isInteger(index) || index < 1 || index > open.length) {
         throw new Error(`There is no tab ${key}.`);
       }
-      await focusPage(open[index - 1]);
-      await pushStill();
+      await focusPage(s, open[index - 1]);
+      await pushStill(s);
       return `tab ${index}`;
     }
     throw new Error(`Unknown input "${type}".`);
@@ -1363,7 +1542,8 @@ export async function userInput({ type, x, y, toX, toY, button = 'left', key, te
  * afterwards whatever happens — a print job must not leave litter behind.
  */
 export async function renderPdf({ html, url, landscape = false }) {
-  const ctx = await ensureContext();
+  const s = await sessionFor(null);
+  const ctx = await ensureContext(s);
   const sheet = await ctx.newPage();
 
   try {
@@ -1384,8 +1564,8 @@ export async function renderPdf({ html, url, landscape = false }) {
   } finally {
     await sheet.close().catch(() => {});
     // Printing must not steal the tab the assistant was working in.
-    const left = tabs();
-    if (page?.isClosed?.() && left.length) await focusPage(left[0]);
+    const left = tabs(s);
+    if (s.page?.isClosed?.() && left.length) await focusPage(s, left[0]);
   }
 }
 
@@ -1404,7 +1584,8 @@ export async function renderPdf({ html, url, landscape = false }) {
  * one base64 round trip would be a poor trade.
  */
 export async function renderImage({ data, mime, width, height, crop, rotate = 0, flip, format = 'png', quality = 0.9 }) {
-  const ctx = await ensureContext();
+  const s = await sessionFor(null);
+  const ctx = await ensureContext(s);
   const sheet = await ctx.newPage();
 
   try {
@@ -1479,8 +1660,8 @@ export async function renderImage({ data, mime, width, height, crop, rotate = 0,
     return { ...result, buffer: Buffer.from(result.data, 'base64') };
   } finally {
     await sheet.close().catch(() => {});
-    const left = tabs();
-    if (page?.isClosed?.() && left.length) await focusPage(left[0]);
+    const left = tabs(s);
+    if (s.page?.isClosed?.() && left.length) await focusPage(s, left[0]);
   }
 }
 

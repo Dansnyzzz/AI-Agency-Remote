@@ -215,16 +215,11 @@ export async function listDevices(userId) {
     workspaceError: d.info?.workspaceError ?? null,
     desktop: !!d.info?.desktop,
     fullDisk: !!d.info?.fullDisk,
-    // Same distinction as `workspace` above, and for the same reason: what was
-    // chosen and what the machine actually reports having adopted. A computer
-    // that has been offline since the setting changed should not be drawn as
-    // though it had already obeyed.
-    browserMode: d.browser_mode ?? null,
-    browser: d.info?.browser ?? null,
     createdAt: d.created_at,
     lastSeen: d.last_seen,
   }));
 }
+
 
 /**
  * Which browser this computer drives.

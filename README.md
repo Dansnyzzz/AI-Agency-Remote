@@ -416,37 +416,119 @@ still renders at full rate.
 Set `BROWSER_SHOW=true` to put it back on screen, `BROWSER_MUTE=true` for silence, or
 `BROWSER_HEADLESS=true` for no window at all — and no sound.
 
-### Which browser it drives
+### One browser per conversation
 
-A clean sandbox is the right default and useless behind a sign-in wall: the assistant cannot read
-your Gmail in a browser that has never heard of you. So each computer chooses, in
-**Settings → Computers → Browser**, and the choice reaches the machine on its next heartbeat.
+Each conversation gets its own `BrowserContext` — its own cookies, its own
+`localStorage`, its own tabs. Two conversations running at once no longer share a
+sign-in, and closing the browser in one leaves the other alone.
 
-| | What it is | What it costs |
+A context rather than a whole Chrome per conversation: roughly 20–50MB against
+~250MB, so five conversations cost about 150MB instead of over a gigabyte. What
+is given up is crash isolation, not session isolation. At most six are held at
+once, and one nobody has touched for ten minutes closes on its own —
+`BROWSER_MAX_SESSIONS` and `BROWSER_IDLE_MS` change both.
+
+Sub-agents run without a conversation of their own, so they share one bucket
+rather than each opening a browser.
+
+**The browser is always a clean sandbox**, launched from the Chrome or Edge
+already installed — no 400MB download, and nothing of yours in it. Two other
+modes exist in the worker and are reachable only by setting `BROWSER_MODE` on
+that machine: `profile` keeps a signed-in profile of its own, and `attach`
+drives a Chrome you started with `--remote-debugging-port`. Neither is offered in
+Settings, and neither is split per conversation — each wraps one real identity,
+so there is nothing there to split.
+
+### Watching it work
+
+A run of browser or desktop actions is drawn as **one card, not one card per call** — "Used the
+browser · 8 steps" — with each step as a sentence rather than a tool name: *Opened vercel.com*,
+*Clicked Deploy*, *Waited 3 seconds*. Each carries a thumbnail of what the screen looked like when it
+finished, so scrolling back through yesterday's session shows the pictures and not just the prose.
+
+The run stays open while it is working and collapses when it ends. Prose between two runs splits
+them, because that is the assistant stopping to say something — a real boundary between two pieces of
+work, and folding across it would claim a structure the turn does not have.
+
+Thumbnails are stored as attachments and referenced by id, never inlined into the transcript: a long
+browsing session would otherwise put megabytes of base64 into a conversation that gets read back on
+every load.
+
+Desktop steps carry a picture as well, and it is the **live camera frame** rather than a capture of
+its own — about 61KB against the browser's 4KB. That is a measurement, not an oversight: starting the
+desktop capture host for a one-off shot takes **1516ms** on Windows, and paying that on every action
+somebody is watching is a worse trade than 57KB.
+
+### The sandbox is not your browser
+
+Two different browsers, and confusing them is the single easiest way to be surprised by this app:
+
+| | `browser_*` — the sandbox | `open_url` — your browser |
 |---|---|---|
-| **Sandbox** *(default)* | A fresh browser with an empty profile | Signed in to nothing. Nothing it does is saved. |
-| **Saved profile** | A persistent profile of the worker's own, on that machine | Sign in once through the live panel and it stays signed in. Real cookies, sitting on that machine's disk. |
-| **Your own Chrome** | The Chrome you already have open, over its debugging port | Chrome must be started with `--remote-debugging-port=9222` — quit it completely first, or the flag is ignored. |
+| Whose window | The assistant's own, launched fresh | Your real Chrome, with your logins and tabs |
+| Can it read the page | Yes | No |
+| Can it click and type | Yes | No |
+| Can it close the page | Yes | **No** |
+| Mirrored in the panel | Yes | No |
 
-**Saved profile does not use your Chrome profile directory**, and that is deliberate rather than a
-limitation we did not get to. Chrome holds an exclusive lock on `User Data` while it is running, so
-pointing at it fails whenever your browser is open — which is nearly always — with an error that says
-nothing about why. A separate profile gives almost all of the benefit and cannot corrupt the one you
-actually browse with.
+So "close the browser" only ever closes the sandbox. If the assistant handed a page to *your* Chrome
+with `open_url`, that tab is yours — it will say so rather than pretending, and can offer to close
+the window with the desktop tools instead.
 
-**Attaching borrows your browser; it never closes it.** Ending a session drops the connection and
-leaves every tab exactly where it was, and the assistant is refused if it tries to close the last tab
-— on most platforms that would quit Chrome and take everything you had open with it. Verified against
-a live Chrome: after the assistant let go, the browser was still serving with every tab intact.
+The panel labels every frame **sandbox** or **desktop**, and the ✕ beside that label closes the
+sandbox immediately without waiting for a turn.
 
-**Attached, "what is open?" answers about your tabs.** `browser_tabs` and `browser_look` connect
-before answering, so the assistant sees the pages you already have rather than being told nothing is
-open and helpfully opening a new tab — which was the first thing this mode got wrong. In the other
-two modes nothing is open until the assistant opens it, and neither tool launches a browser just to
-answer a question.
+### Tabs, and not destroying what you were doing
 
-`BROWSER_MODE` sets the default for a machine before it has ever been paired; `BROWSER_CDP_PORT`
-changes the port attaching looks at.
+The sandbox has real tabs. `browser_open` with `new_tab: true` leaves the current one alone, and
+`browser_tabs` / `browser_switch` / `browser_close_tab` move between them.
+
+This exists because of a specific failure: asking for a news site while music was playing used to
+navigate the only tab there was, killing the audio. The assistant is told to open a new tab whenever
+the current one holds something worth keeping.
+
+It is also told to **work the site rather than the URL bar** — go to the page, type in its search
+box, click the result — instead of assembling query-string URLs to skip the steps you are watching.
+
+### You can take the controls
+
+The ✕ in the panel closes the sandbox. The **🖰** button next to it hands you the mouse: click, scroll
+and type straight into the mirrored page. Coordinates are sent as fractions of the frame, so a phone
+showing a scaled-down mirror still lands where you tapped.
+
+Off until you press it, because a stray click while reading should not land in a page the assistant
+is midway through using. The panel outlines itself in green while you hold the controls.
+
+Local runs only — routing every click through the job queue would take about a second each, which is
+a telegram rather than a pointer.
+
+### Sound, and where it comes out
+
+The sandbox runs **headed and unmuted by default**, because headless Chrome is silent: it has no
+audio output device, so a video "playing" in it is a series of frames and nothing else.
+
+Two flags make a clicked video actually play:
+
+- `BROWSER_HEADLESS=false` *(the default; a local `npm start` writes it)* — a real window, and
+  therefore a real audio device.
+- `--autoplay-policy=no-user-gesture-required` — Chrome does not count an automation click as a user
+  gesture, so without this a clicked video sits on its first frame.
+
+> **The sound comes out of the speakers of the machine running the worker.** It does not travel to
+> the browser tab you are watching from — the mirror is JPEG frames and carries no audio track.
+> Sitting at that machine, you hear it. Watching from a phone, you will not. Streaming audio to a
+> remote viewer needs a WebRTC pipeline, which is not implemented.
+
+**The window is parked off the edge of the desktop**, at coordinates no monitor covers — measured at
+`-1680,0` against a desktop starting at `0,0`. It has to exist for there to be an audio device and a
+compositor, but it does not have to be in your way, steal focus, or be closeable by accident. That
+last one was a real failure: closing it by hand made every following tool call report "no page is
+open". Chrome is launched with backgrounding and timer throttling disabled so an unwatched window
+still renders at full rate.
+
+Set `BROWSER_SHOW=true` to put it back on screen, `BROWSER_MUTE=true` for silence, or
+`BROWSER_HEADLESS=true` for no window at all — and no sound.
+
 
 ---
 

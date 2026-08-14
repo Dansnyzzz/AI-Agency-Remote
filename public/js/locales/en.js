@@ -95,26 +95,6 @@ export const en = {
   'devices.unpin': 'Follow me instead',
   'devices.unpinned': 'It will use the computer you are on.',
 
-  /* ── which browser a computer drives ──────────────────────────────
-   *
-   * Each option is labelled with what it costs, not what it is called:
-   * "signed in to nothing" is the fact that decides whether the sandbox is any
-   * use for the job in hand.
-   */
-  'browser.label': 'Browser',
-  'browser.sandbox': 'Sandbox — a clean browser, signed in to nothing',
-  'browser.profile': 'Saved profile — stays signed in between sessions',
-  'browser.attach': 'Your own Chrome — the one you are already using',
-  'browser.sandboxHint':
-    'A fresh browser with an empty profile. Nothing of yours is in it, and nothing it does is saved.',
-  'browser.profileHint':
-    'A profile of its own on that computer. Sign in once through the live view and it stays signed in. The cookies are real, and they sit on that machine.',
-  'browser.attachHint':
-    'Drives the Chrome you already have open, with everything you are signed in to. Chrome must have been started with --remote-debugging-port={port}.',
-  'browser.attachMissing':
-    'Nothing is listening on port {port} on that computer. Quit Chrome completely, then start it with --remote-debugging-port={port} — or choose another browser here.',
-  'browser.pending': 'Waiting for that computer to pick up the change.',
-  'browser.saved': 'Saved. That computer will switch within about fifteen seconds.',
   'chat.planCount': '{done} of {total}',
 
   // A message typed while the assistant is still working, waiting above the
