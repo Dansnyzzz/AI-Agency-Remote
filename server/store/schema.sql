@@ -263,16 +263,10 @@ CREATE INDEX IF NOT EXISTS devices_user_idx ON devices (user_id, revoked_at);
 -- the machine itself was started with.
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS workspace TEXT;
 
--- Which browser the assistant drives on this computer.
---
---   sandbox  a fresh browser with an empty profile — signed in to nothing
---   profile  a persistent profile of the worker's own, which stays signed in
---   attach   the person's own running Chrome, over its remote-debugging port
---
--- Per computer rather than per account, because the answer depends on what is
--- installed and running on that machine, and an account with a laptop and a
--- desktop will not want the same answer for both. Null means sandbox: the
--- narrow default, chosen for anyone who has never opened this setting.
+-- Added when the browser was choosable per computer. That setting was removed
+-- again — the answer is always a clean sandbox — so nothing reads this now. It
+-- stays because dropping a column is a migration that risks data for no gain,
+-- and because a future setting would want exactly this shape.
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS browser_mode TEXT;
 
 -- A computer waiting to be adopted.

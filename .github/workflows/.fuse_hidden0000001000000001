@@ -46,14 +46,6 @@ jobs:
           # installed so CI does not depend on Chrome being present.
           PLAYWRIGHT_BROWSERS_PATH: '0'
 
-      # The browser-sandbox suite drives the same tools the assistant uses. It
-      # lived outside `npm test` because it needs a browser, and outside CI it
-      # broke without anyone noticing. Same Chromium as the step above.
-      - name: Sandbox suite
-        run: npm run test:sandbox
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: '0'
-
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 5

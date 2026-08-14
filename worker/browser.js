@@ -444,10 +444,21 @@ async function openAttached(s) {
   try {
     s.browser = await chromium.connectOverCDP(endpoint);
   } catch (err) {
+    /**
+     * Say something the reader can act on *from where they are*.
+     *
+     * This used to end with "switch this computer to the profile or sandbox
+     * browser in Settings → Computers" — and then that setting was removed, so
+     * the message sent people looking for a control that no longer exists.
+     * `attach` is now reachable only by setting BROWSER_MODE on this machine,
+     * so that is what the way out has to name.
+     */
     throw new Error(
-      `No browser is listening on ${endpoint}. Start Chrome with --remote-debugging-port=${CDP_PORT} ` +
-        `(quit it completely first, or the flag is ignored), or switch this computer to the ` +
-        `"profile" or "sandbox" browser in Settings → Computers. (${err?.message?.split('\n')[0]})`,
+      `No browser is listening on ${endpoint}. This computer is set to drive your own Chrome ` +
+        `(BROWSER_MODE=attach in worker/.env), which needs Chrome started with ` +
+        `--remote-debugging-port=${CDP_PORT} — quit it completely first, or the flag is ignored. ` +
+        `To go back to a clean sandbox instead, remove BROWSER_MODE from worker/.env and restart ` +
+        `the worker. (${err?.message?.split('\n')[0]})`,
     );
   }
 

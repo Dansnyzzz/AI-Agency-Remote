@@ -228,18 +228,6 @@ export async function listDevices(userId) {
  * while somebody is looking at the control that sent it — instead of being
  * stored, shipped to the machine, and silently ignored there.
  */
-export const BROWSER_MODES = ['sandbox', 'profile', 'attach'];
-
-export async function setDeviceBrowserMode(userId, deviceId, mode) {
-  const wanted = String(mode ?? '').trim() || 'sandbox';
-  if (!BROWSER_MODES.includes(wanted)) {
-    throw new Error(`"${wanted}" is not a browser this computer can use.`);
-  }
-
-  const device = await getStore().setDeviceBrowserMode(userId, deviceId, wanted);
-  if (!device) throw new Error('No such computer is paired to this account.');
-  return device;
-}
 
 /**
  * The pairing code offered by a worker on *this* machine, if there is one.
