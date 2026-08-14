@@ -308,7 +308,22 @@ function launchOptions() {
    * you are watching from. Streaming audio to a remote viewer would need a
    * WebRTC pipeline that does not exist here.
    */
-  const headless = /^(1|true|yes)$/i.test(process.env.BROWSER_HEADLESS ?? 'false');
+  /**
+   * Headed where there is a screen, headless where there is not.
+   *
+   * The default used to be headed everywhere, for a good reason — headless
+   * Chrome has no audio device, so a video "playing" in it is a silent series of
+   * frames. But a headed browser needs somewhere to draw, and on Linux with no X
+   * or Wayland session there is nowhere: a CI runner, a headless server, a
+   * container. There the old default did not trade sound for anything, it
+   * guaranteed the browser would not start at all.
+   *
+   * So the default follows the machine. Setting BROWSER_HEADLESS still wins
+   * either way, and on any desktop nothing changes.
+   */
+  const hasDisplay =
+    process.platform !== 'linux' || !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+  const headless = /^(1|true|yes)$/i.test(process.env.BROWSER_HEADLESS ?? String(!hasDisplay));
   const args = [
     '--disable-blink-features=AutomationControlled',
     // Without this a clicked video sits on its first frame: Chrome's autoplay

@@ -544,6 +544,36 @@ section('the one-line installer');
   check('both are in public/, so the app serves them', files.includes('setup.ps1') && files.includes('setup.sh'));
 }
 
+/**
+ * A browser needs somewhere to draw, and CI has nowhere.
+ *
+ * The default was headed everywhere, for a real reason — headless Chrome has no
+ * audio device, so a video "playing" in it is silent frames. But `ubuntu-latest`
+ * has no X or Wayland session, so on CI that default did not trade sound for
+ * anything: it guaranteed the browser would not start, and the sandbox suite
+ * failed the moment it was added to the workflow.
+ */
+section('the browser can start where there is no screen');
+{
+  const text = read('worker/browser.js');
+  check('the headless default asks whether there is a display', /WAYLAND_DISPLAY/.test(text));
+  check('and only on Linux, where the question means anything', /process\.platform !== 'linux'/.test(text));
+  check('BROWSER_HEADLESS still overrides it', /BROWSER_HEADLESS \?\? String\(!hasDisplay\)/.test(text));
+
+  // The decision, run over every machine this could land on — the one running
+  // the suite can only ever be one of them.
+  const decide = (platform, display, wayland, env) => {
+    const hasDisplay = platform !== 'linux' || !!(display || wayland);
+    return /^(1|true|yes)$/i.test(env ?? String(!hasDisplay));
+  };
+  check('a desktop stays headed', decide('win32', null, null, undefined) === false);
+  check('so does Linux with a display', decide('linux', ':0', null, undefined) === false);
+  check('and Wayland counts as one', decide('linux', null, 'wayland-0', undefined) === false);
+  check('a Linux runner with no display goes headless', decide('linux', null, null, undefined) === true);
+  check('an explicit false still wins', decide('linux', null, null, 'false') === false);
+  check('and an explicit true still wins', decide('win32', null, null, 'true') === true);
+}
+
 section('starting at login');
 {
   const text = read('scripts/autostart.js');
