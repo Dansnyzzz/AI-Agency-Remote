@@ -503,6 +503,41 @@ section('the one-line installer');
     check(`${name} does not ask for administrator rights`, !/RunAs|sudo /.test(text));
   }
 
+  /**
+   * The PowerShell trap that stopped the installer dead on its first real use.
+   *
+   * `git clone` writes "Cloning into '...'" to stderr — progress, not an error.
+   * With $ErrorActionPreference = 'Stop', PowerShell 5.1 turns every stderr line
+   * from a native program into a terminating NativeCommandError the moment it is
+   * merged into the pipeline with 2>&1. The clone succeeded; the script aborted
+   * anyway, printing a red wall of text about a line that had worked.
+   *
+   * Reproduced deliberately before fixing: the old form threw NativeCommandError
+   * while the repository was sitting on disk, fully cloned.
+   */
+  {
+    const ps = read('public/setup.ps1');
+    check('there is a helper for running external programs', /function Run\(/.test(ps));
+    check('and it judges them by their exit code', /\$LASTEXITCODE -ne 0/.test(ps));
+    // $? follows PowerShell's wrapping of native stderr rather than the
+    // program's own result, so it is the wrong signal for exactly this bug.
+    check('not by $?, which lies about native programs', !/if \(-not \$\?\)/.test(ps));
+    check('git clone goes through it', /Run '[^']*' 'git' @\('clone'/.test(ps));
+    check('and so does npm install', /Run 'npm install' 'npm'/.test(ps));
+    // The reason a command failed is the whole value of the message. Out-Null on
+    // the old form threw "Repository not found" away.
+    check('a failure shows what the program said', /Select-Object -Last/.test(ps));
+    // Any remaining 2>&1 must be on a line that runs under a Continue region —
+    // either inside the helper, or one of the two calls that deliberately guard
+    // themselves because their failure is not worth stopping for.
+    // PowerShell block comments are `<# … #>`, and the explanation above talks
+    // about `2>&1` at length — prose about the bug must not read as the bug.
+    const code = ps.replace(/<#[\s\S]*?#>/g, '').replace(/^\s*#.*$/gm, '');
+    const risky = code.split('\n').filter((l) => /2>&1/.test(l));
+    const guarded = risky.every((l) => /\$output = &/.test(l) || /& (git|node)/.test(l));
+    check('every remaining redirect is inside a guarded region', guarded, risky.join(' | '));
+  }
+
   // Served from the app's own origin, without a session: the machine running it
   // has none yet, and that is the entire point.
   const files = fs.readdirSync(path.join(root, 'public'));

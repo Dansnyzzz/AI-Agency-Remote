@@ -14,6 +14,46 @@ $ErrorActionPreference = 'Stop'
 function Say($text) { Write-Host "  $text" }
 function Fail($text) { Write-Host ""; Write-Host "  $text" -ForegroundColor Red; Write-Host ""; exit 1 }
 
+<#
+.SYNOPSIS
+  Run an external program, and judge it by its exit code.
+
+.DESCRIPTION
+  This exists because of one failure, and it stopped the installer dead on its
+  first real use.
+
+  `git clone` writes "Cloning into '...'" to **stderr**. That is progress, not an
+  error — but with `$ErrorActionPreference = 'Stop'`, PowerShell 5.1 turns every
+  stderr line from a native program into a terminating NativeCommandError the
+  moment it is merged into the pipeline with `2>&1`. So a clone that had just
+  succeeded aborted the script, with a red wall of text about a line that had
+  worked.
+
+  `$?` is no better: for native programs it follows the same wrapping rather than
+  the program's own result. **The exit code is the only honest signal**, so that
+  is what is checked.
+
+  Output is captured rather than discarded, and shown only if the command fails —
+  otherwise a failure would print a bare "npm install failed" with the reason
+  thrown away.
+#>
+function Run($what, $exe, [string[]]$argv) {
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output = & $exe @argv 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host ""
+      Write-Host "  $what failed (exit $LASTEXITCODE):" -ForegroundColor Red
+      $output | Select-Object -Last 12 | ForEach-Object { Write-Host "    $_" }
+      Write-Host ""
+      exit 1
+    }
+  } finally {
+    $ErrorActionPreference = $previous
+  }
+}
+
 Write-Host ""
 Write-Host "  AI Remote" -ForegroundColor Green
 Write-Host ""
@@ -90,16 +130,21 @@ if (-not $root) { $root = Join-Path $env:LOCALAPPDATA 'AI-Remote' }
 
 if (Test-Path (Join-Path $root '.git')) {
   Say "Updating the copy already in $root"
-  git -C $root pull --ff-only 2>&1 | Out-Null
+  # Not fatal: a local change or a diverged branch is a reason to leave the copy
+  # alone, not a reason to refuse to connect the computer.
+  $ErrorActionPreference = 'Continue'
+  & git -C $root pull --ff-only 2>&1 | Out-Null
+  $ErrorActionPreference = 'Stop'
 } else {
   Say "Downloading into $root"
-  git clone --depth 1 $repo $root 2>&1 | Out-Null
+  Run 'Downloading the source' 'git' @('clone', '--depth', '1', $repo, $root)
 }
 
 Say "Installing dependencies (this takes a minute)"
 Push-Location $root
 try {
-  npm install --no-audit --no-fund 2>&1 | Out-Null
+  # npm.cmd on Windows, and it writes plenty to stderr that is not an error.
+  Run 'npm install' 'npm' @('install', '--no-audit', '--no-fund')
 } finally {
   Pop-Location
 }
@@ -133,7 +178,12 @@ Say "Paired as `"$($paired.name)`"."
 
 Push-Location $root
 try {
-  node scripts/autostart.js --install 2>&1 | ForEach-Object { Say $_ }
+  # Its own output is worth showing — it names the command that undoes it. Not
+  # fatal either: the computer is paired by this point, and failing to arrange a
+  # restart at login is not a reason to say the whole setup failed.
+  $ErrorActionPreference = 'Continue'
+  & node scripts/autostart.js --install 2>&1 | ForEach-Object { Say $_ }
+  $ErrorActionPreference = 'Stop'
 } finally {
   Pop-Location
 }
