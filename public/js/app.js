@@ -1915,9 +1915,15 @@ function renderConnectSteps() {
  * repeats the same warning with the account named, and refuses to go on without
  * a typed YES.
  */
-$('make-setup-link').addEventListener('click', async (event) => {
-  const button = event.target;
-  const host = $('setup-link');
+/**
+ * Ask for a setup line and draw it.
+ *
+ * Wired to two buttons, because there are two doors into "add a computer" and
+ * the first version only put this behind one of them. **Computers** in the
+ * header is the one people actually press; Settings → Computers is the one that
+ * had the button. So the easy path existed and nobody could find it.
+ */
+async function renderSetupLink(button, host) {
   button.disabled = true;
   try {
     const link = await api.enrolmentLink();
@@ -1940,7 +1946,14 @@ $('make-setup-link').addEventListener('click', async (event) => {
   } finally {
     button.disabled = false;
   }
-});
+}
+
+for (const [buttonId, hostId] of [
+  ['make-setup-link', 'setup-link'],
+  ['make-setup-link-dialog', 'setup-link-dialog'],
+]) {
+  $(buttonId)?.addEventListener('click', (event) => renderSetupLink(event.target, $(hostId)));
+}
 
 document.addEventListener('click', async (event) => {
   const copySetup = event.target.closest('[data-copy-setup]');

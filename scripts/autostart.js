@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -97,7 +97,27 @@ const reg = (args) =>
 function installWindows() {
   const shim = writeShim();
   reg(['add', RUN_KEY, '/v', TASK_NAME, '/t', 'REG_SZ', '/d', `wscript.exe "${shim}"`, '/f']);
-  say('Installed. The worker will start when you log in, with no window.');
+
+  /**
+   * Start it now as well, not only next time.
+   *
+   * Registering the Run key arranges a start *at login* and nothing else, which
+   * is a strange thing to do at the end of a setup somebody is watching: the
+   * installer said "Done", the app said "offline — last seen never", and the
+   * only fix was to log out and back in. Nobody guesses that.
+   *
+   * Launching the same shim the login will launch means what you get now is
+   * exactly what you get after a reboot, rather than a second code path that
+   * behaves slightly differently. A worker already running is not a problem
+   * either — the second one sees the lock file and exits saying so.
+   */
+  try {
+    spawn('wscript.exe', [shim], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    say('Installed and started. It will start again whenever you log in, with no window.');
+  } catch (err) {
+    say(`Installed, but could not start it now (${err?.message || err}). It will start at your next login.`);
+  }
+
   say('Windows lists it under Task Manager → Startup, so you can turn it off there too.');
   say(`Remove it with:  node "${path.join(root, 'scripts', 'autostart.js')}" --uninstall`);
   return true;

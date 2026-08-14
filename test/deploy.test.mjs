@@ -566,6 +566,20 @@ section('starting at login');
   // silently breaks the line it is on.
   check('written as ASCII, because wscript reads the code page', /'ascii'/.test(text));
 
+  /**
+   * Installing has to start it, not only arrange a start.
+   *
+   * The Run key schedules a launch *at login* and nothing else, so the installer
+   * finished, said "Done", and the app showed the machine as offline — last seen
+   * never. The only fix was to log out and back in, which nobody guesses. It now
+   * launches the same shim the login will launch, so what you get immediately is
+   * what you get after a reboot rather than a second code path.
+   */
+  check('installing also starts it now', /spawn\('wscript\.exe'/.test(text));
+  check('by launching the same shim login uses', /spawn\('wscript\.exe', \[shim\]/.test(text));
+  check('detached, so it outlives the installer', /detached: true/.test(text));
+  check('and says so rather than implying a reboot is needed', /Installed and started/.test(text));
+
   check('there is a way to undo it', /--uninstall/.test(text));
   check('and it says so after installing', /Remove it with/.test(text));
   check('macOS and Linux are handled too', /LaunchAgents/.test(text) && /systemd/.test(text));
@@ -606,6 +620,26 @@ section('the interface can name this deployment');
     'public/index.html still tells everyone to run npm start',
   );
   check('and the steps are filled in from script', /id="connect-steps"/.test(html));
+
+  /**
+   * The setup line has to be behind *both* doors.
+   *
+   * It was added to the Settings tab only, while the button most people press is
+   * "Computers" in the header — a different dialog entirely. So the one-line path
+   * existed and the people who needed it were staring at the pairing-code box,
+   * asking why there was no setup option.
+   */
+  for (const id of ['make-setup-link', 'setup-link', 'make-setup-link-dialog', 'setup-link-dialog']) {
+    check(`the page has #${id}`, html.includes(`id="${id}"`));
+  }
+  const appJs = read('public/js/app.js');
+  for (const id of ['make-setup-link', 'make-setup-link-dialog']) {
+    check(`#${id} is wired up`, appJs.includes(`'${id}'`));
+  }
+  check(
+    'and both use the same renderer rather than a second copy',
+    (appJs.match(/async function renderSetupLink/g) || []).length === 1,
+  );
 
   const pkg = json('package.json');
   check('there is a command to run on the other machine', typeof pkg.scripts?.connect === 'string', pkg.scripts?.connect);

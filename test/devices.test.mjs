@@ -481,6 +481,28 @@ section('a computer can be set up from a one-line link');
   const theirs = (await bob.call('GET', '/api/devices')).json.devices.find((d) => d.name === 'Set-up box');
   check("and on nobody else's", !theirs);
 
+  /**
+   * The token enrolment hands back has to actually authenticate.
+   *
+   * Nothing checked this end to end, and it is the whole point of the flow: a
+   * setup that pairs a machine and then hands it a credential the server refuses
+   * leaves the computer showing "offline — last seen never" while the row sits
+   * in the list looking fine.
+   */
+  const workerAuth = { Authorization: `Bearer ${redeemed.json.token}` };
+  const beat = await anon.call('POST', '/api/worker/heartbeat', { info: { platform: 'linux x64' } }, workerAuth);
+  check('the token it returns is accepted by the relay', beat.status === 200, `got ${beat.status}`);
+  check('and names the account it belongs to', beat.json?.account === 'alice@example.com', beat.json?.account);
+  check('and the device row it belongs to', beat.json?.deviceId === redeemed.json.deviceId, beat.json?.deviceId);
+
+  const jobs = await anon.call('GET', '/api/worker/jobs', null, workerAuth);
+  check('and it can collect work', jobs.status === 200, `got ${jobs.status}`);
+
+  // After a heartbeat the machine is no longer "last seen never".
+  const seen = (await alice.call('GET', '/api/devices')).json.devices.find((d) => d.id === redeemed.json.deviceId);
+  check('so the computer stops looking offline', !!seen?.lastSeen, String(seen?.lastSeen));
+  check('and is reported online', seen?.online === true, String(seen?.online));
+
   if (mine) await alice.call('DELETE', `/api/devices/${mine.id}`);
 }
 

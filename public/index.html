@@ -576,8 +576,21 @@
 
         <h3>Add a computer</h3>
         <p class="hint">
-          Run AI Remote on the machine you want to use. It shows an eight-character code — type it
-          here. It does not have to be your own account, and it works from a phone.
+          One line to paste on the machine you want to use. It downloads AI Remote, connects it to
+          this account, and sets it to start when you log in.
+        </p>
+        <!-- The primary way in, and it belongs *here*.
+             It was only on the Settings tab at first, while the button most
+             people press is "Computers" in the header — which opens this dialog.
+             So the easy path existed and the people who needed it were looking
+             at the hard one. Both places now offer it; see `renderSetupLink`. -->
+        <button class="btn btn--primary" id="make-setup-link-dialog" type="button">Set up a computer</button>
+        <div id="setup-link-dialog" hidden></div>
+
+        <h3>Or type a pairing code</h3>
+        <p class="hint">
+          If that computer is already running AI Remote, it shows an eight-character code. It does
+          not have to be your own account, and this works from a phone.
         </p>
         <div class="provider__row">
           <input
@@ -589,7 +602,7 @@
             spellcheck="false"
             maxlength="9"
           />
-          <button class="btn btn--primary" id="pair-submit" type="button">Pair</button>
+          <button class="btn btn--ghost" id="pair-submit" type="button">Pair</button>
         </div>
         <p class="hint" id="pair-status"></p>
 
