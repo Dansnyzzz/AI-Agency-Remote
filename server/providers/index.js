@@ -59,23 +59,106 @@ export function outputBudget(entry) {
   return Math.max(256, Math.min(wanted, context - 1024));
 }
 
-/**
- * Whether another key would have done any better.
- *
- * Only the failures that are about *this key*: it is invalid, it is out of
- * credit, it has been rate limited. A model that does not exist, a malformed
- * request, a provider that is down — those fail identically on every key, and
- * retrying through five of them turns one clear error into five slow ones.
- */
-function keyExhausted(error) {
-  const status = error?.status || error?.statusCode || error?.response?.status;
-  if ([401, 402, 403, 429].includes(Number(status))) return true;
+/** The longest we will hold one request open waiting for a limit to lift. */
+const MAX_WAIT_MS = 60_000;
 
-  const message = String(error?.message || '').toLowerCase();
-  return /invalid[ _-]?api[ _-]?key|incorrect api key|unauthorized|quota|insufficient|out of credit|rate limit|too many requests|billing/.test(
-    message,
-  );
+/** Beyond a day, a header is lying or a clock is wrong. */
+const MAX_SANE_WAIT_MS = 24 * 3600_000;
+
+/**
+ * A header off an SDK error, whichever shape the SDK chose.
+ *
+ * The Anthropic and OpenAI SDKs both attach the response headers, but one hands
+ * back a `Headers` instance and the other a plain object, and header names
+ * arrive in whatever case the server used.
+ */
+function headerOf(error, name) {
+  const bag = error?.headers || error?.response?.headers;
+  if (!bag) return null;
+  if (typeof bag.get === 'function') return bag.get(name) ?? null;
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(bag)) {
+    if (String(key).toLowerCase() === wanted) return value == null ? null : String(value);
+  }
+  return null;
 }
+
+/**
+ * How long the provider says to wait, in milliseconds.
+ *
+ * Returned in full rather than clamped: the caller needs the difference between
+ * "twenty seconds" and "tomorrow morning". One is worth waiting for inside the
+ * request; the other is worth recording and saying out loud.
+ */
+function waitFrom(error, now = Date.now()) {
+  const sane = (ms) => (Number.isFinite(ms) && ms > 0 && ms <= MAX_SANE_WAIT_MS ? Math.round(ms) : null);
+
+  // `Retry-After` is either a number of seconds or an HTTP date.
+  const after = headerOf(error, 'retry-after');
+  if (after != null && String(after).trim() !== '') {
+    const seconds = Number(after);
+    if (Number.isFinite(seconds)) return sane(seconds * 1000);
+    const when = Date.parse(String(after));
+    if (Number.isFinite(when)) return sane(when - now);
+  }
+
+  // `X-RateLimit-Reset` has no agreed unit. OpenRouter sends epoch
+  // milliseconds, others send epoch seconds, and a few send a plain duration —
+  // so tell them apart by magnitude rather than by trusting the name.
+  const reset = Number(headerOf(error, 'x-ratelimit-reset'));
+  if (Number.isFinite(reset) && reset > 0) {
+    if (reset > 1e12) return sane(reset - now);
+    if (reset > 1e9) return sane(reset * 1000 - now);
+    return sane(reset * 1000);
+  }
+
+  return null;
+}
+
+const DEAD_KEY =
+  /invalid[ _-]?api[ _-]?key|incorrect api key|unauthorized|no such key|out of credit|insufficient|billing/;
+const TRANSIENT = /timeout|timed out|econnreset|econnrefused|socket hang up|fetch failed|network/;
+
+/**
+ * What a failure says about the key that produced it.
+ *
+ * The version this replaced answered one question — "would another key have
+ * done any better?" — and answered it the same way for a rate limit as for an
+ * empty wallet. They are not the same. A 429 usually wants a few seconds and
+ * the *same* key; a 402 wants a different key and will never want that one
+ * again. Grading them alike is what turned a momentary limit on a single-key
+ * account into a hard failure with nothing to fall back to.
+ *
+ * - `RATE_LIMITED` — this key, later. `retryAfterMs` when the provider said.
+ * - `KEY_DEAD`     — this key, never again this run. Try the next one.
+ * - `UPSTREAM`     — the provider stumbled. Same key, after a pause.
+ * - `FATAL`        — broken in a way every key shares. Report it and stop:
+ *                    walking five keys turns one clear error into five slow ones.
+ */
+function classify(error) {
+  const status = Number(error?.status || error?.statusCode || error?.response?.status) || 0;
+  const message = String(error?.message || '').toLowerCase();
+  const retryAfterMs = waitFrom(error);
+
+  // Status first. Plenty of 429 bodies say "quota", and reading that as a spent
+  // key is exactly the misgrading this function exists to stop.
+  // "quota" with no status attached is almost always a limit rather than a
+  // spent key, so it rests this key and moves on rather than condemning it for
+  // the life of the process on the strength of one vague sentence.
+  if (status === 429 || (!status && /rate limit|too many requests|quota/.test(message))) {
+    return { kind: 'RATE_LIMITED', retryAfterMs };
+  }
+  if ([401, 402, 403].includes(status) || (!status && DEAD_KEY.test(message))) {
+    return { kind: 'KEY_DEAD', retryAfterMs: null };
+  }
+  if (status === 408 || status >= 500 || (!status && TRANSIENT.test(message))) {
+    return { kind: 'UPSTREAM', retryAfterMs };
+  }
+  return { kind: 'FATAL', retryAfterMs: null };
+}
+
+// Bridged until the rotation loop below is rewritten in terms of `classify`.
+const keyExhausted = (error) => classify(error).kind !== 'FATAL';
 
 /**
  * One streaming interface over every provider, and every key they have.
@@ -149,4 +232,4 @@ export async function* streamCompletion(opts) {
 export { resolveModel, PROVIDERS };
 
 /** Exposed for the suite that pins which failures are worth another key. */
-export const __testing = { keyExhausted, outputBudget };
+export const __testing = { classify, waitFrom, headerOf, outputBudget };

@@ -196,18 +196,34 @@ section('nothing configured at all');
 }
 
 // ── which model failures deserve another key ────────────────────────
+//
+// This used to ask `keyExhausted` one yes-or-no question. It now asks
+// `classify` which *kind* of failure it was, because "would another key help?"
+// turned out to be two questions wearing one coat: a rate limit wants time and
+// the same key, an empty wallet wants a different key and never that one again.
+// The grading itself is pinned in full by test/fallback.test.mjs; these are the
+// cases this suite has always cared about.
 section('when a second API key would help');
 {
-  const worth = providers.keyExhausted;
-  check('an unauthorised key', worth({ status: 401 }));
-  check('one out of credit', worth({ status: 402 }));
-  check('one being rate limited', worth({ status: 429 }));
-  check('and one the provider names in prose', worth(new Error('Your quota has been exceeded')));
-  check('and an invalid key by message alone', worth(new Error('Incorrect API key provided')));
+  const kind = (error) => providers.classify(error).kind;
+  check('an unauthorised key', kind({ status: 401 }) === 'KEY_DEAD');
+  check('one out of credit', kind({ status: 402 }) === 'KEY_DEAD');
+  check('one being rate limited', kind({ status: 429 }) === 'RATE_LIMITED');
+  check('and one the provider names in prose', kind(new Error('Your quota has been exceeded')) === 'RATE_LIMITED');
+  check('and an invalid key by message alone', kind(new Error('Incorrect API key provided')) === 'KEY_DEAD');
 
-  check('but not a model that does not exist', !worth({ status: 404 }));
-  check('nor a malformed request', !worth({ status: 400, message: 'unsupported parameter' }));
-  check('nor the provider being down', !worth({ status: 503 }), 'every key fails the same way; five slow errors help nobody');
+  check('but not a model that does not exist', kind({ status: 404 }) === 'FATAL');
+  check('nor a malformed request', kind({ status: 400, message: 'unsupported parameter' }) === 'FATAL');
+
+  // Deliberately reversed. Walking every key on a 503 was right — they all fail
+  // the same way — but the conclusion drawn from it was wrong: the turn was
+  // abandoned when the provider had merely stumbled. It is the same key that
+  // wants trying, a moment later.
+  check(
+    'and the provider being down is worth waiting out, not worth another key',
+    kind({ status: 503 }) === 'UPSTREAM',
+    'same key, after a pause — rather than five slow errors or none at all',
+  );
 }
 
 console.log(
