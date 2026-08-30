@@ -418,6 +418,29 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint 
  *
  * @param decision  'allow' | 'deny' when resuming from an approval prompt
  */
+/**
+ * Fold one stream event into the assistant turn being built.
+ *
+ * Only the two events that touch the draft prose live here, and they are
+ * together because they are opposites: one adds to it, the other throws it
+ * away. `retry` means the provider is starting this reply again on another key,
+ * so what has been sent is being *replaced* rather than continued — and this
+ * draft is what gets persisted at the end of the turn, so a version that kept
+ * its discarded half would be stored and then read as one reply.
+ *
+ * Pulled out of the loop so that can be tested without standing up a provider.
+ */
+export function applyStreamEvent(ev, assistant, emit) {
+  if (ev.type === 'text') {
+    assistant.text += ev.delta ?? '';
+    emit('text', { delta: ev.delta });
+  } else if (ev.type === 'retry') {
+    assistant.text = '';
+    emit('retry', { reason: ev.reason || '' });
+  }
+  return ev;
+}
+
 export async function runAgent({ userId, user, chatId, modelId, decision, emit, signal, deviceHint }) {
   const store = getStore();
   const prefs = await getPrefs(userId);
@@ -621,9 +644,8 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
         effort: prefs.effort,
         signal,
       })) {
-        if (ev.type === 'text') {
-          assistant.text += ev.delta;
-          emit('text', { delta: ev.delta });
+        if (ev.type === 'text' || ev.type === 'retry') {
+          applyStreamEvent(ev, assistant, emit);
         } else if (ev.type === 'thinking') {
           assistant.thinking += ev.delta;
           emit('thinking', { delta: ev.delta });
@@ -704,3 +726,6 @@ export function deriveTitle(text) {
   if (!clean) return 'New chat';
   return clean.length > 60 ? `${clean.slice(0, 57)}…` : clean;
 }
+
+/** Exposed for the suite that pins how a restart is folded into a turn. */
+export const __testing = { applyStreamEvent };

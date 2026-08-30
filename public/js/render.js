@@ -597,6 +597,22 @@ export function assistantMessage() {
       prose.innerHTML = renderMarkdown(rawText);
     },
 
+    /**
+     * Throw away the prose written so far.
+     *
+     * A provider that restarts a reply on another key is replacing it, not
+     * continuing it. Letting the replacement accumulate on top would be the
+     * quiet kind of wrong: a reader has no way to tell a repeated paragraph
+     * from an intended one, and might carry it off and use it.
+     */
+    resetText() {
+      rawText = '';
+      if (prose) {
+        prose.remove();
+        prose = null;
+      }
+    },
+
     setPlan(steps) {
       let plan = body.querySelector('.plan');
       if (!plan) {

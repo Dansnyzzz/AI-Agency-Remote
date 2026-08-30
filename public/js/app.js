@@ -1647,6 +1647,15 @@ async function streamOnce(decision) {
           turn.appendText(delta);
           maybeScroll();
         },
+        // A key gave out mid-answer and another one is picking the reply up
+        // from the start. Clear what was written rather than letting the second
+        // attempt run on from the tail of the first.
+        retry: ({ reason }) => {
+          nextBlock().resetText();
+          if (reason) toast(reason);
+          setStatus('Starting that reply again…');
+          maybeScroll();
+        },
         plan: ({ steps }) => {
           state.turn.setPlan(steps);
           renderProgress(steps);

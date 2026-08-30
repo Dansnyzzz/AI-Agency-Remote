@@ -319,6 +319,28 @@ section('the rotation reacts to what actually came out');
   }
 }
 
+section('a restart clears the text the reader had already seen');
+{
+  const { __testing: agentTesting } = await import('../server/agent.js');
+  const { applyStreamEvent } = agentTesting;
+
+  const assistant = { id: 'a1', role: 'assistant', text: '', toolCalls: [] };
+  const sent = [];
+  const emit = (event, data) => sent.push([event, data]);
+
+  applyStreamEvent({ type: 'text', delta: 'half a sen' }, assistant, emit);
+  check('text accumulates', assistant.text === 'half a sen');
+
+  applyStreamEvent({ type: 'retry', reason: 'key 1 stopped' }, assistant, emit);
+  check('a retry empties the draft', assistant.text === '', JSON.stringify(assistant.text));
+  check('and tells the browser', sent.some(([event]) => event === 'retry'));
+
+  applyStreamEvent({ type: 'text', delta: 'a whole answer' }, assistant, emit);
+  // The point of emptying it: this is what gets persisted, and a draft that
+  // kept its discarded half would be stored and then shown as one reply.
+  check('the replacement stands alone', assistant.text === 'a whole answer', assistant.text);
+}
+
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 
 console.log(
