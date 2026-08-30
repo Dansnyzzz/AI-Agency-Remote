@@ -281,6 +281,21 @@ section('the rotation reacts to what actually came out');
     check('and finishes', run.error === null, String(run.error?.message || ''));
   }
 
+  // A provider that is genuinely down is down for every key on the account —
+  // they all reach the same servers. Walking the rest is the "five slow errors"
+  // case, so patience runs out on the first key rather than on the last.
+  {
+    const run = await drive([
+      { throw: err(503, 'Service unavailable') },
+      { throw: err(503, 'Service unavailable') },
+      { throw: err(503, 'Service unavailable') },
+      { emit: [{ type: 'text', delta: 'never reached' }, { type: 'done', stopReason: 'end_turn' }] },
+    ]);
+    check('an outage gives up rather than spending the other keys', run.seen.length === 3, run.seen.join(','));
+    check('all three tries were the same key', new Set(run.seen).size === 1, run.seen.join(','));
+    check('and it is reported', run.error !== null, String(run.error?.message || ''));
+  }
+
   // One key, momentarily limited, is the ordinary free-tier situation. Waiting
   // is the whole answer, and used to be the one thing the code could not do.
   {

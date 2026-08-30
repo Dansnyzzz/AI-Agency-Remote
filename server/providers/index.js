@@ -299,20 +299,34 @@ export async function* streamCompletion(opts) {
         }
 
         const { kind, retryAfterMs } = classify(failure);
-        if (kind === 'FATAL') {
-          // A reader deserves to know the others were tried at all.
+
+        // Broken in a way every key shares. Walking the rest turns one clear
+        // error into five slow ones — but a reader still deserves to know the
+        // others were tried at all.
+        const giveUp = () => {
           if (refused) failure.message = `${failure.message} (${refused})`;
-          throw failure;
-        }
+          return failure;
+        };
+        if (kind === 'FATAL') throw giveUp();
 
         refused = `${which} was refused: ${failure.message}`;
 
-        // Same key, in a moment — the provider stumbled rather than the key
-        // being wrong. Only while nothing has been read: a retry that replaces
-        // prose has to be announced, and this branch is the silent one.
-        if (kind === 'UPSTREAM' && attempt < UPSTREAM_TRIES - 1 && !emitted.text) {
-          await wait(retryAfterMs ?? backoff(attempt), signal);
-          continue;
+        if (kind === 'UPSTREAM') {
+          // The provider stumbled rather than the key being wrong, so it is the
+          // same key that wants trying, a moment later.
+          if (attempt < UPSTREAM_TRIES - 1) {
+            if (emitted.text) {
+              yield {
+                type: 'retry',
+                reason: `${label}: the provider dropped that reply; starting it again.`,
+              };
+            }
+            await wait(retryAfterMs ?? backoff(attempt), signal);
+            continue;
+          }
+          // Out of patience. Every key on this account reaches the same servers,
+          // so the next one will fail identically and slowly.
+          throw giveUp();
         }
 
         if (kind === 'RATE_LIMITED') {
