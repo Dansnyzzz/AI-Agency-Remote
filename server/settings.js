@@ -239,6 +239,21 @@ export function keyRestingUntil(userId, provider) {
   return soonest;
 }
 
+/**
+ * Lift the rests that were due by `throughMs`.
+ *
+ * Called after actually waiting one out. `isResting` also forgets an elapsed
+ * cooldown on its own, but only when the clock says so — and a caller that has
+ * genuinely waited should not then have to trust that two clocks agree to the
+ * millisecond. Dead keys are untouched: no amount of waiting revives one.
+ */
+export function liftKeyRest(userId, provider, throughMs) {
+  const prefix = `${userId}:${provider}:`;
+  for (const [slot, until] of [...resting]) {
+    if (slot.startsWith(prefix) && until !== Infinity && until <= throughMs) resting.delete(slot);
+  }
+}
+
 /** Forget everything about this account's keys for a provider. */
 export function clearKeyRest(userId, provider) {
   const prefix = `${userId}:${provider}:`;

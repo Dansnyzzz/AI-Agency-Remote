@@ -13,8 +13,18 @@
  *
  *   node test/fallback.test.mjs
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 process.env.ENCRYPTION_KEY ||= 'fallback-test-encryption-key';
 process.env.SESSION_SECRET ||= 'fallback-test-session-secret';
+// A real store, in a throwaway directory — the rotation reads the account's
+// keys, and stubbing that out would be stubbing out half of what is on trial.
+process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-fallback-test-${process.pid}`);
+delete process.env.DATABASE_URL;
+delete process.env.POSTGRES_URL;
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 
 const { __testing } = await import('../server/providers/index.js');
 const { classify, waitFrom, headerOf } = __testing;
@@ -152,6 +162,164 @@ section('a key known to be resting is not probed again');
   check('and leaves other accounts alone', isResting('u-other', 'openrouter', 0) === true);
   clearKeyRest('u-other', 'openrouter');
 }
+
+section('the rotation reacts to what actually came out');
+{
+  const { initStore } = await import('../server/store/index.js');
+  const store = await initStore();
+  const { hashPassword } = await import('../server/crypto.js');
+  const { streamCompletion } = await import('../server/providers/index.js');
+  const { setApiKey, addApiKey, clearKeyRest } = await import('../server/settings.js');
+
+  const uid = 'u-rot';
+  await store.createUser({
+    id: uid,
+    email: 'rot@example.com',
+    name: 'Rot',
+    passwordHash: await hashPassword('a-sufficiently-long-password'),
+    role: 'admin',
+  });
+
+  const entry = { provider: 'openrouter', model: 'x/y:free', context: 128_000, maxOutput: 4096 };
+
+  /**
+   * Drive the loop with scripted outcomes, one per key it reaches for.
+   *
+   * `streamOne` and `sleep` are injected the way `runOne` in subagents.js
+   * already takes its `stream` — the point is to watch the decisions without a
+   * network, and without real seconds passing.
+   */
+  const drive = async (script, keys = ['key-one', 'key-two']) => {
+    await setApiKey(uid, 'openrouter', keys[0]);
+    for (const spare of keys.slice(1)) await addApiKey(uid, 'openrouter', spare);
+    clearKeyRest(uid, 'openrouter');
+
+    const seen = [];
+    const events = [];
+    const waits = [];
+    const streamOne = async function* (_entry, common) {
+      const step = script[seen.length] || { throw: err(500, 'ran off the end of the script') };
+      seen.push(common.apiKey);
+      for (const event of step.emit || []) yield event;
+      if (step.throw) throw step.throw;
+    };
+    let error = null;
+    try {
+      for await (const event of streamCompletion({
+        userId: uid,
+        entry,
+        messages: [],
+        streamOne,
+        sleep: async (ms) => waits.push(ms),
+      })) {
+        events.push(event);
+      }
+    } catch (thrown) {
+      error = thrown;
+    }
+    return { seen, events, waits, error };
+  };
+
+  // Nothing was shown, so nothing is lost: the second key picks the turn up and
+  // the reader never learns there was a first.
+  {
+    const run = await drive([
+      { throw: err(429, 'Rate limit') },
+      { emit: [{ type: 'text', delta: 'hello' }, { type: 'done', stopReason: 'end_turn' }] },
+    ]);
+    check('a limit before any output rotates', run.seen.length === 2, run.seen.join(','));
+    check('and the answer arrives', run.events.some((e) => e.type === 'text' && e.delta === 'hello'));
+    check('with no retry event, because nothing was discarded', !run.events.some((e) => e.type === 'retry'));
+    check('and no error', run.error === null, String(run.error?.message || ''));
+  }
+
+  // Thinking is not the answer. Replaying it costs nothing a reader can see,
+  // so it must not pin the turn to a key that has already failed — which is
+  // exactly what the old `streamed` flag did.
+  {
+    const run = await drive([
+      { emit: [{ type: 'thinking', delta: 'hmm' }], throw: err(429, 'Rate limit') },
+      { emit: [{ type: 'text', delta: 'hi' }, { type: 'done', stopReason: 'end_turn' }] },
+    ]);
+    check('thinking alone does not pin the turn to a dead key', run.seen.length === 2);
+    check('no prose was discarded, so no retry event', !run.events.some((e) => e.type === 'retry'));
+  }
+
+  // The case that used to end the turn and make somebody type "continue".
+  // Prose was on screen, so the restart has to say so.
+  {
+    const run = await drive([
+      { emit: [{ type: 'text', delta: 'half a sen' }], throw: err(429, 'Rate limit') },
+      { emit: [{ type: 'text', delta: 'a whole answer' }, { type: 'done', stopReason: 'end_turn' }] },
+    ]);
+    check('a limit mid-answer still rotates', run.seen.length === 2);
+    check('and announces the discard', run.events.some((e) => e.type === 'retry'));
+    check(
+      'the retry is announced before the replacement text',
+      run.events.findIndex((e) => e.type === 'retry') <
+        run.events.findLastIndex((e) => e.type === 'text'),
+    );
+  }
+
+  // A broken request is broken on every key. Walking the rest turns one clear
+  // error into several slow ones.
+  {
+    const run = await drive([{ throw: err(400, 'messages: invalid role') }]);
+    check('a fatal error burns exactly one key', run.seen.length === 1, run.seen.join(','));
+    check('and is reported', run.error !== null);
+  }
+
+  // The provider stumbled rather than the key being wrong, so it is the same
+  // key that wants trying — and it waits before doing so.
+  {
+    const run = await drive([
+      { throw: err(503, 'Service unavailable') },
+      { emit: [{ type: 'text', delta: 'recovered' }, { type: 'done', stopReason: 'end_turn' }] },
+    ]);
+    check('a provider stumble retries the same key', run.seen[0] === run.seen[1], run.seen.join(','));
+    check('after pausing first', run.waits.length >= 1, String(run.waits[0]));
+    check('and finishes', run.error === null, String(run.error?.message || ''));
+  }
+
+  // One key, momentarily limited, is the ordinary free-tier situation. Waiting
+  // is the whole answer, and used to be the one thing the code could not do.
+  {
+    const run = await drive(
+      [
+        { throw: err(429, 'Rate limit', { 'retry-after': '3' }) },
+        { emit: [{ type: 'text', delta: 'worth the wait' }, { type: 'done', stopReason: 'end_turn' }] },
+      ],
+      ['only-key'],
+    );
+    check('a single key waits rather than failing', run.error === null, String(run.error?.message || ''));
+    check('and answers on the second attempt', run.seen.length === 2, run.seen.join(','));
+    // Near enough rather than exactly: the wait is measured from the reset the
+    // provider gave, so a millisecond or two of bookkeeping comes off it.
+    check(
+      'having waited the time the provider asked for',
+      run.waits.some((ms) => Math.abs(ms - 3000) < 50),
+      run.waits.join(','),
+    );
+  }
+
+  // A daily cap resets hours away. Holding the request open until then is not
+  // an option, so the honest thing is to say when it lifts.
+  {
+    const reset = Date.now() + 6 * 3600_000;
+    const run = await drive(
+      [{ throw: err(429, 'Rate limit', { 'x-ratelimit-reset': String(reset) }) }],
+      ['only-key'],
+    );
+    check('a cap hours away is not waited out', run.error !== null);
+    check(
+      'and the message says when it lifts',
+      /rate limited until/i.test(run.error?.message || ''),
+      run.error?.message,
+    );
+  }
+}
+
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 
 console.log(
   failures === 0

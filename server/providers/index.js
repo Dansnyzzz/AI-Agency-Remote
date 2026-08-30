@@ -1,7 +1,15 @@
 import { streamAnthropic } from './anthropic.js';
 import { streamOpenAICompatible } from './openaiCompatible.js';
 import { streamGoogle } from './google.js';
-import { getApiKeys, baseUrlFor, rememberWorkingKey } from '../settings.js';
+import {
+  getApiKeys,
+  baseUrlFor,
+  rememberWorkingKey,
+  markKeyLimited,
+  markKeyDead,
+  keyRestingUntil,
+  liftKeyRest,
+} from '../settings.js';
 import { resolveModel, PROVIDERS } from './catalog.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
@@ -157,8 +165,30 @@ function classify(error) {
   return { kind: 'FATAL', retryAfterMs: null };
 }
 
-// Bridged until the rotation loop below is rewritten in terms of `classify`.
-const keyExhausted = (error) => classify(error).kind !== 'FATAL';
+/** Wait, but give up the moment the caller does. */
+function pause(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('Aborted'));
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Aborted'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** How long to pause before trying a stumbling provider again. */
+const backoff = (attempt) => Math.min(8000, 500 * 2 ** attempt) + Math.floor(Math.random() * 250);
+
+/** Attempts at one key when it is the provider rather than the key at fault. */
+const UPSTREAM_TRIES = 3;
+
+/** Passes over the key list. More than one only because a wait can earn a key back. */
+const ROUNDS = 3;
 
 /**
  * One streaming interface over every provider, and every key they have.
@@ -167,66 +197,146 @@ const keyExhausted = (error) => classify(error).kind !== 'FATAL';
  * until one answers. That is the whole point of holding more than one: a key
  * that runs out at eleven should cost a moment, not the rest of the day.
  *
- * The rotation stops the instant anything has been streamed. Once the user has
- * seen half a sentence, starting again on another key would either repeat it or
- * silently replace it — so a failure mid-answer is reported as a failure, and
- * only a failure *before* the first token is retried. That is the difference
- * between a fallback and a duplicate.
+ * Three separate questions decide what happens when one fails. The version this
+ * replaced ran them together into a single boolean, which is why a rate limit
+ * on a one-key account went straight to a hard failure.
+ *
+ * **What kind of failure was it** — `classify`. A rate limit wants time, a dead
+ * key wants a different key, a 500 wants the same key a moment later, and a
+ * malformed request wants reporting rather than four more attempts.
+ *
+ * **What had already come out** — counted per kind rather than flagged. A
+ * failure before the first word of prose can be retried invisibly, and most
+ * can: the model was still thinking, or still announcing a tool call. Only
+ * prose somebody has actually read makes a restart visible, and then it is
+ * announced with a `retry` event so the half-sentence is cleared rather than
+ * being written over or grown a duplicate. Resuming instead of restarting would
+ * be better still, and is not available: assistant prefill returns 400 on every
+ * Anthropic model in the catalogue, and is honoured inconsistently behind
+ * OpenRouter. One predictable path beats two that differ by provider.
+ *
+ * **Whether anything else could work** — a key known to be resting is skipped
+ * rather than probed, because on OpenRouter a failed request still spends the
+ * day's allowance. When every key is resting and the soonest is close, waiting
+ * is the answer; when it is hours away, saying so is.
  *
  * Yields: {type:'text'|'thinking', delta} · {type:'tool_call_start', id, name}
- *       · {type:'notice', text} · {type:'done', stopReason, toolCalls, usage, raw?}
+ *       · {type:'notice', text} · {type:'retry', reason}
+ *       · {type:'done', stopReason, toolCalls, usage, raw?}
  */
 export async function* streamCompletion(opts) {
+  const { streamOne: injected, sleep, ...rest } = opts;
   const entry = opts.entry;
-  const label = PROVIDERS[entry.provider]?.label || entry.provider;
-  const keys = await getApiKeys(opts.userId, entry.provider);
-
-  if (!keys.length) {
-    throw new Error(`No API key for ${label}. Add one in Settings → Providers.`);
-  }
+  const provider = entry.provider;
+  const label = PROVIDERS[provider]?.label || provider;
+  const { userId, signal } = opts;
+  const dispatch = injected || streamOne;
+  const wait = sleep || pause;
 
   let refused = null;
 
-  for (let attempt = 0; attempt < keys.length; attempt += 1) {
-    const { key, index, shared } = keys[attempt];
-    const common = {
-      ...opts,
-      apiKey: key,
-      model: entry.model,
-      entry,
-      baseURL: baseUrlFor(entry.provider),
-      // Whatever this model actually produces, rather than the 32000 every
-      // adapter used to fall back to. A caller may still override it.
-      maxTokens: opts.maxTokens ?? outputBudget(entry),
-    };
+  for (let round = 0; round < ROUNDS; round += 1) {
+    const keys = await getApiKeys(userId, provider);
 
-    let streamed = false;
-    try {
-      for await (const event of streamOne(entry, common)) {
-        streamed = true;
-        yield event;
-      }
-      // This one worked; start here next time rather than rediscovering the
-      // dead keys ahead of it on every turn.
-      if (!shared) rememberWorkingKey(opts.userId, entry.provider, index);
-      return;
-    } catch (err) {
-      const last = attempt === keys.length - 1;
-      if (streamed || last || !keyExhausted(err)) {
-        // The last key's failure is the one worth reporting, but a reader
-        // deserves to know the others were tried at all.
-        if (refused && !streamed) err.message = `${err.message} (${refused})`;
-        throw err;
-      }
+    if (!keys.length) {
+      // Nothing usable. Whether that is a missing key or a resting one changes
+      // what there is to say, and getting it wrong sends somebody to Settings
+      // to fix a key that was never broken.
+      const all = await getApiKeys(userId, provider, { includeResting: true });
+      if (!all.length) throw new Error(`No API key for ${label}. Add one in Settings → Providers.`);
 
+      const until = keyRestingUntil(userId, provider);
+      const left = until == null ? null : until - Date.now();
+      if (left != null && left <= MAX_WAIT_MS && round < ROUNDS - 1) {
+        yield {
+          type: 'notice',
+          text: `${label}: every key is rate limited. Waiting ${Math.ceil(left / 1000)}s.`,
+        };
+        await wait(Math.max(0, left), signal);
+        liftKeyRest(userId, provider, until);
+        continue;
+      }
+      throw new Error(
+        until
+          ? `${label}: every key is rate limited until ${new Date(until).toLocaleTimeString()}.`
+          : `${label}: every key was refused${refused ? ` (${refused})` : ''}.`,
+      );
+    }
+
+    for (const { key, index, shared } of keys) {
       const which = shared ? 'the deployment key' : `key ${index + 1}`;
-      refused = `${which} was refused: ${err.message}`;
-      // Said out loud rather than swallowed: a fallback that nobody can see is
-      // indistinguishable from the first key having worked, right up until the
-      // bill or the outage says otherwise.
-      yield { type: 'notice', text: `${label}: ${which} was refused, trying the next one.` };
+      const common = {
+        ...rest,
+        apiKey: key,
+        model: entry.model,
+        entry,
+        baseURL: baseUrlFor(provider),
+        // Whatever this model actually produces, rather than the 32000 every
+        // adapter used to fall back to. A caller may still override it.
+        maxTokens: opts.maxTokens ?? outputBudget(entry),
+      };
+
+      for (let attempt = 0; attempt < UPSTREAM_TRIES; attempt += 1) {
+        // Counted rather than flagged. "Something came out" lumps a discarded
+        // thinking delta in with a paragraph somebody is reading, and only one
+        // of those makes a restart visible.
+        const emitted = { text: 0, thinking: 0, toolCalls: 0 };
+        let failure = null;
+
+        try {
+          for await (const event of dispatch(entry, common)) {
+            if (event.type === 'text') emitted.text += 1;
+            else if (event.type === 'thinking') emitted.thinking += 1;
+            else if (event.type === 'tool_call_start') emitted.toolCalls += 1;
+            yield event;
+          }
+          // This one worked; start here next time rather than rediscovering the
+          // dead keys ahead of it on every turn.
+          if (!shared) rememberWorkingKey(userId, provider, index);
+          return;
+        } catch (err) {
+          failure = err;
+        }
+
+        const { kind, retryAfterMs } = classify(failure);
+        if (kind === 'FATAL') {
+          // A reader deserves to know the others were tried at all.
+          if (refused) failure.message = `${failure.message} (${refused})`;
+          throw failure;
+        }
+
+        refused = `${which} was refused: ${failure.message}`;
+
+        // Same key, in a moment — the provider stumbled rather than the key
+        // being wrong. Only while nothing has been read: a retry that replaces
+        // prose has to be announced, and this branch is the silent one.
+        if (kind === 'UPSTREAM' && attempt < UPSTREAM_TRIES - 1 && !emitted.text) {
+          await wait(retryAfterMs ?? backoff(attempt), signal);
+          continue;
+        }
+
+        if (kind === 'RATE_LIMITED') {
+          markKeyLimited(userId, provider, index, Date.now() + (retryAfterMs ?? MAX_WAIT_MS));
+        } else if (kind === 'KEY_DEAD') {
+          markKeyDead(userId, provider, index);
+        }
+
+        // Said out loud rather than swallowed: a fallback that nobody can see is
+        // indistinguishable from the first key having worked, right up until the
+        // bill or the outage says otherwise.
+        yield { type: 'notice', text: `${label}: ${which} was refused, trying the next one.` };
+        if (emitted.text) {
+          yield {
+            type: 'retry',
+            reason: `${label}: ${which} stopped mid-answer; starting that reply again.`,
+          };
+        }
+        break;
+      }
     }
   }
+
+  throw new Error(`${label}: every key was refused${refused ? ` (${refused})` : ''}.`);
 }
 
 export { resolveModel, PROVIDERS };
