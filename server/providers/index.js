@@ -298,6 +298,13 @@ export async function* streamCompletion(opts) {
           failure = err;
         }
 
+        // They pressed stop. This is not a failure to grade, and none of the
+        // recovery below applies: retrying now would be carrying on with work
+        // somebody has just asked to end. Which SDK's wording an abort arrives
+        // in should not decide that, so it is settled here rather than left to
+        // whether `classify` recognises the message.
+        if (signal?.aborted) throw failure;
+
         const { kind, retryAfterMs } = classify(failure);
 
         // Broken in a way every key shares. Walking the rest turns one clear

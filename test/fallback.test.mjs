@@ -189,7 +189,7 @@ section('the rotation reacts to what actually came out');
    * already takes its `stream` — the point is to watch the decisions without a
    * network, and without real seconds passing.
    */
-  const drive = async (script, keys = ['key-one', 'key-two']) => {
+  const drive = async (script, keys = ['key-one', 'key-two'], signal = undefined) => {
     await setApiKey(uid, 'openrouter', keys[0]);
     for (const spare of keys.slice(1)) await addApiKey(uid, 'openrouter', spare);
     clearKeyRest(uid, 'openrouter');
@@ -209,6 +209,7 @@ section('the rotation reacts to what actually came out');
         userId: uid,
         entry,
         messages: [],
+        signal,
         streamOne,
         sleep: async (ms) => waits.push(ms),
       })) {
@@ -315,6 +316,25 @@ section('the rotation reacts to what actually came out');
       run.waits.some((ms) => Math.abs(ms - 3000) < 50),
       run.waits.join(','),
     );
+  }
+
+  // Pressing stop ends the turn. A failure that arrives once the signal is set
+  // is not a failure to recover from, whatever its wording happens to look
+  // like — carrying on would be ignoring the person who asked to stop.
+  {
+    const controller = new AbortController();
+    controller.abort();
+    const run = await drive(
+      [
+        { throw: err(503, 'network timed out') },
+        { emit: [{ type: 'text', delta: 'should never run' }, { type: 'done', stopReason: 'end_turn' }] },
+      ],
+      ['only-key'],
+      controller.signal,
+    );
+    check('an abort is not retried', run.seen.length === 1, run.seen.join(','));
+    check('and nothing was waited for', run.waits.length === 0, run.waits.join(','));
+    check('and it is passed straight back up', run.error !== null);
   }
 
   // A daily cap resets hours away. Holding the request open until then is not
