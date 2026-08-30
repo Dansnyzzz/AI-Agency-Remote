@@ -112,6 +112,47 @@ section('a Headers object reads the same as a plain object');
   check('absent header', headerOf(err(429, '', {}), 'retry-after') === null);
 }
 
+section('a key known to be resting is not probed again');
+{
+  const settings = await import('../server/settings.js');
+  const { markKeyLimited, markKeyDead, keyRestingUntil, clearKeyRest } = settings;
+  const { isResting } = settings.__testing;
+
+  const uid = 'u-rest';
+  clearKeyRest(uid, 'openrouter');
+
+  check('nothing is resting to begin with', keyRestingUntil(uid, 'openrouter') === null);
+
+  const until = Date.now() + 30_000;
+  markKeyLimited(uid, 'openrouter', 0, until);
+  check('a limited key is resting', isResting(uid, 'openrouter', 0) === true);
+  check('its neighbour is not', isResting(uid, 'openrouter', 1) === false);
+  check('the soonest reset is reported', keyRestingUntil(uid, 'openrouter') === until);
+
+  // The whole point: the second key rests longer, but the caller is told about
+  // the one that frees up first, because that is when work can resume.
+  markKeyLimited(uid, 'openrouter', 1, until + 60_000);
+  check('the soonest of several is reported', keyRestingUntil(uid, 'openrouter') === until);
+
+  // A cooldown in the past is over. Nothing sweeps it; it simply stops counting.
+  markKeyLimited(uid, 'openrouter', 2, Date.now() - 1000);
+  check('an elapsed cooldown has lifted', isResting(uid, 'openrouter', 2) === false);
+
+  // A dead key never comes back on its own — no reset time can be right for
+  // "this key is invalid", so it rests until the process restarts or the key
+  // is edited.
+  markKeyDead(uid, 'openrouter', 3);
+  check('a dead key stays down', isResting(uid, 'openrouter', 3) === true);
+  check('a dead key sets no reset time', keyRestingUntil(uid, 'openrouter') === until);
+
+  // One account resting a key must not rest anybody else's.
+  markKeyLimited('u-other', 'openrouter', 0, until);
+  clearKeyRest(uid, 'openrouter');
+  check('editing the keys clears the slate', isResting(uid, 'openrouter', 0) === false);
+  check('and leaves other accounts alone', isResting('u-other', 'openrouter', 0) === true);
+  clearKeyRest('u-other', 'openrouter');
+}
+
 console.log(
   failures === 0
     ? '\n\x1b[32mAll fallback checks passed.\x1b[0m\n'

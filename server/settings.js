@@ -179,6 +179,78 @@ export function rememberWorkingKey(userId, provider, index) {
 }
 
 /**
+ * Which keys are resting, and until when.
+ *
+ * Separate from `cursor` because it answers a different question. The cursor is
+ * an optimisation — where to *start* — and being wrong costs one request. This
+ * is a fact worth acting on: a key that returned 429 with a reset an hour away
+ * will return 429 again if asked, and on OpenRouter a failed request still
+ * counts against the day's allowance. Probing it is not a free way to check;
+ * it is paying budget to be told what is already known.
+ *
+ * `Infinity` means dead rather than resting: no reset time is right for "this
+ * key is invalid", so it stays down until the process restarts or somebody
+ * edits the keys.
+ *
+ * In memory, like `cursor`, and for the same reason — on a serverless instance
+ * it is a hint that fails safe. The worst a cold start costs is one probe.
+ */
+const resting = new Map();
+
+const restKey = (userId, provider, index) => `${userId}:${provider}:${index}`;
+
+/** This key returned a rate limit; leave it alone until `untilMs`. */
+export function markKeyLimited(userId, provider, index, untilMs) {
+  const until = Number(untilMs);
+  if (!Number.isFinite(until)) return;
+  resting.set(restKey(userId, provider, index), until);
+}
+
+/** This key is invalid or spent. It does not come back on a timer. */
+export function markKeyDead(userId, provider, index) {
+  resting.set(restKey(userId, provider, index), Infinity);
+}
+
+/** Whether this key is currently resting. An elapsed cooldown has lifted. */
+function isResting(userId, provider, index) {
+  const slot = restKey(userId, provider, index);
+  const until = resting.get(slot);
+  if (until == null) return false;
+  if (until === Infinity) return true;
+  if (until > Date.now()) return true;
+  resting.delete(slot);
+  return false;
+}
+
+/**
+ * When the first resting key frees up, or null if none is on a timer.
+ *
+ * Dead keys are deliberately not counted: they have no reset, and reporting
+ * `Infinity` as "try again at" would be a lie with a timestamp on it.
+ */
+export function keyRestingUntil(userId, provider) {
+  const prefix = `${userId}:${provider}:`;
+  const now = Date.now();
+  let soonest = null;
+  for (const [slot, until] of resting) {
+    if (!slot.startsWith(prefix) || until === Infinity || until <= now) continue;
+    if (soonest == null || until < soonest) soonest = until;
+  }
+  return soonest;
+}
+
+/** Forget everything about this account's keys for a provider. */
+export function clearKeyRest(userId, provider) {
+  const prefix = `${userId}:${provider}:`;
+  for (const slot of [...resting.keys()]) {
+    if (slot.startsWith(prefix)) resting.delete(slot);
+  }
+}
+
+/** Exposed for the suite that pins when a key is left alone. */
+export const __testing = { isResting };
+
+/**
  * Every key this account can try for a provider, in the order to try them.
  *
  * Their own first — nobody should silently spend somebody else's budget — and
@@ -188,13 +260,19 @@ export function rememberWorkingKey(userId, provider, index) {
  *
  * @returns `[{ key, index, shared }]`
  */
-export async function getApiKeys(userId, provider) {
+export async function getApiKeys(userId, provider, { includeResting = false } = {}) {
   const list = keyList(await storedKeys(userId), provider);
 
   const own = [];
   list.forEach((entry, index) => {
     const decrypted = decryptSecret(entry.cipher);
-    if (decrypted) own.push({ key: decrypted, index, shared: false });
+    if (!decrypted) return;
+    // A key already known to be rate limited or dead is worse than useless: on
+    // OpenRouter the failed request it would earn still counts against the
+    // day's allowance. `includeResting` exists so a caller can tell "no keys at
+    // all" apart from "none free just now" — they need very different sentences.
+    if (!includeResting && isResting(userId, provider, index)) return;
+    own.push({ key: decrypted, index, shared: false });
   });
 
   const start = cursor.get(cursorKey(userId, provider)) || 0;
@@ -202,7 +280,9 @@ export async function getApiKeys(userId, provider) {
   const ordered = from > 0 ? [...own.slice(from), ...own.slice(0, from)] : own;
 
   const environment = process.env[ENV_KEYS[provider]];
-  if (environment) ordered.push({ key: environment, index: -1, shared: true });
+  if (environment && (includeResting || !isResting(userId, provider, -1))) {
+    ordered.push({ key: environment, index: -1, shared: true });
+  }
   return ordered;
 }
 
@@ -233,6 +313,8 @@ export async function setApiKey(userId, provider, value) {
   else delete keys[provider];
   await getStore().setUserSetting(userId, KEYS_KEY, keys);
   cursor.delete(cursorKey(userId, provider));
+  // Whatever was wrong with the old keys is not necessarily wrong with these.
+  clearKeyRest(userId, provider);
 }
 
 /** Add a spare, kept behind the ones already there. */
@@ -268,6 +350,8 @@ export async function removeApiKey(userId, provider, index) {
 
   await getStore().setUserSetting(userId, KEYS_KEY, keys);
   cursor.delete(cursorKey(userId, provider));
+  // Whatever was wrong with the old keys is not necessarily wrong with these.
+  clearKeyRest(userId, provider);
   return list.length;
 }
 
