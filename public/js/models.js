@@ -62,8 +62,9 @@ export function createModelBrowser({ onPick }) {
   };
   let debounce = null;
 
-  /** Everything under `openrouter` is one library; the rest are first-party. */
-  const isLibrary = (provider) => provider === 'all' || provider === 'openrouter';
+  /** The shared library is the aggregators; the rest are first-party keys. */
+  const LIBRARY = new Set(['openrouter', 'orcarouter']);
+  const isLibrary = (provider) => provider === 'all' || LIBRARY.has(provider);
 
   async function load() {
     const parsed = parseQuery(state.query);
@@ -94,17 +95,19 @@ export function createModelBrowser({ onPick }) {
     // Context and price are client-side because they come from the parsed query
     // rather than the filter controls.
     let models = isLibrary(provider) ? data.models : [];
+    // 'all' shows every aggregator's models together; a specific one shows only
+    // its own — the library holds both OpenRouter and OrcaRouter now.
+    if (provider !== 'all' && isLibrary(provider)) models = models.filter((m) => m.provider === provider);
     if (parsed.minContext) models = models.filter((m) => (m.context || 0) >= parsed.minContext);
     if (parsed.maxPrice != null) {
       models = models.filter((m) => m.isFree || (m.price && m.price.in <= parsed.maxPrice));
     }
 
-    // Selecting OpenRouter means the library alone; the built-ins run on your
+    // Selecting an aggregator means the library alone; the built-ins run on your
     // own Anthropic, OpenAI or Google key and are a different thing entirely.
-    const builtin =
-      provider === 'openrouter'
-        ? []
-        : matchingBuiltins(data.builtin, { ...parsed, tier, family, provider });
+    const builtin = isLibrary(provider)
+      ? []
+      : matchingBuiltins(data.builtin, { ...parsed, tier, family, provider });
 
     renderResults(builtin, models, tier, provider);
   }
@@ -165,12 +168,13 @@ export function createModelBrowser({ onPick }) {
     openai: 'OpenAI',
     google: 'Google',
     openrouter: 'OpenRouter',
+    orcarouter: 'OrcaRouter',
   };
 
   function renderStatus(status, provider) {
-    // The counts describe the OpenRouter library, so saying them while a
-    // first-party provider is selected would be describing the wrong thing.
-    if (provider && provider !== 'all' && provider !== 'openrouter') {
+    // The counts describe the shared library, so saying them while a first-party
+    // provider is selected would be describing the wrong thing.
+    if (provider && !isLibrary(provider)) {
       statusLabel.textContent = `${PROVIDER_LABEL[provider]} models — billed to your own ${PROVIDER_LABEL[provider]} key.`;
       return;
     }
@@ -234,8 +238,8 @@ export function createModelBrowser({ onPick }) {
       // Say *why* it is empty. "Anthropic + Free" matches nothing for a real
       // reason, and a generic "nothing matched" would leave people hunting.
       const why =
-        tier === 'free' && provider && provider !== 'all' && provider !== 'openrouter'
-          ? `${PROVIDER_LABEL[provider]} has no free models — they bill to your own key. Try the Free tier under OpenRouter.`
+        tier === 'free' && provider && !isLibrary(provider)
+          ? `${PROVIDER_LABEL[provider]} has no free models — they bill to your own key. Try the Free tier under OpenRouter or OrcaRouter.`
           : 'Nothing matched. Try fewer words, or add the model by id in Settings → Models.';
       results.innerHTML = sections.join('') + `<p class="hint">${escapeHtml(why)}</p>`;
       return;
