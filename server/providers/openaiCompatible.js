@@ -88,7 +88,12 @@ export async function* streamOpenAICompatible({
   maxTokens = 32000,
   signal,
 }) {
-  const client = new OpenAI({ apiKey, baseURL, defaultHeaders: headers });
+  // maxRetries: 0 hands all retrying to streamCompletion, which is the layer
+  // that knows about the account's other keys. The SDK's own default of 2 would
+  // sit through two backoffs on a key already rate limited before this function
+  // even returns — so a spare key waits behind the dead one, and a 429 that
+  // should have marked a key resting is silently retried away instead.
+  const client = new OpenAI({ apiKey, baseURL, defaultHeaders: headers, maxRetries: 0 });
 
   const params = {
     model,

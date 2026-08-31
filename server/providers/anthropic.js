@@ -121,7 +121,11 @@ export async function* streamAnthropic({
   maxTokens = 32000,
   signal,
 }) {
-  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) });
+  // maxRetries: 0 for the same reason as the OpenAI adapter — streamCompletion
+  // owns retrying, because it is the layer that can move to another key rather
+  // than backing off on this one. The SDK default of 2 would double the wait on
+  // a limited key and hide the 429 that should have rested it.
+  const client = new Anthropic({ apiKey, maxRetries: 0, ...(baseURL ? { baseURL } : {}) });
 
   const params = {
     model,
