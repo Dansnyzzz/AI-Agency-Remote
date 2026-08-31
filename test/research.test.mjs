@@ -61,6 +61,23 @@ section('a research run is stored and read back, scoped to its owner');
   check('another account cannot read it', (await store.getResearchRun('u-other', 'run-1')) === null);
 }
 
+section('confidence is counted, not guessed');
+{
+  const { grade, registrableDomain } = await import('../server/research/confidence.js');
+  const ledger = new Map([
+    ['S1', { url: 'https://www.reuters.com/x', rank: 'reputable' }],
+    ['S2', { url: 'https://apnews.com/y', rank: 'reputable' }],
+    ['S3', { url: 'https://sub.reuters.com/z', rank: 'reputable' }],
+    ['S4', { url: 'https://someblog.wordpress.com/p', rank: 'blog' }],
+  ]);
+  check('two independent reputable sources are HIGH', grade(['S1', 'S2'], ledger) === 'HIGH');
+  check('same registrable domain is not independent', grade(['S1', 'S3'], ledger) === 'MEDIUM', grade(['S1', 'S3'], ledger));
+  check('one reputable source is MEDIUM', grade(['S1'], ledger) === 'MEDIUM');
+  check('a lone blog is LOW', grade(['S4'], ledger) === 'LOW');
+  check('no sources at all is LOW', grade([], ledger) === 'LOW');
+  check('registrable domain strips subdomains', registrableDomain('https://sub.reuters.com/z') === 'reuters.com');
+}
+
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 console.log(
   failures === 0 ? '\n\x1b[32mAll research checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`,
