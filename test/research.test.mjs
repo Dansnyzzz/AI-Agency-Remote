@@ -102,6 +102,37 @@ section('the report enforces a citation on every claim');
   ));
 }
 
+section('gathering builds a deduped, ranked source ledger');
+{
+  const { gatherEvidence, rankSource } = await import('../server/research/gather.js');
+  const fake = async (q) => ({
+    engine: 'stub',
+    results: q.includes('price')
+      ? [{ title: 'Reuters', url: 'https://www.reuters.com/a', snippet: 'p', published: '2026-01-01' }]
+      : [
+          { title: 'Reuters', url: 'https://www.reuters.com/a', snippet: 'p2', published: '2026-01-01' },
+          { title: 'Blog', url: 'https://x.wordpress.com/b', snippet: 'q', published: null },
+        ],
+    attempts: [],
+  });
+  const { ledger, findings } = await gatherEvidence(['bitcoin price', 'bitcoin history'], { search: fake });
+  check('a repeated url is one ledger entry', ledger.size === 2, `${ledger.size}`);
+  check('sources get S# ids', [...ledger.keys()].every((k) => /^S\d+$/.test(k)));
+  check('titles are carried into the ledger', ledger.get('S1')?.title === 'Reuters', ledger.get('S1')?.title);
+  check('a wire service ranks reputable', rankSource('https://www.reuters.com/a') === 'reputable');
+  check('an unknown blog ranks blog', rankSource('https://x.wordpress.com/b') === 'blog');
+  check('a government host ranks primary', rankSource('https://data.gov/x') === 'primary');
+  check('findings reference ledger ids', findings.filter((f) => f.id).every((f) => ledger.has(f.id)));
+
+  // A search that throws is a finding that says so, not a crash.
+  const boom = async () => {
+    throw new Error('all engines down');
+  };
+  const { ledger: empty, findings: notes } = await gatherEvidence(['q'], { search: boom });
+  check('a failed search yields no sources', empty.size === 0);
+  check('and records why', notes.some((f) => /down/.test(f.snippet)));
+}
+
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 console.log(
   failures === 0 ? '\n\x1b[32mAll research checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`,
