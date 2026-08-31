@@ -317,6 +317,16 @@ section('cost is not spent twice on the same text');
   check('a search embeds only the query', embedCalls === before + 1 && embeddedTexts.length === 4);
 }
 
+/**
+ * Close the database before deleting the directory it lives in.
+ *
+ * Without this the suite passed every check and then crashed the whole run on
+ * Windows with ENOTEMPTY: the embedded Postgres still held handles inside
+ * `pgdata`, so the recursive delete hit a directory that would not empty. It
+ * only showed up under a full `npm test`, where the machine is busy enough for
+ * the race to land — on its own the suite always looked fine.
+ */
+await store.close?.();
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 console.log(
   failures === 0

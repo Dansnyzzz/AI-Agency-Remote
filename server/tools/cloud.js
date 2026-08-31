@@ -4,6 +4,7 @@ import { redactSecrets } from '../redact.js';
 import { readSkill, saveSkill } from '../skills.js';
 import { runParallel } from '../subagents.js';
 import { runDeepResearch } from '../research/index.js';
+import { renderChart } from './chart.js';
 import { parseSchedule } from '../scheduler.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
@@ -336,6 +337,26 @@ async function showWidgetTool({ title, svg, html }) {
  * has forgotten since is quietly lost. Appending is the operation a log actually
  * wants — decisions as they are made, facts as they turn up.
  */
+/**
+ * A chart from numbers, drawn in code.
+ *
+ * Goes out through the same widget channel as `show_widget`, so it inherits the
+ * sandboxed frame and the sizing — the difference is who drew it. The model is
+ * told what it shows rather than what it contains, so the reply describes the
+ * picture instead of reciting the numbers a reader can already see.
+ */
+async function chartTool({ title, type, data, format }) {
+  const caption = String(title || '').trim();
+  if (!caption) throw new Error('Give the chart a short title, so it is labelled.');
+  const markup = renderChart({ type, title: caption, data, format });
+  return {
+    content:
+      `Drew the ${type} chart "${caption}" in the conversation. The user can see it, so say what it shows — the ` +
+      'comparison, the trend, the outlier — rather than listing the numbers again.',
+    widget: { title: caption, markup, kind: 'svg' },
+  };
+}
+
 async function memoryAppend({ key, content }, { userId }) {
   const store = getStore();
   const { text, found } = redactSecrets(content);
@@ -739,6 +760,7 @@ export const CLOUD_IMPLEMENTATIONS = {
   web_fetch: webFetch,
   web_search: webSearch,
   show_widget: showWidgetTool,
+  chart: chartTool,
   memory_write: memoryWrite,
   memory_read: memoryRead,
   memory_append: memoryAppend,

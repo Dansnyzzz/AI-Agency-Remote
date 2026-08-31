@@ -1044,8 +1044,12 @@ export const TOOLS = [
       'It appears inline where you called it, so the user reads it in the flow of what you are saying rather than opening a file. ' +
       'Give `svg` for a diagram or chart, or `html` for anything richer; inline every style, because nothing is fetched. ' +
       '\n\n' +
-      'This and `create_file` answer different questions. This is a picture inside your explanation — a flow chart of what you found, ' +
-      'a bar chart of four numbers. `create_file` with `format: "html"` makes a document they open, keep and download. ' +
+      '**Not for charts.** Anything with numbers in it goes to `chart`, which draws it to scale from the data — a chart ' +
+      'drawn by hand comes out crooked and mislabelled however carefully you try. Use this for what `chart` cannot do: ' +
+      'a flow diagram, a timeline, a labelled illustration, a small comparison table. ' +
+      '\n\n' +
+      'This and `create_file` answer different questions. This is a picture inside your explanation. ' +
+      '`create_file` with `format: "html"` makes a document they open, keep and download. ' +
       'If they will want it tomorrow, it is a file; if it is part of this sentence, it is a widget.',
     parameters: {
       type: 'object',
@@ -1059,6 +1063,55 @@ export const TOOLS = [
         },
       },
       required: ['title'],
+    },
+  },
+  {
+    name: 'chart',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Draw a chart from numbers. Give the data and this draws it — properly to scale, with axes, a legend and the ' +
+      'values labelled. Prefer this over `show_widget` for anything numeric: a chart you draw by hand comes out crooked ' +
+      'and unreadable, and this one does not. ' +
+      '\n\n' +
+      '`bar` compares things · `hbar` does the same when the labels are long · `line` shows change over time · ' +
+      '`pie` shows shares of a whole · `stacked` shows parts making up a total.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'What the chart shows, in a few words.' },
+        type: {
+          type: 'string',
+          enum: ['bar', 'hbar', 'line', 'pie', 'stacked'],
+          description: 'bar | hbar | line | pie | stacked',
+        },
+        data: {
+          type: 'object',
+          description: 'The numbers. One label per point; each series must have exactly as many values as there are labels.',
+          properties: {
+            labels: { type: 'array', items: { type: 'string' }, description: 'The category or time labels.' },
+            series: {
+              type: 'array',
+              description: 'One entry per series: { name, values }.',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  values: { type: 'array', items: { type: 'number' } },
+                },
+                required: ['name', 'values'],
+              },
+            },
+          },
+          required: ['labels', 'series'],
+        },
+        format: {
+          type: 'string',
+          enum: ['number', 'percent', 'currency'],
+          description: 'How to write the numbers. Default number.',
+        },
+      },
+      required: ['title', 'type', 'data'],
     },
   },
   {

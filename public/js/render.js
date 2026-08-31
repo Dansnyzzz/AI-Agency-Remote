@@ -316,10 +316,39 @@ export function widgetFrame(widget) {
   const frame = document.createElement('iframe');
   frame.className = 'widget__frame';
   frame.title = widget.title || 'Diagram';
-  // No allow-scripts: a widget is a finished picture. Anything that needs to run
-  // is a `create_file` artifact, which has its own frame and its own warning.
-  frame.setAttribute('sandbox', '');
+  /**
+   * No `allow-scripts`: a widget is a finished picture. Anything that needs to
+   * run is a `create_file` artifact, which has its own frame and its own warning.
+   *
+   * `allow-same-origin` is here only so this page can measure the drawing and
+   * size the frame to it — without it the frame gets an opaque origin and its
+   * height is unreadable, which is why every widget used to be exactly 340px
+   * whether it held a four-bar chart or a thirty-row table. It grants nothing to
+   * the markup: with scripts still forbidden, there is nothing inside to use it.
+   */
+  frame.setAttribute('sandbox', 'allow-same-origin');
   frame.setAttribute('loading', 'lazy');
+
+  /**
+   * Fit the frame to the picture.
+   *
+   * Measured after load rather than guessed: a chart and a table want very
+   * different heights, and a fixed one is wrong for both — empty space under the
+   * small one, a scrollbar through the middle of the large one. The CSS keeps a
+   * max-height, so something genuinely enormous still scrolls instead of pushing
+   * the conversation off the screen.
+   */
+  const fit = () => {
+    try {
+      const body = frame.contentDocument?.body;
+      if (!body) return;
+      const height = Math.ceil(Math.max(body.scrollHeight, body.getBoundingClientRect().height));
+      if (height > 0) frame.style.height = `${height + 4}px`;
+    } catch {
+      // Cross-origin or detached: leave the CSS height, which still works.
+    }
+  };
+  frame.addEventListener('load', fit);
 
   // A document rather than a fragment, so the picture is not styled by this page
   // and cannot reach out of its box.
