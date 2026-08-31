@@ -1848,8 +1848,34 @@ export function looksDestructive(command) {
  * catalogue grew about 50% past the last number written here before anyone
  * noticed. `/audit-tokens` has the one-liner that prints the table.
  */
-const TRIM_DESCRIPTIONS_BELOW = 40_000;
-const DROP_SECONDARY_BELOW = 16_000;
+/**
+ * How much of the model's window the catalogue may occupy before it is cut.
+ *
+ * Shares rather than absolute windows, because both numbers move: the catalogue
+ * is ~5k with no computer paired and ~12k with one, and a window is anywhere
+ * from 8k to a million. 12% leaves the long descriptions — which are what stop a
+ * model reaching for `open_url` when it means `browser_open` — wherever there is
+ * room for them, and takes them away only where they would crowd out the
+ * conversation itself.
+ */
+const TRIM_ABOVE_SHARE = 0.12;
+const DROP_ABOVE_SHARE = 0.2;
+
+/**
+ * Roughly what these tools cost on the wire.
+ *
+ * Measured on `{name, description, input_schema}`, which is all any adapter
+ * actually sends, at the usual four characters to a token. Approximate on
+ * purpose: this decides whether to trim, and being a few percent out changes
+ * nothing about that.
+ */
+function estimateTokens(tools) {
+  const bytes = tools.reduce(
+    (n, t) => n + JSON.stringify({ name: t.name, description: t.description, input_schema: t.parameters }).length,
+    0,
+  );
+  return Math.round(bytes / 4);
+}
 
 /**
  * The first sentence of a description.
@@ -1901,10 +1927,6 @@ export function availableTools({
   // at everything, and `update_plan` is read-only, so the same filter serves.
   const looksOnly = policy === 'readonly' || policy === 'plan';
   const window = Number(context) || 0;
-  // Zero is "nobody said", not "no room": an unknown window must not silently
-  // strip the catalogue down to its bones.
-  const tight = window > 0 && window < TRIM_DESCRIPTIONS_BELOW;
-  const verytight = window > 0 && window < DROP_SECONDARY_BELOW;
 
   const offered = [...TOOLS, ...extra].filter((t) => {
     // Tools that exist for the interface rather than for the model. Offering
@@ -1922,12 +1944,32 @@ export function availableTools({
     if (t.needs && connected && !connected.includes(t.needs)) return false;
     // Same reasoning as `needs`, for a provider key rather than a connector.
     if (t.needsProvider && providers && !providers.includes(t.needsProvider)) return false;
-    if (verytight && t.secondary) return false;
     return true;
   });
 
-  if (!tight) return offered;
-  return offered.map((t) => ({ ...t, description: firstSentence(t.description) }));
+  /**
+   * Cut the catalogue by what share of the window it takes, not by how big the
+   * window is.
+   *
+   * The absolute thresholds this replaces got both ends wrong, because the size
+   * of the catalogue varies as much as the size of the window: a 65k model with
+   * a paired computer carried the full ~12k catalogue — nearly a fifth of its
+   * window, on every step of every turn — while a 30k model with no computer had
+   * its descriptions cut for a catalogue of ~5k that was never the problem. The
+   * comment above always described the rule in shares; this is the code catching
+   * up with it.
+   *
+   * Zero is "nobody said", not "no room": an unknown window is left alone.
+   */
+  if (!window) return offered;
+  if (estimateTokens(offered) <= window * TRIM_ABOVE_SHARE) return offered;
+
+  const trimmed = offered.map((t) => ({ ...t, description: firstSentence(t.description) }));
+  if (estimateTokens(trimmed) <= window * DROP_ABOVE_SHARE) return trimmed;
+
+  // Still crowding the window with the descriptions already cut: the optional
+  // tools go, since a model with no room for the conversation cannot use them.
+  return trimmed.filter((t) => !t.secondary);
 }
 
-export const __testing = { firstSentence, TRIM_DESCRIPTIONS_BELOW, DROP_SECONDARY_BELOW };
+export const __testing = { firstSentence, estimateTokens, TRIM_ABOVE_SHARE, DROP_ABOVE_SHARE };

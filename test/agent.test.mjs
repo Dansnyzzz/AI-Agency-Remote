@@ -498,11 +498,15 @@ section('the tool catalogue is cut to fit a small window');
   const cost = (tools) =>
     JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length;
 
+  // The windows here are chosen against the *share* the catalogue takes, which
+  // is what decides the cut now — an absolute 32k used to mean "trim only", and
+  // with a catalogue this size 32k is genuinely crowded, so it drops as well.
+  // test/toolbudget.test.mjs pins the share rule itself.
   const roomy = availableTools({ ...base, context: 1_000_000 });
-  const tight = availableTools({ ...base, context: 32_768 });
+  const tight = availableTools({ ...base, context: 60_000 });
   const tiny = availableTools({ ...base, context: 8191 });
 
-  check('a small window gets shorter descriptions', cost(tight) < cost(roomy), `${cost(tight)} vs ${cost(roomy)}`);
+  check('a crowded window gets shorter descriptions', cost(tight) < cost(roomy), `${cost(tight)} vs ${cost(roomy)}`);
   check('a tiny one drops the secondary tools too', tiny.length < tight.length, `${tiny.length} vs ${tight.length}`);
   check(
     'but never the core loop',
