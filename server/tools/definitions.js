@@ -1066,6 +1066,31 @@ export const TOOLS = [
     },
   },
   {
+    name: 'extract',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Read a page for specific facts and get them back structured — prices, names, dates, rows of a table. ' +
+      'Prefer this over `web_fetch` whenever you know what you are looking for: `web_fetch` puts the whole page into ' +
+      'the conversation, where it stays for every turn after, while this reads it separately and returns only the answer. ' +
+      'For six competitor pages that is the difference between finishing and running out of room. ' +
+      '\n\n' +
+      'If the page does not contain what you asked for, it says so rather than guessing — treat that as a real answer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The page to read. http(s) only.' },
+        what: { type: 'string', description: 'What to pull out, in words — e.g. "the pricing plans and their monthly cost".' },
+        fields: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional. The keys each result should have, e.g. ["plan", "price"].',
+        },
+      },
+      required: ['url', 'what'],
+    },
+  },
+  {
     name: 'calculate',
     scope: 'cloud',
     readOnly: true,

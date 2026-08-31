@@ -6,6 +6,8 @@ import { runParallel } from '../subagents.js';
 import { runDeepResearch } from '../research/index.js';
 import { renderChart } from './chart.js';
 import { evaluate } from './calc.js';
+import { extractFromPage } from './extract.js';
+import { resolveForUser } from '../autoPick.js';
 import { parseSchedule } from '../scheduler.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
@@ -353,6 +355,28 @@ async function showWidgetTool({ title, svg, html }) {
  * record: a number in a report should be checkable, and "the model said so" is
  * not a check.
  */
+/**
+ * Read a page for what was asked, on the account's own model.
+ *
+ * The page is fetched through the same `web_fetch` path, so it goes through
+ * `safeFetch` and cannot be aimed at a private address any more than that one
+ * can. What changes is where the text goes: into a call of its own rather than
+ * into the conversation.
+ */
+async function extractTool({ url, what, fields }, { userId, signal }) {
+  const prefs = await getPrefs(userId);
+  const entry = await resolveForUser(userId, prefs.defaultModel, { vision: false });
+  return extractFromPage({
+    url,
+    what,
+    fields,
+    userId,
+    entry,
+    signal,
+    fetchPage: (target) => webFetch({ url: target, max_chars: 60000 }),
+  });
+}
+
 async function calculateTool({ expression }) {
   const { value, expression: shown } = evaluate(expression);
   return `${shown} = ${value}`;
@@ -775,6 +799,7 @@ export const CLOUD_IMPLEMENTATIONS = {
   show_widget: showWidgetTool,
   chart: chartTool,
   calculate: calculateTool,
+  extract: extractTool,
   memory_write: memoryWrite,
   memory_read: memoryRead,
   memory_append: memoryAppend,
