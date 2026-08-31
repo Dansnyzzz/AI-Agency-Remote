@@ -73,6 +73,31 @@ section('tables models actually emit');
   check('cells are formatted, not printed raw', rich.includes('<strong>đậm</strong>') && rich.includes('<code>mã</code>'));
 }
 
+/* ── the second bug in the screenshot ──────────────────────────── */
+
+section('a line break inside a cell');
+{
+  // GFM has no multi-line table cell, so every model writes <br> to stack
+  // lines inside one — exactly what the screenshot showed printed as raw text.
+  const html = renderMarkdown(['| Việc |', '|---|', '| 40-50 words<br>• 10 phút |'].join('\n'));
+  check('<br> becomes a real break, not text', html.includes('40-50 words<br>• 10 phút'), html.slice(-90));
+  check('and the raw tag is gone', !html.includes('&lt;br'), html.slice(-90));
+
+  // The self-closing shapes a model also writes.
+  const slash = renderMarkdown(['| A |', '|---|', '| one<br/>two<br />three |'].join('\n'));
+  check('<br/> and <br /> too', (slash.match(/<br>/g) || []).length === 2, slash.slice(-70));
+
+  // It works in ordinary prose as well, and this is the guard that matters:
+  // only <br> is let back through — no other tag escapes escaping.
+  const prose = renderMarkdown('line one<br>line two, and <script>alert(1)</script>');
+  check('a break in prose is honoured', prose.includes('line one<br>line two'), prose.slice(0, 80));
+  check('but nothing else is un-escaped', prose.includes('&lt;script&gt;'), prose.slice(0, 120));
+
+  // A <br> written inside inline code stays literal — code is verbatim.
+  const code = renderMarkdown('use `<br>` to break');
+  check('a <br> inside code stays literal', code.includes('<code>&lt;br&gt;</code>'), code.slice(0, 80));
+}
+
 section('and things that only look like tables');
 {
   const prose = renderMarkdown(['Chọn a | b tuỳ ý.', '-----------'].join('\n'));

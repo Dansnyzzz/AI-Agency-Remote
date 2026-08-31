@@ -39,6 +39,13 @@ function inline(text) {
   });
 
   out = out
+    // The one tag let back through after escaping. A model writes `<br>` to
+    // stack lines inside a table cell — GFM has no multi-line cell, so this is
+    // the only way — and it turns up in ordinary prose as a hard break too.
+    // Done here, after code has been tokenised out above, so a `<br>` written
+    // inside inline code stays literal; and only `<br>` is un-escaped, so no
+    // other tag rides along.
+    .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|\W)\*(?!\s)(.+?)(?<!\s)\*/g, '$1<em>$2</em>')
