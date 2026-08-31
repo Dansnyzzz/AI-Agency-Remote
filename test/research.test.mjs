@@ -78,6 +78,30 @@ section('confidence is counted, not guessed');
   check('registrable domain strips subdomains', registrableDomain('https://sub.reuters.com/z') === 'reuters.com');
 }
 
+section('the report enforces a citation on every claim');
+{
+  const { buildReport, markerIds } = await import('../server/research/report.js');
+  const ledger = new Map([
+    ['S1', { url: 'https://www.reuters.com/x', rank: 'reputable', title: 'R', published: '2026-01-01' }],
+    ['S2', { url: 'https://apnews.com/y', rank: 'reputable', title: 'A', published: null }],
+  ]);
+  check('markers are extracted', JSON.stringify(markerIds('foo [S1][S2] bar')) === '["S1","S2"]');
+
+  const report = buildReport({
+    question: 'Q?',
+    claims: [{ text: 'Backed claim [S1][S2].' }, { text: 'Unsupported claim.' }, { text: 'Disputed [S1].', conflicting: true }],
+    ledger,
+    status: 'complete',
+  });
+  check('a cited claim carries its grade', /Backed claim.*HIGH/s.test(report), report.slice(0, 120));
+  check('an uncited claim is flagged, not passed', /Unsupported claim.*LOW — no source/s.test(report), report);
+  check('a disputed claim is marked CONFLICTING', /Disputed.*CONFLICTING/s.test(report));
+  check('the sources are listed with urls', /reuters\.com/.test(report) && /apnews\.com/.test(report));
+  check('the budget status is announced when set', /Stopped at the token budget/.test(
+    buildReport({ question: 'Q', claims: [], ledger, status: 'budget' }),
+  ));
+}
+
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 console.log(
   failures === 0 ? '\n\x1b[32mAll research checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`,
