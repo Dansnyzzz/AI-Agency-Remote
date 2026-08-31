@@ -4,6 +4,7 @@ import { getPrefs, usesSharedKey, providerStatus } from './settings.js';
 import { checkQuota, record as recordUsage } from './usage.js';
 import { streamCompletion } from './providers/index.js';
 import { resolve as resolveModelId } from './models.js';
+import { isAuto, pickAutoModel } from './autoPick.js';
 import { availableTools, assessRisk, riskReason } from './tools/definitions.js';
 import { executeTool } from './tools/execute.js';
 import { normalisePlan, PLAN_MIN_STEPS } from './tools/cloud.js';
@@ -460,7 +461,44 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
    * `modelId` is still honoured, because that is an explicit per-request override
    * (a sub-agent, a scheduled task) rather than a stale preference.
    */
-  const entry = await resolveModelId(modelId || prefs.defaultModel);
+  let messages = await store.listMessages(userId, chatId);
+
+  /**
+   * Resolve the model, expanding the special `auto` id to the best free model
+   * the account can actually run right now.
+   *
+   * `auto` is resolved per turn rather than once, because "best free" moves:
+   * the library refreshes, keys go into and come out of cooldown. The vision
+   * toggle is honoured, and a turn that carries an image lifts it for that turn
+   * regardless — a model that cannot see the image would be answering half the
+   * message. When nothing free is reachable, the turn stops with a plain message
+   * rather than quietly falling back to a paid model.
+   */
+  const wantModel = modelId || prefs.defaultModel;
+  let entry;
+  let autoNotice = null;
+  if (isAuto(wantModel)) {
+    const hasImages = messages.some((m) => (m.attachments || []).some((a) => a.kind === 'image'));
+    const vision = !!prefs.autoVision || hasImages;
+    const picked = await pickAutoModel(userId, { vision });
+    if (!picked) {
+      emit('error', {
+        message:
+          'Auto needs an OpenRouter or OrcaRouter key with a free model available. ' +
+          'Add one in Settings → Providers, or pick a specific model.',
+        code: 'no_auto_model',
+      });
+      emit('done', { stopReason: 'no_auto_model' });
+      return;
+    }
+    entry = await resolveModelId(picked.id);
+    autoNotice =
+      !prefs.autoVision && hasImages
+        ? `Auto used ${picked.label || picked.id} so it could read the image.`
+        : `Auto chose ${picked.label || picked.id}.`;
+  } else {
+    entry = await resolveModelId(wantModel);
+  }
 
   // Refuse before spending anything, and say plainly how to lift the cap.
   const quota = await checkQuota(user, {
@@ -472,7 +510,8 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     return;
   }
 
-  let messages = await store.listMessages(userId, chatId);
+  // Say which model auto landed on, so the choice is never invisible.
+  if (autoNotice) emit('status', { message: autoNotice });
 
   // The question decides which passages of a long shelf are worth sending, so
   // the sources are chosen after the transcript is known rather than before.

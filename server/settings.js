@@ -29,6 +29,13 @@ const DEFAULT_PREFS = {
   // switch is for the person who wants it off entirely.
   autoPreview: true,
   /**
+   * When the model is `auto`, whether to prefer a free model that can read
+   * images. Off by default because a text-only free model is usually stronger
+   * and lighter; a turn carrying an image lifts this for that turn regardless,
+   * so nobody has to remember it just to send a picture.
+   */
+  autoVision: false,
+  /**
    * Which language the interface is in.
    *
    * Per-account rather than per-browser, unlike the theme: the theme belongs to
@@ -139,6 +146,7 @@ export async function setPrefs(userId, patch) {
     throw new Error(`"${patch.language}" is not a language this interface has. Use one of: ${[...LANGUAGES].join(', ')}.`);
   }
   if ('onboarded' in patch) next.onboarded = !!patch.onboarded;
+  if ('autoVision' in patch) next.autoVision = !!patch.autoVision;
 
   await getStore().setUserSetting(userId, PREFS_KEY, next);
   return next;

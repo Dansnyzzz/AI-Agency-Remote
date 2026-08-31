@@ -1774,7 +1774,7 @@ function escapeText(value) {
 function renderTopbar() {
   // The id's last segment reads better than the whole path in a narrow chip.
   const chip = $('model-chip');
-  chip.textContent = String(state.model || '').split('/').pop();
+  chip.textContent = state.model === 'auto' ? 'Auto' : String(state.model || '').split('/').pop();
 
   /**
    * Say when the model is a free one.
@@ -2526,6 +2526,7 @@ function fillSettings() {
   $('max-steps').value = prefs.maxSteps;
   $('auto-compact').value = prefs.autoCompact === false ? 'off' : 'on';
   $('auto-preview').value = prefs.autoPreview === false ? 'off' : 'on';
+  $('auto-vision').value = prefs.autoVision ? 'on' : 'off';
   $('system-prompt').value = prefs.systemPrompt || '';
   // Per-browser, not per-account — so it is read back from storage, not prefs.
   $('theme').value = storedTheme();
@@ -3124,6 +3125,7 @@ $('save-behaviour').addEventListener('click', async () => {
       maxSteps: Number($('max-steps').value),
       autoCompact: $('auto-compact').value !== 'off',
       autoPreview: $('auto-preview').value !== 'off',
+      autoVision: $('auto-vision').value === 'on',
       systemPrompt: $('system-prompt').value,
     });
     renderTopbar();
@@ -3801,6 +3803,16 @@ let modelIsFree = false;
 
 async function refreshModelFacts() {
   if (!state.model) return;
+  // `auto` is not a real model id, so there is nothing to resolve. It only ever
+  // picks a free model, and a turn carrying an image lifts vision by itself, so
+  // the free badge is on and the vision warning stays off.
+  if (state.model === 'auto') {
+    modelIsFree = true;
+    modelSeesImages = true;
+    renderVisionWarning();
+    renderTopbar();
+    return;
+  }
   try {
     const { model } = await api.resolveModel(state.model);
     modelSeesImages = model.vision !== false;

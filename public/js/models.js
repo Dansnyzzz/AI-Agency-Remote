@@ -207,7 +207,29 @@ export function createModelBrowser({ onPick }) {
       </button>`;
   }
 
+  /**
+   * The "I don't know which model is strong" answer, always at the top.
+   *
+   * It is a real, selectable id (`auto`) resolved per turn to the best free
+   * model the account can run, so it goes through the same click handler as any
+   * card. Hidden only on the Paid tab, where a free-only choice would be noise.
+   */
+  function autoCardHtml() {
+    return (
+      `<div class="model-group__label">Automatic</div>` +
+      `<button class="model-card ${state.current === 'auto' ? 'is-current' : ''}" data-model="auto" type="button">` +
+      `<span class="model-card__main">` +
+      `<span class="model-card__name">Auto — best free model</span>` +
+      `<span class="model-card__meta">Picks the strongest free model you can run right now. ` +
+      `Image support is a toggle in Settings → Behaviour.</span>` +
+      `</span></button>`
+    );
+  }
+
   function renderResults(builtin, models, tier, provider) {
+    const sections = [];
+    if (tier !== 'paid') sections.push(autoCardHtml());
+
     if (!builtin.length && !models.length) {
       // Say *why* it is empty. "Anthropic + Free" matches nothing for a real
       // reason, and a generic "nothing matched" would leave people hunting.
@@ -215,11 +237,10 @@ export function createModelBrowser({ onPick }) {
         tier === 'free' && provider && provider !== 'all' && provider !== 'openrouter'
           ? `${PROVIDER_LABEL[provider]} has no free models — they bill to your own key. Try the Free tier under OpenRouter.`
           : 'Nothing matched. Try fewer words, or add the model by id in Settings → Models.';
-      results.innerHTML = `<p class="hint">${escapeHtml(why)}</p>`;
+      results.innerHTML = sections.join('') + `<p class="hint">${escapeHtml(why)}</p>`;
       return;
     }
 
-    const sections = [];
     if (builtin.length) {
       const heading =
         provider && provider !== 'all'

@@ -1015,6 +1015,18 @@
             </p>
           </div>
           <div class="field">
+            <label for="auto-vision">Auto model &amp; images</label>
+            <select id="auto-vision">
+              <option value="off">Pick the strongest free model, image-reading or not</option>
+              <option value="on">Prefer a free model that can read images</option>
+            </select>
+            <p class="hint">
+              Only applies when the model is set to <strong>Auto</strong>. A text-only free model is
+              usually the stronger choice, so this is off by default — and a message with an image
+              attached still gets an image-reading model for that turn, whichever way this is set.
+            </p>
+          </div>
+          <div class="field">
             <label for="language" data-i18n="settings.language.label">Language</label>
             <select id="language"></select>
             <p class="hint" data-i18n="settings.language.hint">
