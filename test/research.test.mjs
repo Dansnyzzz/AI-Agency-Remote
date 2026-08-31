@@ -133,6 +133,30 @@ section('gathering builds a deduped, ranked source ledger');
   check('and records why', notes.some((f) => /down/.test(f.snippet)));
 }
 
+section('planning turns a question into search queries');
+{
+  const { parsePlan, planQuestions } = await import('../server/research/plan.js');
+  check('queries are pulled from JSON in a fence', JSON.stringify(parsePlan('```json\n{"queries":["a","b"]}\n```')) === '["a","b"]');
+  check('queries survive surrounding prose', JSON.stringify(parsePlan('Sure! {"queries":["a"]} done')) === '["a"]');
+  check('garbage yields nothing rather than throwing', Array.isArray(parsePlan('not json')) && parsePlan('not json').length === 0);
+
+  const fakeStream = async function* () {
+    yield { type: 'text', delta: '{"queries":["x","y","z"]}' };
+    yield { type: 'done', usage: { input: 10, output: 5 } };
+  };
+  const budget = { spent: 0, cap: 1e9, tokensIn: 0, tokensOut: 0 };
+  const qs = await planQuestions('Q?', { userId: 'u', entry: { provider: 'x' }, stream: fakeStream, budget });
+  check('the queries come back', qs.length === 3 && qs[0] === 'x', JSON.stringify(qs));
+  check('usage is charged to the budget', budget.spent === 15, String(budget.spent));
+
+  const badStream = async function* () {
+    yield { type: 'text', delta: 'nope' };
+    yield { type: 'done', usage: {} };
+  };
+  const fell = await planQuestions('Fallback question', { userId: 'u', entry: {}, stream: badStream, budget: { spent: 0, cap: 1e9 } });
+  check('unparseable output falls back to the question itself', fell.length === 1 && fell[0] === 'Fallback question');
+}
+
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 console.log(
   failures === 0 ? '\n\x1b[32mAll research checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`,
