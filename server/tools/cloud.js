@@ -5,6 +5,7 @@ import { readSkill, saveSkill } from '../skills.js';
 import { runParallel } from '../subagents.js';
 import { runDeepResearch } from '../research/index.js';
 import { renderChart } from './chart.js';
+import { evaluate } from './calc.js';
 import { parseSchedule } from '../scheduler.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
@@ -345,6 +346,18 @@ async function showWidgetTool({ title, svg, html }) {
  * told what it shows rather than what it contains, so the reply describes the
  * picture instead of reciting the numbers a reader can already see.
  */
+/**
+ * Arithmetic, done rather than recalled.
+ *
+ * The answer comes back with the expression beside it so the working is on the
+ * record: a number in a report should be checkable, and "the model said so" is
+ * not a check.
+ */
+async function calculateTool({ expression }) {
+  const { value, expression: shown } = evaluate(expression);
+  return `${shown} = ${value}`;
+}
+
 async function chartTool({ title, type, data, format }) {
   const caption = String(title || '').trim();
   if (!caption) throw new Error('Give the chart a short title, so it is labelled.');
@@ -761,6 +774,7 @@ export const CLOUD_IMPLEMENTATIONS = {
   web_search: webSearch,
   show_widget: showWidgetTool,
   chart: chartTool,
+  calculate: calculateTool,
   memory_write: memoryWrite,
   memory_read: memoryRead,
   memory_append: memoryAppend,

@@ -1066,6 +1066,25 @@ export const TOOLS = [
     },
   },
   {
+    name: 'calculate',
+    scope: 'cloud',
+    readOnly: true,
+    description:
+      'Work out a number instead of doing it in your head. Give an arithmetic expression and get the exact answer back. ' +
+      'Use it for every figure that matters — totals, averages, percentage changes, growth rates — because a sum that is ' +
+      'slightly wrong in a report puts every other number in doubt. ' +
+      '\n\n' +
+      'Operators + - * / ^ and brackets; lists like [1, 2, 3]; functions sum, avg, mean, median, min, max, count, abs, ' +
+      'sqrt, round(x, places), stdev. Example: `round((1200 - 950) / 950 * 100, 1)` for a percentage change.',
+    parameters: {
+      type: 'object',
+      properties: {
+        expression: { type: 'string', description: 'The arithmetic to work out, e.g. sum([36, 26, 27, 34]) / 4' },
+      },
+      required: ['expression'],
+    },
+  },
+  {
     name: 'chart',
     scope: 'cloud',
     readOnly: true,
