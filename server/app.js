@@ -38,6 +38,7 @@ import {
   resolve as resolveModelId,
   auditCatalog,
 } from './models.js';
+import { resolveForUser } from './autoPick.js';
 import { TOOLS, riskReason } from './tools/definitions.js';
 import { executeTool } from './tools/execute.js';
 import { runAgent, deriveTitle, needsApproval as pendingApproval } from './agent.js';
@@ -2081,7 +2082,7 @@ export function createApp() {
       try {
         // The account's model, not the one stored on the conversation — the gauge
         // has to be measured against the window the next turn will actually use.
-        const entry = await resolveModelId((await getPrefs(req.user.id)).defaultModel);
+        const entry = await resolveForUser(req.user.id, (await getPrefs(req.user.id)).defaultModel);
         context = measureContext(messages, entry);
       } catch {
         /* an unresolvable model is the model picker's problem, not the gauge's */
@@ -2229,8 +2230,9 @@ export function createApp() {
       const prefs = await getPrefs(req.user.id);
       const messages = await store.listMessages(req.user.id, chatId);
       // The account's model. Folding a conversation up has to be measured and
-      // performed against the window the next turn will run in.
-      const entry = await resolveModelId(prefs.defaultModel);
+      // performed against the window the next turn will run in. Through
+      // resolveForUser so Auto expands to the free model it would actually pick.
+      const entry = await resolveForUser(req.user.id, prefs.defaultModel);
 
       try {
         const summary = await compactChat({

@@ -125,6 +125,33 @@ section('no key and no free model both yield nothing, not a guess');
   check('no usable key yields null', none === null, none?.id || 'null');
 }
 
+section('resolveForUser expands auto, and passes a real id straight through');
+{
+  const { resolveForUser } = await import('../server/autoPick.js');
+  const { setApiKey, clearKeyRest } = await import('../server/settings.js');
+  await setApiKey(uid, 'openrouter', 'k1');
+  clearKeyRest(uid, 'openrouter');
+
+  // A real id is resolved as-is — auto handling must not touch the normal path.
+  const real = await resolveForUser(uid, 'anthropic/claude-opus-5');
+  check('a concrete id resolves to that model', real?.id === 'anthropic/claude-opus-5', real?.id);
+
+  // 'auto' becomes a concrete, runnable free model — the thing sub-agents and
+  // compaction could not do before, which crashed the moment auto was selected.
+  const picked = await resolveForUser(uid, 'auto');
+  check('auto resolves to a concrete free model', picked?.provider === 'openrouter' && picked?.id !== 'auto', picked?.id);
+
+  // With nothing free reachable, it is a clear throw rather than a broken id.
+  await setApiKey(uid, 'openrouter', '');
+  let threw = '';
+  try {
+    await resolveForUser(uid, 'auto');
+  } catch (err) {
+    threw = err.message;
+  }
+  check('auto with no free model throws a clear error', /free model/i.test(threw), threw);
+}
+
 await store.close?.();
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 

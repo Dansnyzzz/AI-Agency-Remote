@@ -1,5 +1,6 @@
 import { getStore } from './store/index.js';
 import { getApiKeys } from './settings.js';
+import { resolve as resolveModelId } from './models.js';
 
 /**
  * Auto model selection — pick the best free model so somebody who does not know
@@ -96,6 +97,31 @@ export async function pickAutoModel(userId, { vision = false } = {}) {
   // off the database as snake_case, so mirror the camelCase `normalise` shape
   // the picker and tests read.
   return { ...row, id: row.id, provider: row.provider, family: row.family, isFree: true, vision: !!row.vision };
+}
+
+/**
+ * Resolve a model id to a runnable entry, expanding the special `auto` id.
+ *
+ * The single door every caller that resolves the account's default model should
+ * go through, because `auto` is not a real id and `resolve` cannot expand it —
+ * it has no `userId`, and the choice depends on which keys the account has. A
+ * concrete id passes straight through, so this is safe to use everywhere the
+ * default model is resolved: sub-agents, compaction, the context gauge, which
+ * otherwise crashed or fell blank the moment auto was selected.
+ *
+ * @throws when auto is asked for but nothing free is reachable — the caller
+ *   surfaces that rather than running on a broken id.
+ */
+export async function resolveForUser(userId, wantId, { vision = false } = {}) {
+  if (!isAuto(wantId)) return resolveModelId(wantId);
+  const picked = await pickAutoModel(userId, { vision });
+  if (!picked) {
+    throw new Error(
+      'Auto needs an OpenRouter or OrcaRouter key with a free model available. ' +
+        'Add one in Settings → Providers, or pick a specific model.',
+    );
+  }
+  return resolveModelId(picked.id);
 }
 
 /** Exposed for the suite that pins the ordering rules. */

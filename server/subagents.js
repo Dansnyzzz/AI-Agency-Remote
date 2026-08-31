@@ -1,5 +1,5 @@
 import { streamCompletion } from './providers/index.js';
-import { resolve as resolveModelId } from './models.js';
+import { resolveForUser } from './autoPick.js';
 import { executeTool } from './tools/execute.js';
 import { availableTools, assessRisk } from './tools/definitions.js';
 import { getPrefs } from './settings.js';
@@ -150,7 +150,10 @@ export async function runParallel({
   }
 
   const prefs = await getPrefs(user.id);
-  const entry = await resolveModelId(modelId || prefs.defaultModel);
+  // Through resolveForUser, so `auto` becomes a concrete free model rather than
+  // an id that cannot resolve — a sub-agent run must not crash because the
+  // account's model is set to Auto.
+  const entry = await resolveForUser(user.id, modelId || prefs.defaultModel, { vision: !!prefs.autoVision });
   const worker = await workerStatus(user, prefs);
 
   // Read-only, and desktop control withheld entirely: a sub-agent has no screen
