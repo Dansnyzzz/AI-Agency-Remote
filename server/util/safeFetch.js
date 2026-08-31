@@ -57,7 +57,7 @@ function isPrivateAddress(address) {
  * the local network — an internal wiki, a service on the same host. It is off by
  * default because the safe case has to be the one you get without deciding.
  */
-async function assertPublic(url) {
+export async function assertPublic(url) {
   if (!/^https?:$/.test(url.protocol)) {
     throw new Error(`Only http and https URLs can be fetched — "${url.protocol}" is not one.`);
   }

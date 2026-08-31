@@ -25,6 +25,11 @@ const check = (label, pass, detail = '') => {
   if (!pass) failures += 1;
 };
 
+// stdio spawns a process the user named, so it is off unless switched on. The
+// suite drives a trusted stub over stdio, which is exactly the case the switch
+// exists for: a self-hosted owner who has opted in.
+process.env.ALLOW_MCP_STDIO = '1';
+
 const { connectMcp, __testing } = await import('../server/mcp/client.js');
 const { flatten } = __testing;
 const { slugify, splitMcpName } = (await import('../server/mcp/registry.js')).__testing;
@@ -162,6 +167,60 @@ section('a tool from outside this app always asks');
   check('offered under guarded', offered('guarded').includes('mcp__x__do'));
   check('withheld under read-only', !offered('readonly').includes('mcp__x__do'));
   check('and withheld in plan mode', !offered('plan').includes('mcp__x__do'));
+}
+
+section('stdio runs a real command, so it is off unless switched on');
+{
+  // The one that ends the project if it is wrong: a stdio server spawns a
+  // process, which inherits the server's environment — every stored account's
+  // keys are decryptable by whatever that process wants to read. So the reach
+  // is denied by default, and a self-hosting owner opts in knowingly.
+  const saved = process.env.ALLOW_MCP_STDIO;
+  delete process.env.ALLOW_MCP_STDIO;
+  let refused = '';
+  try {
+    await connectMcp(stub());
+  } catch (err) {
+    refused = err.message;
+  }
+  check('a stdio server is refused when nobody opted in', /ALLOW_MCP_STDIO/.test(refused), refused);
+  process.env.ALLOW_MCP_STDIO = saved;
+
+  // Shared infrastructure never runs an arbitrary command, opt-in or not: on a
+  // multi-tenant deployment one account's command reads every account's secrets.
+  const savedVercel = process.env.VERCEL;
+  process.env.VERCEL = '1';
+  let onServerless = '';
+  try {
+    await connectMcp(stub());
+  } catch (err) {
+    onServerless = err.message;
+  }
+  check('and refused on serverless even with the switch on', onServerless.length > 0, onServerless);
+  if (savedVercel === undefined) delete process.env.VERCEL;
+  else process.env.VERCEL = savedVercel;
+}
+
+section('an http server may not be pointed at a private address');
+{
+  // The model, or a user, supplies this URL. Without a check the server fetches
+  // whatever it names — including cloud metadata at 169.254.169.254, which on a
+  // hosted deployment hands out credentials.
+  let metadata = '';
+  try {
+    await connectMcp({ transport: 'http', url: 'http://169.254.169.254/latest/meta-data/' });
+  } catch (err) {
+    metadata = err.message;
+  }
+  check('cloud metadata is refused', /private address|public internet/i.test(metadata), metadata);
+
+  let loopback = '';
+  try {
+    await connectMcp({ transport: 'http', url: 'http://127.0.0.1:1/' });
+  } catch (err) {
+    loopback = err.message;
+  }
+  check('and so is loopback', /private|public internet/i.test(loopback), loopback);
 }
 
 section('flattening a result');

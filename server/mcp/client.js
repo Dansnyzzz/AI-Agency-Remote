@@ -1,5 +1,27 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { assertPublic } from '../util/safeFetch.js';
+
+/**
+ * Whether this deployment may start a stdio MCP server.
+ *
+ * A stdio server is a command this process spawns, and the child inherits the
+ * server's environment — including `ENCRYPTION_KEY`, the one key every stored
+ * account's provider keys are encrypted under. So "add an MCP server" is, for a
+ * stdio server, "run a program on the server with the keys to everything", and
+ * on a deployment several tenants share it is one account reading them all.
+ *
+ * Denied by default for that reason, on the same opt-in principle as
+ * `FILE_ACCESS=full` and `ALLOW_PRIVATE_FETCH`: the safe case is the one you get
+ * without deciding. `ALLOW_MCP_STDIO` turns it on for a single-owner machine
+ * that wants it. Serverless is never allowed at all — `process.env.VERCEL`
+ * marks shared, ephemeral infrastructure, where arbitrary local commands have
+ * no business running whatever the switch says.
+ */
+export function stdioAllowed() {
+  if (process.env.VERCEL) return false;
+  return /^(1|true|yes)$/i.test(process.env.ALLOW_MCP_STDIO || '');
+}
 
 /**
  * A Model Context Protocol client, in about three hundred lines and no
@@ -231,6 +253,10 @@ function httpTransport({ url, headers = {} }) {
         ...headers,
       },
       body: JSON.stringify(payload),
+      // The host was checked public before connecting; a redirect could still
+      // aim the next hop — and the headers, which may carry a token — at a
+      // private address. Not followed, the same rule connectors.js keeps.
+      redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
     });
 
@@ -323,10 +349,23 @@ function httpTransport({ url, headers = {} }) {
  * Skipping either is the most common reason an MCP client "cannot see any tools".
  */
 export async function connectMcp(config) {
-  const transport =
-    config.transport === 'http'
-      ? httpTransport({ url: config.url, headers: config.headers })
-      : stdioTransport({ command: config.command, args: config.args, env: config.env, cwd: config.cwd });
+  let transport;
+  if (config.transport === 'http') {
+    // The URL is user- or model-supplied, so it goes through the same gate as
+    // every other outbound fetch: a private address is refused before a socket
+    // is opened, which is what stops a server being pointed at cloud metadata.
+    await assertPublic(new URL(config.url));
+    transport = httpTransport({ url: config.url, headers: config.headers });
+  } else {
+    if (!stdioAllowed()) {
+      throw new Error(
+        process.env.VERCEL
+          ? 'stdio MCP servers cannot run on this deployment: they spawn a local command, which shared serverless infrastructure must not do. Use an http server instead.'
+          : 'stdio MCP servers are off by default because they run a command with access to the server\'s secrets. Set ALLOW_MCP_STDIO=1 to enable them on a machine you trust, or use an http server.',
+      );
+    }
+    transport = stdioTransport({ command: config.command, args: config.args, env: config.env, cwd: config.cwd });
+  }
 
   try {
     const hello = await transport.request(
