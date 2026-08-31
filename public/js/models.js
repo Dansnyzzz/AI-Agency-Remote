@@ -78,7 +78,11 @@ export function createModelBrowser({ onPick }) {
 
     let data;
     try {
-      data = await api.models({ q: parsed.text, tier, family, sort: state.sort });
+      // Ask the server for one aggregator's models directly when a specific one
+      // is selected, so a row limit cannot leave the tab empty by filling the
+      // page with the other aggregator's newer models.
+      const libraryProvider = isLibrary(provider) && provider !== 'all' ? provider : undefined;
+      data = await api.models({ q: parsed.text, tier, family, sort: state.sort, provider: libraryProvider });
     } catch (err) {
       results.innerHTML = `<p class="hint">Could not load models: ${escapeHtml(err.message)}</p>`;
       return;

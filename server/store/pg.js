@@ -1311,10 +1311,17 @@ export function createPgStore(connectionString) {
      * vendor's release date, which is what people actually want when scanning
      * for something new to try.
      */
-    async listSharedModels({ query, family, tier, sort = 'new', limit = 300 } = {}) {
+    async listSharedModels({ query, family, tier, sort = 'new', limit = 300, provider } = {}) {
       const where = [];
       const values = [];
 
+      // Filtered at the database, not on the client, so the row limit cannot
+      // hide a whole provider: with two aggregators the newest models are mostly
+      // one of them, and the other never reached a client-side filter.
+      if (provider && provider !== 'all') {
+        values.push(provider);
+        where.push(`provider = $${values.length}`);
+      }
       if (query) {
         values.push(`%${String(query).toLowerCase()}%`);
         where.push(`(LOWER(id) LIKE $${values.length} OR LOWER(label) LIKE $${values.length}

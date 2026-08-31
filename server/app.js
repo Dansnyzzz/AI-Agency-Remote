@@ -700,6 +700,7 @@ export function createApp() {
           tier: req.query.tier,
           sort: req.query.sort,
           limit: req.query.limit,
+          provider: req.query.provider,
         }),
       );
     }),

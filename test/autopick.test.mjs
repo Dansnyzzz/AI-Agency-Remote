@@ -152,6 +152,20 @@ section('resolveForUser expands auto, and passes a real id straight through');
   check('auto with no free model throws a clear error', /free model/i.test(threw), threw);
 }
 
+section('the library filters by provider, so a row limit cannot hide one');
+{
+  // The bug this pins: with hundreds of models and a default limit, the newest
+  // (mostly one aggregator) fill the page and the other aggregator's models
+  // never reach the client. A provider filter at the database keeps each one
+  // reachable on its own tab.
+  const orca = await store.listSharedModels({ provider: 'orcarouter', limit: 500 });
+  check('only orcarouter rows come back', orca.length >= 1 && orca.every((m) => m.provider === 'orcarouter'), `${orca.length}`);
+  const or = await store.listSharedModels({ provider: 'openrouter', limit: 500 });
+  check('and openrouter is a separate set', or.length >= 1 && or.every((m) => m.provider === 'openrouter'), `${or.length}`);
+  const all = await store.listSharedModels({ limit: 500 });
+  check('no provider filter still returns both', all.some((m) => m.provider === 'orcarouter') && all.some((m) => m.provider === 'openrouter'));
+}
+
 await store.close?.();
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 
