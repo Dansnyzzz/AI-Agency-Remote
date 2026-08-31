@@ -3,7 +3,18 @@ import { getApiKeys } from './settings.js';
 import { CATALOG, resolveModel } from './providers/catalog.js';
 
 const OPENROUTER_MODELS = 'https://openrouter.ai/api/v1/models';
+const ORCAROUTER_MODELS = 'https://api.orcarouter.ai/v1/models';
 const STALE_AFTER_MS = 25 * 60 * 60 * 1000; // a day plus the cron's ±59min slop
+
+/**
+ * Where the catalogue is pulled from, and under which provider each source is
+ * filed. Both speak the OpenRouter `/models` shape closely enough for one
+ * `normalise` to read either — the differences are absorbed there.
+ */
+const CATALOGUE_SOURCES = [
+  { provider: 'openrouter', url: OPENROUTER_MODELS },
+  { provider: 'orcarouter', url: ORCAROUTER_MODELS },
+];
 
 /**
  * The shared model library.
@@ -110,11 +121,13 @@ function acceptsImages(entry) {
  * reaching for a constant.
  */
 function maxOutputOf(entry) {
-  const stated = Number(entry.top_provider?.max_completion_tokens);
+  // OpenRouter nests this under `top_provider`; OrcaRouter puts it at the top
+  // level. Reading both keeps one function honest for two aggregators.
+  const stated = Number(entry.top_provider?.max_completion_tokens ?? entry.max_completion_tokens);
   return Number.isFinite(stated) && stated > 0 ? stated : null;
 }
 
-function normalise(entry) {
+function normalise(entry, provider = 'openrouter') {
   const priceIn = perMillion(entry.pricing?.prompt);
   const priceOut = perMillion(entry.pricing?.completion);
   // Free is decided by the price and only by the price. The `:free` suffix in
@@ -123,8 +136,8 @@ function normalise(entry) {
   const isFree = priceIn === 0 && priceOut === 0;
 
   return {
-    id: `openrouter/${entry.id}`,
-    provider: 'openrouter',
+    id: `${provider}/${entry.id}`,
+    provider,
     model: entry.id,
     family: familyOf(entry.id),
     label: entry.name || entry.id,
@@ -140,24 +153,52 @@ function normalise(entry) {
   };
 }
 
-async function fetchOpenRouterCatalogue() {
-  const res = await fetch(OPENROUTER_MODELS, {
+async function fetchCatalogue(url, label) {
+  const res = await fetch(url, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(30_000),
   });
-  if (!res.ok) throw new Error(`OpenRouter returned HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`${label} returned HTTP ${res.status}`);
   const json = await res.json();
-  if (!Array.isArray(json.data)) throw new Error('OpenRouter returned an unexpected shape.');
+  if (!Array.isArray(json.data)) throw new Error(`${label} returned an unexpected shape.`);
   return json.data;
 }
 
-/** Pull the whole catalogue and upsert it. Safe to run repeatedly. */
+/** The OpenRouter catalogue alone — the one `addModelById` still checks against. */
+const fetchOpenRouterCatalogue = () => fetchCatalogue(OPENROUTER_MODELS, 'OpenRouter');
+
+/**
+ * Pull every catalogue source and upsert the union. Safe to run repeatedly.
+ *
+ * The sources are fetched independently: OrcaRouter being slow or down must not
+ * cost the OpenRouter refresh, and the other way round. A source that fails is
+ * logged and skipped, so the library keeps whatever it already had for that
+ * provider rather than being emptied. Ids are provider-prefixed, so the two
+ * never collide in the upsert.
+ */
 export async function refreshLibrary() {
-  const entries = await fetchOpenRouterCatalogue();
-  const models = entries
-    .filter((e) => isTextModel(e) && supportsTools(e))
-    .map(normalise)
-    .filter((m) => m.model);
+  const settled = await Promise.allSettled(
+    CATALOGUE_SOURCES.map(async ({ provider, url }) => {
+      const entries = await fetchCatalogue(url, provider);
+      return entries
+        .filter((e) => isTextModel(e) && supportsTools(e))
+        .map((e) => normalise(e, provider))
+        .filter((m) => m.model);
+    }),
+  );
+
+  const models = [];
+  settled.forEach((result, i) => {
+    if (result.status === 'fulfilled') models.push(...result.value);
+    else console.error(`[ai-remote] ${CATALOGUE_SOURCES[i].provider} catalogue refresh failed:`, result.reason?.message);
+  });
+
+  // Every source failing is a real failure — surface it so `refreshIfStale` can
+  // keep the old library rather than stamping it as freshly, emptily refreshed.
+  if (!models.length && settled.every((r) => r.status === 'rejected')) {
+    throw new Error(settled.map((r) => r.reason?.message).join('; ') || 'No catalogue source answered.');
+  }
+
   await getStore().upsertModels(models);
 
   const status = await getStore().modelLibraryStatus();
@@ -390,3 +431,6 @@ const summarise = (entry) => ({
   model: entry.model,
   label: entry.label,
 });
+
+/** Exposed for the suite that pins how each aggregator's /models shape is read. */
+export const __testing = { normalise, maxOutputOf, acceptsImages };

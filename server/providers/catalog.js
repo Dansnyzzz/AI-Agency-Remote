@@ -150,6 +150,7 @@ export const PROVIDERS = {
   openai: { label: 'OpenAI', keyHint: 'sk-…', console: 'https://platform.openai.com/api-keys' },
   google: { label: 'Google Gemini', keyHint: 'AIza…', console: 'https://aistudio.google.com/apikey' },
   openrouter: { label: 'OpenRouter', keyHint: 'sk-or-v1-…', console: 'https://openrouter.ai/keys' },
+  orcarouter: { label: 'OrcaRouter', keyHint: 'sk-orca-…', console: 'https://www.orcarouter.ai/keys' },
 };
 
 /**

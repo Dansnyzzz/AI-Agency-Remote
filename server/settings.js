@@ -60,6 +60,7 @@ const ENV_KEYS = {
   openai: 'OPENAI_API_KEY',
   google: 'GOOGLE_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  orcarouter: 'ORCAROUTER_API_KEY',
 };
 
 /**

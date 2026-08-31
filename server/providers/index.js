@@ -13,8 +13,13 @@ import {
 import { resolveModel, PROVIDERS } from './catalog.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+const ORCAROUTER_BASE = 'https://api.orcarouter.ai/v1';
 
-function openrouterHeaders() {
+/**
+ * Both aggregators use the same attribution headers as OpenRouter — a referer
+ * and a title identifying the app. Harmless where they are ignored.
+ */
+function routerHeaders() {
   const referer = process.env.PUBLIC_URL || 'https://github.com/';
   return { 'HTTP-Referer': referer, 'X-Title': 'AI Remote' };
 }
@@ -29,7 +34,10 @@ async function* streamOne(entry, common) {
       yield* streamOpenAICompatible(common);
       return;
     case 'openrouter':
-      yield* streamOpenAICompatible({ ...common, baseURL: OPENROUTER_BASE, headers: openrouterHeaders() });
+      yield* streamOpenAICompatible({ ...common, baseURL: OPENROUTER_BASE, headers: routerHeaders() });
+      return;
+    case 'orcarouter':
+      yield* streamOpenAICompatible({ ...common, baseURL: ORCAROUTER_BASE, headers: routerHeaders() });
       return;
     case 'google':
       yield* streamGoogle(common);
