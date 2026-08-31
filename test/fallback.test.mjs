@@ -309,11 +309,16 @@ section('the rotation reacts to what actually came out');
     );
     check('a single key waits rather than failing', run.error === null, String(run.error?.message || ''));
     check('and answers on the second attempt', run.seen.length === 2, run.seen.join(','));
-    // Near enough rather than exactly: the wait is measured from the reset the
-    // provider gave, so a millisecond or two of bookkeeping comes off it.
+    // A range, not a tolerance. The wait is `resetTime - now`, so it is always
+    // a little under the three seconds asked for, by however long the machine
+    // took to get here — which under a full suite run is not a fixed amount.
+    // What matters is where the number came from: the provider's three seconds,
+    // rather than the sixty-second default for a limit that named no time, or a
+    // sub-second upstream backoff. Those are far enough apart to tell without
+    // pretending the scheduler is predictable.
     check(
       'having waited the time the provider asked for',
-      run.waits.some((ms) => Math.abs(ms - 3000) < 50),
+      run.waits.some((ms) => ms > 2000 && ms <= 3000),
       run.waits.join(','),
     );
   }
