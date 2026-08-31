@@ -157,6 +157,52 @@ section('planning turns a question into search queries');
   check('unparseable output falls back to the question itself', fell.length === 1 && fell[0] === 'Fallback question');
 }
 
+section('the debate drafts, criticises, and settles');
+{
+  const { runDebate } = await import('../server/research/debate.js');
+  const ledger = new Map([['S1', { url: 'https://www.reuters.com/a', rank: 'reputable' }]]);
+  const findings = [{ id: 'S1', query: 'q', snippet: 'evidence' }];
+
+  // A stream scripted by call order: proposer draft, satisfied critic, arbiter.
+  const scriptOf = (lines) => {
+    let i = 0;
+    return async function* () {
+      const line = lines[Math.min(i, lines.length - 1)];
+      i += 1;
+      yield { type: 'text', delta: line };
+      yield { type: 'done', usage: { input: 1, output: 1 } };
+    };
+  };
+
+  const calls = [];
+  const spy = (lines) => {
+    const s = scriptOf(lines);
+    return (opts) => {
+      calls.push(opts.system.slice(0, 20));
+      return s(opts);
+    };
+  };
+
+  const budget = { spent: 0, cap: 1e9 };
+  const stream = spy([
+    'Claim A [S1].', // proposer draft
+    '{"objections":[]}', // critic: satisfied
+    '{"claims":[{"text":"Claim A [S1].","conflicting":false}]}', // arbiter
+  ]);
+  const { claims, transcript } = await runDebate({
+    question: 'Q?', findings, ledger, userId: 'u', entry: {}, stream, budget, rounds: 2,
+  });
+  check('the final claim keeps its citation', claims[0]?.text.includes('[S1]'), JSON.stringify(claims));
+  check('a satisfied critic stops the debate early', calls.length === 3, `${calls.length} calls`);
+  check('the transcript records every role', transcript.some((t) => t.role === 'proposer') && transcript.some((t) => t.role === 'critic') && transcript.some((t) => t.role === 'arbiter'));
+
+  // An arbiter that returns prose rather than JSON still yields a usable claim
+  // rather than losing the answer.
+  const proseStream = spy(['draft [S1]', '{"objections":[]}', 'The answer is X [S1].']);
+  const out = await runDebate({ question: 'Q', findings, ledger, userId: 'u', entry: {}, stream: proseStream, budget: { spent: 0, cap: 1e9 }, rounds: 2 });
+  check('unparseable arbiter output becomes one claim, not nothing', out.claims.length >= 1 && out.claims[0].text.length > 0);
+}
+
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 console.log(
   failures === 0 ? '\n\x1b[32mAll research checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`,
