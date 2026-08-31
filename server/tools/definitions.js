@@ -907,6 +907,27 @@ export const TOOLS = [
       required: ['url'],
     },
   },
+  {
+    name: 'deep_research',
+    scope: 'cloud',
+    readOnly: true,
+    // A composite that runs its own multi-step debate, so a sub-agent calling it
+    // would be a fan-out of fan-outs — six sub-agents each spending a research
+    // run's worth of calls. Top-level only.
+    noSubagent: true,
+    description:
+      'Research a hard question thoroughly: search several angles, cross-check sources, and answer through an internal ' +
+      'proposer–critic–arbiter debate. Returns conclusions each labelled with a confidence (HIGH/MEDIUM/LOW/CONFLICTING) ' +
+      'and a cited source list. Use for questions where being right matters more than being fast — a claim that needs ' +
+      'verifying, conflicting reports, a decision resting on facts. Overkill for a quick lookup; use web_search for that.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The question to research, in full.' },
+      },
+      required: ['question'],
+    },
+  },
   // ── documents the assistant makes ─────────────────────────────────────
   {
     name: 'create_file',
@@ -1173,6 +1194,10 @@ export const TOOLS = [
     name: 'run_parallel',
     scope: 'cloud',
     readOnly: true,
+    // Sub-agents do not nest: one careless prompt would otherwise become an
+    // exponential fan-out of API calls on somebody's key. Enforced here, not
+    // just asserted in a comment in subagents.js.
+    noSubagent: true,
     description:
       'Hand several INDEPENDENT questions to sub-agents that work at the same time, and get all the answers back together. Right for fan-out — read these six files, check these four sites, summarise each of these folders. Wrong for anything sequential: sub-agents cannot see each other, so a chain of steps must stay with you. They are read-only; they report, you act.',
     parameters: {
@@ -1798,6 +1823,7 @@ export function availableTools({
   providers,
   context,
   extra = [],
+  subagent = false,
 }) {
   // Planning is reading with a different brief: the model still needs to look
   // at everything, and `update_plan` is read-only, so the same filter serves.
@@ -1812,6 +1838,9 @@ export function availableTools({
     // Tools that exist for the interface rather than for the model. Offering
     // both halves of the same job is a decision it has to make for no reason.
     if (t.hidden) return false;
+    // Composite tools that themselves fan out — a sub-agent must never reach one,
+    // or one job becomes an exponential tree of API calls.
+    if (subagent && t.noSubagent) return false;
     if (runsLocally(t) && !workerOnline) return false;
     if (t.scope === 'desktop' && !desktopOnline) return false;
     if (looksOnly && !t.readOnly) return false;

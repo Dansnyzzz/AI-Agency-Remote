@@ -203,6 +203,68 @@ section('the debate drafts, criticises, and settles');
   check('unparseable arbiter output becomes one claim, not nothing', out.claims.length >= 1 && out.claims[0].text.length > 0);
 }
 
+section('the whole pipeline, end to end with fakes');
+{
+  const { runDeepResearch } = await import('../server/research/index.js');
+
+  // A stream that answers by role, so plan → debate all run through one fake.
+  const byRole = async function* ({ system }) {
+    const reply = /planner/i.test(system)
+      ? '{"queries":["deepseek price","deepseek history"]}'
+      : /Proposer/.test(system)
+        ? 'DeepSeek is free [S1].'
+        : /Critic/.test(system)
+          ? '{"objections":[]}'
+          : '{"claims":[{"text":"DeepSeek is free [S1].","conflicting":false}]}';
+    yield { type: 'text', delta: reply };
+    yield { type: 'done', usage: { input: 100, output: 50 } };
+  };
+  const fakeSearch = async () => ({
+    engine: 'stub',
+    results: [{ title: 'Reuters', url: 'https://www.reuters.com/a', snippet: 'it is free', published: '2026-01-01' }],
+    attempts: [],
+  });
+
+  const run = await runDeepResearch({
+    question: 'Is DeepSeek free?',
+    userId: uid,
+    user: { id: uid },
+    chatId: 'c-research',
+    deps: { search: fakeSearch, stream: byRole, entry: { provider: 'x' } },
+  });
+  check('the report cites a source', /reuters\.com/.test(run.content), run.content.slice(0, 120));
+  check('and grades a conclusion', /confidence:/.test(run.content));
+  check('a run id comes back', !!run.runId);
+  const saved = await store.getResearchRun(uid, run.runId);
+  check('and the run is persisted', saved?.question === 'Is DeepSeek free?', saved?.status);
+  check('with its transcript', Array.isArray(saved?.transcript) && saved.transcript.length > 0);
+
+  // An empty search must not become a confident answer.
+  const emptyRun = await runDeepResearch({
+    question: 'Q?', userId: uid, user: { id: uid }, chatId: 'c2',
+    deps: { search: async () => ({ engine: null, results: [], attempts: [] }), stream: byRole, entry: { provider: 'x' } },
+  });
+  check('an empty search yields no fabricated sources', /No sources were found|no source/i.test(emptyRun.content), emptyRun.content.slice(-200));
+
+  // A tiny budget cap stops the run and still persists what it had.
+  const capped = await runDeepResearch({
+    question: 'Q3?', userId: uid, user: { id: uid }, chatId: 'c3',
+    deps: { search: fakeSearch, stream: byRole, entry: { provider: 'x' }, cap: 1 },
+  });
+  check('a hit budget is reported, not hidden', /token budget/i.test(capped.content), capped.content.slice(0, 120));
+  check('and the capped run is still saved', (await store.getResearchRun(uid, capped.runId))?.status === 'budget');
+}
+
+section('deep_research is a top-level tool, never handed to a sub-agent');
+{
+  const { availableTools } = await import('../server/tools/definitions.js');
+  const forMain = availableTools({ workerOnline: false, desktopOnline: false, policy: 'guarded' }).map((t) => t.name);
+  const forSub = availableTools({ workerOnline: false, desktopOnline: false, policy: 'readonly', subagent: true }).map((t) => t.name);
+  check('the main loop is offered deep_research', forMain.includes('deep_research'));
+  check('a sub-agent is not — no research-of-research fan-out', !forSub.includes('deep_research'));
+  check('nor run_parallel — a sub-agent does not spawn sub-agents', !forSub.includes('run_parallel'));
+}
+
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 console.log(
   failures === 0 ? '\n\x1b[32mAll research checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`,

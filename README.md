@@ -37,6 +37,7 @@ internet ever connects inward to your machine.
 | **Skills** | Teach a procedure once; it is offered back in every future conversation. |
 | **Scheduled tasks** | Daily or weekly work that runs unattended, into a conversation you read later. |
 | **Sub-agents** | Fan a job out to several read-only agents at once and gather the answers. |
+| **Deep research** | For a question where being right matters more than being fast: it searches several angles, cross-checks sources, and answers through an internal proposer–critic–arbiter debate. Every conclusion carries a confidence — HIGH / MEDIUM / LOW / CONFLICTING, counted from independent sources, not guessed — and a cited source list, and any claim with no source is flagged as such. The full debate transcript is kept for audit. Runs on the conversation's own model, so it is affordable on a free one. |
 | **Light and dark** | Follows your system by default; `Settings → Behaviour` overrides it per browser. |
 | **Your computers** | Pair as many machines as you like with an eight-character code. Sign in anywhere and they are there. |
 | **New-model alerts** | The daily scan spots a genuinely new release and tells you once, with the details — take it as your default or turn it down. |

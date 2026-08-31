@@ -1,0 +1,78 @@
+import crypto from 'node:crypto';
+import { getStore } from '../store/index.js';
+import { getPrefs } from '../settings.js';
+import { resolveForUser } from '../autoPick.js';
+import { planQuestions } from './plan.js';
+import { gatherEvidence } from './gather.js';
+import { runDebate } from './debate.js';
+import { buildReport } from './report.js';
+
+/**
+ * The token budget for one research run.
+ *
+ * A safety stop, not a tight leash: a run makes eight to twelve model calls, and
+ * this is the ceiling that keeps a runaway one — a debate that will not settle,
+ * a model that will not answer in JSON — from quietly spending a fortune. When
+ * it is hit the run stops and returns what it has, labelled, rather than being
+ * cut off mid-sentence with no explanation.
+ */
+const DEFAULT_CAP = 250_000;
+
+/** The ledger as the store keeps it: an array, not a Map. */
+const ledgerToArray = (ledger) =>
+  [...ledger.entries()].map(([id, s]) => ({ id, url: s.url, rank: s.rank, title: s.title ?? null, published: s.published ?? null }));
+
+/**
+ * Run one deep-research pass: plan → gather → debate → grade → report, filed for
+ * audit.
+ *
+ * Every role runs on the conversation's own model (resolved once, Auto included),
+ * so the whole thing is affordable on a free model — the debate is the same model
+ * wearing different hats. The budget is threaded through every call; hitting it
+ * stops the run with `status: 'budget'` rather than a silent truncation. An empty
+ * search is reported as such, with no source, rather than being papered over with
+ * a confident-sounding answer.
+ *
+ * `deps` injects `search`, `stream`, `entry`, `store` and `cap` for tests; in
+ * production only the defaults run.
+ */
+export async function runDeepResearch({ question, userId, user, chatId, signal, deps = {} }) {
+  const store = deps.store || getStore();
+  const stream = deps.stream;
+  const search = deps.search;
+  const cap = deps.cap || DEFAULT_CAP;
+
+  const entry = deps.entry || (await resolveForUser(userId, (await getPrefs(userId)).defaultModel, { vision: false }));
+  const budget = { spent: 0, cap, tokensIn: 0, tokensOut: 0 };
+  const id = crypto.randomUUID();
+
+  const overBudget = () => budget.spent >= budget.cap;
+
+  const queries = await planQuestions(question, { userId, entry, stream, budget, signal });
+  const { ledger, findings } = await gatherEvidence(queries, search ? { search } : {});
+
+  let claims = [];
+  let transcript = [];
+  // Only debate if the budget has not already gone and there is something to
+  // reason over; with no evidence there is nothing honest to synthesise.
+  if (!overBudget()) {
+    ({ claims, transcript } = await runDebate({ question, findings, ledger, userId, entry, stream, budget, signal }));
+  }
+
+  const status = overBudget() ? 'budget' : 'complete';
+  const report = buildReport({ question, claims, ledger, status });
+
+  await store.saveResearchRun(userId, {
+    id,
+    chatId: chatId ?? null,
+    question,
+    status,
+    transcript,
+    sources: ledgerToArray(ledger),
+    report,
+    tokensIn: budget.tokensIn,
+    tokensOut: budget.tokensOut,
+  });
+
+  return { content: `${report}\n\n_Research run ${id}._`, runId: id };
+}

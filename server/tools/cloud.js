@@ -3,6 +3,7 @@ import { getStore } from '../store/index.js';
 import { redactSecrets } from '../redact.js';
 import { readSkill, saveSkill } from '../skills.js';
 import { runParallel } from '../subagents.js';
+import { runDeepResearch } from '../research/index.js';
 import { parseSchedule } from '../scheduler.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
@@ -505,6 +506,13 @@ async function runParallelTool({ tasks }, { user, chatId, signal }) {
   return runParallel({ user, chatId, tasks, signal });
 }
 
+async function deepResearchTool({ question }, { userId, user, chatId, signal }) {
+  const q = String(question || '').trim();
+  if (!q) throw new Error('Give a question to research.');
+  const { content } = await runDeepResearch({ question: q, userId, user, chatId, signal });
+  return content;
+}
+
 async function scheduleTaskTool({ title, prompt, when, repeat = true }, { userId }) {
   const { cron, nextRunAt } = parseSchedule(when, { once: repeat === false });
   const prefs = await getPrefs(userId);
@@ -740,6 +748,7 @@ export const CLOUD_IMPLEMENTATIONS = {
   skill_read: skillRead,
   skill_write: skillWrite,
   run_parallel: runParallelTool,
+  deep_research: deepResearchTool,
   schedule_task: scheduleTaskTool,
   list_tasks: listTasksTool,
   cancel_task: cancelTaskTool,

@@ -162,6 +162,9 @@ export async function runParallel({
     workerOnline: worker.online,
     desktopOnline: false,
     policy: 'readonly',
+    // No composite fan-out tools: a sub-agent must not spawn sub-agents, or
+    // start a research run of its own.
+    subagent: true,
     // Six sub-agents each re-send the catalogue, so a window too small for it is
     // six times the problem it is on the main loop.
     context: entry.context,
