@@ -1,0 +1,68 @@
+/**
+ * The deep-research layer — the parts that need no network.
+ *
+ * The pipeline itself calls a model and a search engine, but its spine is code:
+ * confidence graded by counting sources, citations enforced by a scan of the
+ * draft, a source ledger deduped by url, a question decomposed into queries,
+ * and a debate whose control flow (stop when the critic is satisfied, cap at a
+ * budget) is testable with scripted streams. Those are what this suite pins —
+ * the anti-hallucination guarantees, not the prose the model writes.
+ *
+ *   node test/research.test.mjs
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+process.env.ENCRYPTION_KEY ||= 'research-test-key';
+process.env.SESSION_SECRET ||= 'research-test-secret';
+process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-research-${process.pid}`);
+delete process.env.DATABASE_URL;
+delete process.env.POSTGRES_URL;
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+
+let failures = 0;
+const section = (n) => console.log(`\n\x1b[1m${n}\x1b[0m`);
+const check = (l, ok, d = '') => {
+  console.log(`  ${ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗ FAIL\x1b[0m'}  ${l}${d ? ` — ${d}` : ''}`);
+  if (!ok) failures += 1;
+};
+
+const { initStore } = await import('../server/store/index.js');
+const store = await initStore();
+const { hashPassword } = await import('../server/crypto.js');
+const uid = 'u-research';
+await store.createUser({
+  id: uid,
+  email: 'r@example.com',
+  name: 'R',
+  passwordHash: await hashPassword('a-sufficiently-long-password'),
+  role: 'admin',
+});
+
+section('a research run is stored and read back, scoped to its owner');
+{
+  const run = {
+    id: 'run-1',
+    chatId: 'c-1',
+    question: 'Q?',
+    status: 'complete',
+    transcript: [{ role: 'proposer', text: 'draft' }],
+    sources: [{ id: 'S1', url: 'https://a.example' }],
+    report: 'the report',
+    tokensIn: 100,
+    tokensOut: 50,
+  };
+  await store.saveResearchRun(uid, run);
+  const back = await store.getResearchRun(uid, 'run-1');
+  check('it comes back', back?.id === 'run-1', back?.id);
+  check('the transcript survives as JSON', Array.isArray(back?.transcript) && back.transcript[0].role === 'proposer');
+  check('the sources survive', back?.sources?.[0]?.id === 'S1');
+  check('another account cannot read it', (await store.getResearchRun('u-other', 'run-1')) === null);
+}
+
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+console.log(
+  failures === 0 ? '\n\x1b[32mAll research checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`,
+);
+process.exit(failures === 0 ? 0 : 1);

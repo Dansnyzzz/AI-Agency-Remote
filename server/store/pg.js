@@ -1359,6 +1359,36 @@ export function createPgStore(connectionString) {
       const rows = await q('SELECT * FROM mcp_servers WHERE user_id = $1 AND id = $2', [userId, id]);
       return rows[0] ?? null;
     },
+    async saveResearchRun(userId, run) {
+      const rows = await q(
+        `INSERT INTO research_runs
+           (id, user_id, chat_id, question, status, transcript, sources, report, tokens_in, tokens_out, completed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW())
+         ON CONFLICT (id) DO UPDATE SET
+           status = EXCLUDED.status, transcript = EXCLUDED.transcript, sources = EXCLUDED.sources,
+           report = EXCLUDED.report, tokens_in = EXCLUDED.tokens_in, tokens_out = EXCLUDED.tokens_out,
+           completed_at = NOW()
+         RETURNING *`,
+        [
+          run.id,
+          userId,
+          run.chatId ?? null,
+          run.question,
+          run.status,
+          JSON.stringify(run.transcript ?? []),
+          JSON.stringify(run.sources ?? []),
+          run.report ?? null,
+          run.tokensIn ?? 0,
+          run.tokensOut ?? 0,
+        ],
+      );
+      return rows[0];
+    },
+    async getResearchRun(userId, id) {
+      const rows = await q('SELECT * FROM research_runs WHERE user_id = $1 AND id = $2', [userId, id]);
+      return rows[0] ?? null;
+    },
+
     async saveMcpServer(userId, server) {
       await q(
         `INSERT INTO mcp_servers (id, user_id, name, config, enabled)

@@ -496,3 +496,22 @@ CREATE TABLE IF NOT EXISTS attachment_versions (
 );
 CREATE INDEX IF NOT EXISTS attachment_versions_idx
   ON attachment_versions (attachment_id, revision DESC);
+
+-- One deep-research run: the debate transcript and the source ledger, kept out
+-- of the conversation so a long transcript does not ride in every later turn's
+-- context, and kept at all so a conclusion's provenance can be audited later.
+CREATE TABLE IF NOT EXISTS research_runs (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chat_id      TEXT,
+  question     TEXT NOT NULL,
+  status       TEXT NOT NULL,           -- complete | budget | failed | aborted
+  transcript   JSONB NOT NULL,          -- the rounds, personas, objections
+  sources      JSONB NOT NULL,          -- the ledger: id, url, rank, title
+  report       TEXT,
+  tokens_in    INTEGER NOT NULL DEFAULT 0,
+  tokens_out   INTEGER NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS research_runs_user_idx ON research_runs (user_id, created_at DESC);
