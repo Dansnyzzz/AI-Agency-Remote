@@ -128,8 +128,17 @@ function maxOutputOf(entry) {
 }
 
 function normalise(entry, provider = 'openrouter') {
-  const priceIn = perMillion(entry.pricing?.prompt);
-  const priceOut = perMillion(entry.pricing?.completion);
+  let priceIn = perMillion(entry.pricing?.prompt);
+  let priceOut = perMillion(entry.pricing?.completion);
+  // OrcaRouter prices a free model as `{request:"0"}` with no per-token cost,
+  // where OpenRouter uses prompt/completion = 0. Read the request form as free
+  // and as zero price, so it badges and sorts like any other free model instead
+  // of being mistaken for paid and dropped from the Free tab.
+  const requestPrice = Number(entry.pricing?.request);
+  if (priceIn == null && priceOut == null && Number.isFinite(requestPrice) && requestPrice === 0) {
+    priceIn = 0;
+    priceOut = 0;
+  }
   // Free is decided by the price and only by the price. The `:free` suffix in
   // the id is a naming convention, and a naming convention is not a promise —
   // trusting it would let a rename upstream quietly bill somebody.

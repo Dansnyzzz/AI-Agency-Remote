@@ -50,6 +50,29 @@ section('an OrcaRouter model is read into the shared shape');
   check('the context survives', m.context === 128_000, String(m.context));
 }
 
+section('OrcaRouter marks a free model with a request price, not per-token');
+{
+  // The shape its live /models actually uses for free models: {request:"0"} and
+  // no prompt/completion. Read wrongly this looked paid, so every free model
+  // vanished from the Free tab — which is what this pins against.
+  const m = normalise(
+    {
+      id: 'deepseek/deepseek-v4-flash-free',
+      name: 'DeepSeek V4 Flash (Free)',
+      pricing: { request: '0.000000' },
+      architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+    },
+    'orcarouter',
+  );
+  check('a request-priced-zero model is free', m.isFree === true, `in=${m.priceIn} out=${m.priceOut}`);
+  check('and its price reads as zero, not null', m.priceIn === 0 && m.priceOut === 0, `${m.priceIn}/${m.priceOut}`);
+
+  // A per-token priced model is still paid — the request-free rule must not
+  // sweep those in.
+  const paid = normalise({ id: 'x/y', pricing: { prompt: '0.000001', completion: '0.000002' } }, 'orcarouter');
+  check('a per-token price is still paid', paid.isFree === false, `${paid.priceIn}/${paid.priceOut}`);
+}
+
 section('a paid text-only entry is read correctly too');
 {
   const entry = {
