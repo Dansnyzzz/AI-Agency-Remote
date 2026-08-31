@@ -818,8 +818,18 @@ function setWorkspaceTool({ path: target }) {
  * project directory because they pressed "Open" would be a surprise.
  */
 
-/** Where files from a conversation land on this machine. */
+/**
+ * Where files from a conversation land on this machine.
+ *
+ * `FILES_DIR` overrides it, for the same reason `DATA_DIR` overrides the data
+ * directory: a test has to be able to point this somewhere disposable. Without
+ * that the suite wrote into the real tray on whatever machine ran it — and then
+ * deleted the folder afterwards, taking with it whatever the person had opened
+ * from a conversation and left there. A test suite must not be able to reach
+ * the user's files at all, so the reach is removed rather than the deletion.
+ */
 export function filesFolder() {
+  if (process.env.FILES_DIR) return path.resolve(process.env.FILES_DIR);
   const home = os.homedir();
   const base =
     process.platform === 'win32'

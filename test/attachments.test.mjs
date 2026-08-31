@@ -15,6 +15,14 @@ import path from 'node:path';
 process.env.ENCRYPTION_KEY ||= 'attach-test-encryption-key';
 process.env.SESSION_SECRET ||= 'attach-test-session-secret';
 process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-attach-test-${process.pid}`);
+// The tray "Show in folder" writes into. Left to itself this is the real one on
+// whatever machine runs the suite, and the reveal section below used to write
+// into it and then delete it — carrying off whatever the person had opened from
+// a conversation and left there. Kept outside DATA_DIR, and deliberately not
+// removed at the end: this test launches a real file manager at it, and pulling
+// the folder out from under a window that is opening produces an OS error
+// dialog on somebody's screen.
+process.env.FILES_DIR = path.join(os.tmpdir(), `ai-remote-attach-tray-${process.pid}`);
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 delete process.env.VERCEL;
@@ -603,7 +611,17 @@ section('opening a file on the machine');
 
   const doc = JSON.parse(await describe({ name: 'bao-cao.docx' }));
   check('a document is launchable', doc.launchable === true);
-  check('and the folder it would land in is named', /AI Remote/.test(doc.folder), doc.folder);
+  check('and the folder it would land in is named', !!doc.folder, doc.folder);
+
+  // The guard that matters more than any assertion below it. This section runs
+  // the real implementation, writing real bytes and launching a real file
+  // manager, so the one thing it must never be pointed at is the tray belonging
+  // to whoever is running the suite.
+  check(
+    'and it is the disposable tray, not the one on this machine',
+    doc.folder === process.env.FILES_DIR,
+    doc.folder,
+  );
 
   const program = JSON.parse(await describe({ name: 'installer.exe' }));
   check('a program is not', program.launchable === false);
@@ -613,7 +631,16 @@ section('opening a file on the machine');
   const shown = JSON.parse(await reveal({ name: 'notes.txt', data: Buffer.from('xin chào').toString('base64'), how: 'folder' }));
   check('showing a file in a folder writes it out', fs.existsSync(shown.path), shown.path);
   check('with its bytes intact', fs.readFileSync(shown.path, 'utf8') === 'xin chào');
-  check('outside the workspace, in a tray of its own', /AI Remote/.test(shown.folder), shown.folder);
+  // A tray of its own: not the workspace, and not where the app keeps its own
+  // state either. This used to assert the folder was named "AI Remote", which
+  // read as the same claim but was really only checking a string — and it went
+  // on passing while the suite wrote into, and deleted, the real one.
+  check('in a tray of its own', shown.folder === process.env.FILES_DIR, shown.folder);
+  check(
+    'kept apart from where the app stores its state',
+    !shown.folder.startsWith(process.env.DATA_DIR),
+    `${shown.folder} vs ${process.env.DATA_DIR}`,
+  );
 
   // A name that would escape the folder, or make an invisible NTFS stream.
   const nasty = JSON.parse(
@@ -622,7 +649,14 @@ section('opening a file on the machine');
   check('a path in the name cannot climb out', path.dirname(nasty.path) === nasty.folder, nasty.path);
   check('and a colon cannot open a data stream', !path.basename(nasty.path).includes(':'), path.basename(nasty.path));
 
-  fs.rmSync(shown.folder, { recursive: true, force: true });
+  // The files go; the folder stays. `reveal` has just launched a file manager
+  // at this directory, detached, and it opens on its own schedule — removing
+  // the directory races that window and greets somebody with "Location is not
+  // available". An empty folder left in the temp directory is the cheaper of
+  // the two, and the OS sweeps it up.
+  for (const leftover of fs.readdirSync(shown.folder)) {
+    fs.rmSync(path.join(shown.folder, leftover), { recursive: true, force: true });
+  }
 }
 
 section('old attachments fall out of the budget');
