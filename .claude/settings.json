@@ -6,12 +6,21 @@
       "Bash(npm run test:*)",
       "Bash(npm run lint)",
       "Bash(npm run check)",
+      "Bash(npm run gate)",
+      "Bash(npm run gate -- *)",
+      "Bash(node .claude/hooks/gate.js:*)",
       "Bash(npx eslint:*)",
       "Bash(node test/*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
-      "Bash(git show:*)"
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout -b:*)",
+      "Bash(git switch:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash:*)"
     ],
     "deny": [
       "Read(./.env)",
@@ -33,7 +42,40 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "hooks": [{ "type": "command", "command": "node .claude/hooks/lint-changed.js" }]
+        "hooks": [
+          { "type": "command", "command": "node .claude/hooks/lint-changed.js" },
+          { "type": "command", "command": "node .claude/hooks/ledger.js" }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [{ "type": "command", "command": "node .claude/hooks/recover.js" }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "node .claude/hooks/verify-stop.js" }]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [{ "type": "command", "command": "node .claude/hooks/verify-stop.js" }]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [{ "type": "command", "command": "node .claude/hooks/journal.js", "timeout": 30 }]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [{ "type": "command", "command": "node .claude/hooks/brief.js" }]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "node .claude/hooks/brief.js" }]
       }
     ]
   }

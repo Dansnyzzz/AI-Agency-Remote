@@ -18,6 +18,7 @@
     "lint": "eslint .",
     "test:hooks": "node .claude/hooks/hooks.test.mjs",
     "check": "npm run lint && npm test && npm run test:sandbox && npm run test:hooks",
+    "gate": "node .claude/hooks/gate.js run",
     "accounts": "node scripts/whoami.js",
     "reset-password": "node scripts/reset-password.js",
     "make-admin": "node scripts/make-admin.js",

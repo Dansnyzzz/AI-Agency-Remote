@@ -12,6 +12,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,13 +26,35 @@ let failed = 0;
 const BLOCK = 2;
 const ALLOW = 0;
 
+/**
+ * A ledger of its own, in a temp directory.
+ *
+ * The gate hooks read and write `.claude/state/`, and a test that stamped the
+ * real one would report the working tree as verified when nothing had run —
+ * which is precisely the lie the whole mechanism exists to prevent. So every
+ * gate-aware hook here is pointed somewhere disposable.
+ */
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gate-'));
+const ledgerFile = path.join(sandbox, 'gate.json');
+const gateEnv = { ...process.env, CLAUDE_GATE_STATE: sandbox };
+
+const writeLedger = (ledger) => fs.writeFileSync(ledgerFile, JSON.stringify(ledger));
+const clearLedger = () => {
+  try {
+    fs.rmSync(ledgerFile);
+  } catch {
+    /* already absent */
+  }
+};
+
 /** Run a hook with a payload and assert the exit code. */
-function check(hook, payload, expected, what) {
+function check(hook, payload, expected, what, env = process.env) {
   const run = spawnSync(process.execPath, [path.join(here, hook)], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
     cwd: root,
     timeout: 90_000,
+    env,
   });
 
   const got = run.status;
@@ -46,6 +70,18 @@ function check(hook, payload, expected, what) {
       `  [31m✗[0m  ${what} — expected ${verdict(expected)}, got ${verdict(got)}` +
         `${run.stderr ? `\n       ${run.stderr.trim().split('\n').join('\n       ')}` : ''}`,
     );
+  }
+  return run;
+}
+
+/** Assert something that is not an exit code. */
+function is(condition, what, detail = '') {
+  if (condition) {
+    passed += 1;
+    console.log(`  [32m✓[0m  ${what}`);
+  } else {
+    failed += 1;
+    console.log(`  [31m✗[0m  ${what}${detail ? `\n       ${detail}` : ''}`);
   }
 }
 
@@ -85,6 +121,257 @@ check('guard-write.js', write('node_modules/express/index.js'), BLOCK, 'a depend
 console.log('\n[1mlint-changed[0m');
 check('lint-changed.js', write('README.md'), ALLOW, 'markdown is not linted');
 check('lint-changed.js', write('server/app.js'), ALLOW, 'a clean source file passes');
+
+/* ---------------------------------------------------------------------------
+ * The branch rules.
+ *
+ * The branch is injected rather than read from git, so these test the rule and
+ * not whichever branch the suite happens to be run on.
+ * ------------------------------------------------------------------------- */
+
+console.log('\n[1mguard-bash · protected branch[0m');
+const onBranch = (name) => ({ ...process.env, CLAUDE_GUARD_BRANCH: name });
+
+check('guard-bash.js', bash('git commit -m "x"'), BLOCK, 'committing on main', onBranch('main'));
+check('guard-bash.js', bash('git commit -m "x"'), BLOCK, 'committing on master', onBranch('master'));
+check('guard-bash.js', bash('git commit -m "x"'), ALLOW, 'committing on a feature branch', onBranch('feature/x'));
+check('guard-bash.js', bash('git merge feature/x'), BLOCK, 'merging into main', onBranch('main'));
+check('guard-bash.js', bash('git merge feature/x'), ALLOW, 'merging on a feature branch', onBranch('feature/x'));
+check('guard-bash.js', bash('git push origin HEAD'), BLOCK, 'pushing while on main', onBranch('main'));
+check('guard-bash.js', bash('git push origin feature/x'), ALLOW, 'pushing a feature branch', onBranch('feature/x'));
+check('guard-bash.js', bash('git push origin main'), BLOCK, 'naming main from another branch', onBranch('feature/x'));
+// The regression that started this file: the safe form must survive.
+check(
+  'guard-bash.js',
+  bash('git push --force-with-lease origin feature/x'),
+  ALLOW,
+  '--force-with-lease still runs on a feature branch',
+  onBranch('feature/x'),
+);
+check('guard-bash.js', bash('git status'), ALLOW, 'reading status on main', onBranch('main'));
+
+/* ---------------------------------------------------------------------------
+ * The ledger and the completion gate.
+ * ------------------------------------------------------------------------- */
+
+console.log('\n[1mledger[0m');
+clearLedger();
+check('ledger.js', write('server/agent.js'), ALLOW, 'recording a changed source file', gateEnv);
+{
+  const ledger = JSON.parse(fs.readFileSync(ledgerFile, 'utf8'));
+  is(
+    ledger.pending.some((p) => p.file.endsWith('agent.js')),
+    'the file lands in the ledger as unproven',
+    JSON.stringify(ledger.pending),
+  );
+}
+check('ledger.js', write('README.md'), ALLOW, 'documentation is not source', gateEnv);
+{
+  const ledger = JSON.parse(fs.readFileSync(ledgerFile, 'utf8'));
+  is(!ledger.pending.some((p) => p.file.endsWith('README.md')), 'and does not demand a test run');
+}
+
+console.log('\n[1mverify-stop[0m');
+const { head, dirtyHash } = await import('./gate.js');
+const stop = (last, extra = {}) => ({
+  hook_event_name: 'Stop',
+  stop_hook_active: false,
+  last_assistant_message: last,
+  ...extra,
+});
+const unproven = {
+  pending: [{ file: 'server/agent.js', at: '2026-09-01T00:00:00Z' }],
+  lastGreen: null,
+};
+
+writeLedger(unproven);
+check('verify-stop.js', stop('Đã sửa xong và tất cả test đều pass.'), BLOCK, 'a completion claim with unproven changes', gateEnv);
+check('verify-stop.js', stop('All tests pass now.'), BLOCK, 'the same claim in English', gateEnv);
+check('verify-stop.js', stop('Here is how server/agent.js dispatches tools.'), ALLOW, 'an ordinary answer is never blocked', gateEnv);
+check('verify-stop.js', stop('Chưa xong — còn phải chạy test.'), ALLOW, 'an honest "not done yet" is not a claim', gateEnv);
+check('verify-stop.js', stop('Not done — the suite has not run.'), ALLOW, 'nor is it in English', gateEnv);
+check(
+  'verify-stop.js',
+  stop('Đã xong hết.', { stop_hook_active: true }),
+  ALLOW,
+  'never block twice — the harness caps it and ends the turn anyway',
+  gateEnv,
+);
+{
+  const run = check(
+    'verify-stop.js',
+    { ...stop('Xong rồi nhé.'), hook_event_name: 'SubagentStop', agent_type: 'qa-tester' },
+    BLOCK,
+    'a sub-agent claiming completion is the same failure',
+    gateEnv,
+  );
+  is(/qa-tester/.test(run.stderr || ''), 'and the block names which agent said it');
+}
+
+clearLedger();
+check('verify-stop.js', stop('Đã xong.'), ALLOW, 'a claim with nothing changed has nothing to prove', gateEnv);
+
+writeLedger({ pending: [], lastGreen: { at: '2026-09-01T00:00:00Z', head: head(), dirty: dirtyHash(), scope: 'fast' } });
+check('verify-stop.js', stop('All tests pass — ready to merge.'), BLOCK, 'a fast stamp is not the full gate', gateEnv);
+
+writeLedger({ pending: [], lastGreen: { at: '2026-09-01T00:00:00Z', head: head(), dirty: dirtyHash(), scope: 'full' } });
+check('verify-stop.js', stop('Hoàn thành, gate xanh.'), ALLOW, 'a current full stamp satisfies the claim', gateEnv);
+
+writeLedger({ pending: [], lastGreen: { at: '2026-09-01T00:00:00Z', head: 'deadbeef', dirty: 'deadbeef', scope: 'full' } });
+check('verify-stop.js', stop('Hoàn thành.'), BLOCK, 'a stamp from another commit has expired', gateEnv);
+
+/* ---------------------------------------------------------------------------
+ * Context preservation.
+ * ------------------------------------------------------------------------- */
+
+console.log('\n[1mjournal[0m');
+const transcript = path.join(sandbox, 'transcript.jsonl');
+fs.writeFileSync(
+  transcript,
+  [
+    JSON.stringify({
+      type: 'user',
+      promptSource: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'Build the thing, keep it on a branch.' }] },
+    }),
+    JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', content: 'transcript noise' }] },
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            name: 'TodoWrite',
+            input: {
+              todos: [
+                { content: 'Write the failing test', status: 'completed' },
+                { content: 'Make it pass', status: 'in_progress' },
+              ],
+            },
+          },
+        ],
+      },
+    }),
+    '{ this line is not json',
+    '',
+  ].join('\n'),
+);
+
+clearLedger();
+check(
+  'journal.js',
+  { hook_event_name: 'PreCompact', trigger: 'auto', transcript_path: transcript },
+  ALLOW,
+  'writing the journal before a compaction',
+  gateEnv,
+);
+{
+  const journal = fs.readFileSync(path.join(sandbox, 'journal.md'), 'utf8');
+  is(/keep it on a branch/.test(journal), 'the instruction survives');
+  is(!/transcript noise/.test(journal), 'tool results do not');
+  is(/Make it pass/.test(journal), 'and so does the task list');
+}
+check(
+  'journal.js',
+  { hook_event_name: 'PreCompact', trigger: 'manual', transcript_path: path.join(sandbox, 'nope.jsonl') },
+  ALLOW,
+  'a missing transcript is survivable',
+  gateEnv,
+);
+check('journal.js', { hook_event_name: 'PreCompact', trigger: 'auto' }, ALLOW, 'so is no transcript at all', gateEnv);
+
+console.log('\n[1mbrief[0m');
+{
+  const run = check('brief.js', { hook_event_name: 'SessionStart', source: 'startup' }, ALLOW, 'briefing a new session', gateEnv);
+  let parsed = null;
+  try {
+    parsed = JSON.parse(run.stdout.trim());
+  } catch {
+    parsed = null;
+  }
+  is(parsed?.hookSpecificOutput?.hookEventName === 'SessionStart', 'it answers with the event name the harness requires');
+  is(/Branch/.test(parsed?.hookSpecificOutput?.additionalContext || ''), 'and says which branch this is');
+  is(Boolean(parsed?.hookSpecificOutput?.sessionTitle), 'and titles the session');
+}
+{
+  const run = check(
+    'brief.js',
+    { hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: 'did things' },
+    ALLOW,
+    'briefing after a compaction',
+    gateEnv,
+  );
+  const parsed = JSON.parse(run.stdout.trim());
+  is(
+    /keep it on a branch/.test(parsed.hookSpecificOutput.additionalContext),
+    'the journal comes back after the window folds',
+  );
+}
+
+console.log('\n[1mrecover[0m');
+{
+  const run = check(
+    'recover.js',
+    { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', error: 'listen EADDRINUSE: address already in use :::5173' },
+    ALLOW,
+    'a held port',
+  );
+  is(/5173/.test(run.stdout), 'gets the answer this repo already knows');
+}
+{
+  const run = check(
+    'recover.js',
+    { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', error: 'something nobody has ever seen' },
+    ALLOW,
+    'an unrecognised failure',
+  );
+  is(run.stdout.trim() === '', 'gets silence rather than a guess');
+}
+{
+  const run = check(
+    'recover.js',
+    { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', error: 'EADDRINUSE', is_interrupt: true },
+    ALLOW,
+    'an interrupt',
+  );
+  is(run.stdout.trim() === '', 'is a person changing their mind, not a fault');
+}
+
+/* ---------------------------------------------------------------------------
+ * Fail-open. A hook that throws on strange input wedges the session, and the
+ * fix for that is always to delete the hook — so it must not throw.
+ * ------------------------------------------------------------------------- */
+
+console.log('\n[1mfail-open[0m');
+for (const hook of [
+  'guard-bash.js',
+  'guard-write.js',
+  'lint-changed.js',
+  'ledger.js',
+  'verify-stop.js',
+  'journal.js',
+  'brief.js',
+  'recover.js',
+]) {
+  const run = spawnSync(process.execPath, [path.join(here, hook)], {
+    input: 'not json at all {{{',
+    encoding: 'utf8',
+    cwd: root,
+    timeout: 90_000,
+    env: gateEnv,
+  });
+  is(run.status === ALLOW, `${hook} survives garbage on stdin`, run.stderr);
+}
+
+try {
+  fs.rmSync(sandbox, { recursive: true, force: true });
+} catch {
+  /* a leftover temp directory is not a test failure */
+}
 
 console.log(
   failed === 0

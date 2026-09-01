@@ -21,19 +21,28 @@ decides where a new piece of guidance belongs:
 Everything else here is guidance the model can, in principle, talk itself out of.
 These are enforced by the harness.
 
-| Hook | Fires on | Blocks |
+| Hook | Fires on | Does |
 |---|---|---|
-| `guard-bash.js` | `PreToolUse` · Bash, PowerShell | recursive force-delete, force-push, `reset --hard`, `DROP`/`TRUNCATE`, deleting `data/pgdata` or `.env`, `npm publish`, `vercel deploy` |
-| `guard-write.js` | `PreToolUse` · Edit, Write | writes to `data/`, `.env`, `package-lock.json`, `node_modules/` |
-| `lint-changed.js` | `PostToolUse` · Edit, Write | nothing — it lints the single file just written and reports problems back |
+| `guard-bash.js` | `PreToolUse` · Bash, PowerShell | blocks recursive force-delete, force-push, `reset --hard`, `DROP`/`TRUNCATE`, deleting `data/pgdata` or `.env`, `npm publish`, `vercel deploy` — and `commit`/`merge`/`push` while HEAD is on `main` |
+| `guard-write.js` | `PreToolUse` · Edit, Write | blocks writes to `data/`, `.env`, `package-lock.json`, `node_modules/` |
+| `lint-changed.js` | `PostToolUse` · Edit, Write | lints the single file just written and reports problems back |
+| `ledger.js` | `PostToolUse` · Edit, Write | records that file as changed-but-unproven |
+| `verify-stop.js` | `Stop`, `SubagentStop` | blocks a claim that the work is finished when no gate covers what is on disk |
+| `journal.js` | `PreCompact` | writes down what was *asked*, before the window is folded |
+| `brief.js` | `SessionStart`, `PostCompact` | hands back branch, tree state, gate state and that journal |
+| `recover.js` | `PostToolUseFailure` | answers the handful of failures this repo actually produces |
 
 Wired in `settings.json`. Exit code 2 blocks the call and hands stderr to the
 model, which is why every message says what to do *instead* rather than just no.
+`io.js` holds the three things all of them do with the harness — read the
+payload, hand back context, refuse — so the fail-open path exists once rather
+than eight times.
 
 They are deliberately narrow. A guard that blocks a third of what a developer
 legitimately types gets switched off within a week, and then it protects nothing.
 
-**They are tested**, in `hooks/hooks.test.mjs`, and wired into `npm run check`:
+**They are tested** — 78 checks in `hooks/hooks.test.mjs`, wired into
+`npm run check`:
 
 ```
 npm run test:hooks
@@ -41,13 +50,54 @@ npm run test:hooks
 
 That test is not ceremony. It caught `guard-bash.js` blocking
 `git push --force-with-lease` — the exact command its own error message
-recommends — because `\b` matches at the hyphen in `--force-with-lease`. A guard
-nobody tested is a guard that fails on the day it matters.
+recommends — because `\b` matches at the hyphen in `--force-with-lease`. It also
+caught `journal.js` overwriting a good journal with an empty one when the
+transcript could not be read, which is precisely the case the journal exists for.
+A guard nobody tested is a guard that fails on the day it matters.
+
+## The evidence ledger — how "done" stops being a matter of opinion
+
+CLAUDE.md §5 lists a Definition of Done and §10 says to report what actually ran.
+Both were prose, and prose is what a long unattended run talks itself out of at
+turn ninety. `gate.js` is the version that holds.
+
+```
+npm run gate              lint + 24 suites + hook tests, then stamp
+npm run gate -- --fast    lint + hook tests only, seconds, stamped as partial
+node .claude/hooks/gate.js status
+```
+
+The stamp is written **only** by the process that ran the tests and read their
+exit codes itself. Watching output go past and stamping when it "looks like a
+pass" is the exact self-deception the ledger exists to prevent — a suite that
+printed its tally and then exited 1 looks, in a scrollback, almost identical to
+one that passed.
+
+A stamp expires on its own: it records the commit and a hash of the dirty set, so
+the next edit or commit invalidates it with no bookkeeping. `verify-stop.js` then
+blocks — but only where two things are true at once: something changed that no
+completed gate covers, **and** the last message claimed the work was finished.
+Answering a question, reading code, an honest "not done yet" — none of it is
+touched. State lives in `.claude/state/`, gitignored, because a green stamp has
+to mean the gate ran *here*.
+
+## Surviving compaction
+
+The other thing that kills a long run is quieter. Compaction summarises what
+happened and loses what was *asked* — the constraint agreed three hours ago, the
+half-executed plan. The run continues, fluently, against a slightly wrong brief,
+and nothing about it looks wrong from the inside.
+
+`journal.js` writes the instructions, the task list and the changed files to
+`.claude/state/journal.md` before the fold; `brief.js` hands them back on the
+other side and at every session start. The harness summary says what happened;
+the journal says what was asked, and where they disagree the journal wins.
 
 ## `commands/` — invoked by hand
 
 | Command | For |
 |---|---|
+| `/ship` | one piece of work, idea to reviewed-tested-committed branch, stopping only twice |
 | `/verify` | the CLAUDE.md §5 Definition-of-Done gate, run for real |
 | `/deploy-check` | Vercel Hobby readiness — the schema traps that fail a build |
 | `/migrate` | schema changes, which here work by **replay**, not numbered files |
@@ -93,6 +143,19 @@ should be named rather than quietly skipped, so:
   exists to keep the token bill down, turning that on by default would
   contradict the thing it is protecting. Copy the example and enable what you
   are actually using, when you are using it.
+
+## Hook events left switched off
+
+The harness in use here exposes twenty-two hook events — more than CLAUDE.md §2
+lists. Read off the binary rather than assumed, the unused ones include
+`FileChanged`, `CwdChanged`, `PostToolBatch`, `PermissionRequest`,
+`PermissionDenied`, `PreModelSwitch`/`PostModelSwitch`, `SubagentStart`,
+`Setup` and `SessionEnd`.
+
+Each is a process that runs on every occurrence of its event. Eight hooks is
+already a latency budget being spent all day; adding four more for value nobody
+has measured is how the whole directory ends up switched off. They are listed
+here so the next person knows they exist and does not have to go looking.
 
 ## Adding to this
 
