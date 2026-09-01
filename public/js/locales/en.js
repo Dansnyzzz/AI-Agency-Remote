@@ -23,6 +23,7 @@ export const en = {
   'nav.projects': 'Projects',
   'nav.artifacts': 'Artifacts',
   'nav.scheduled': 'Scheduled',
+  'nav.workflows': 'Workflows',
   'nav.workspace': 'Workspace',
   'nav.settings': 'Settings',
   'nav.conversations': 'CONVERSATIONS',

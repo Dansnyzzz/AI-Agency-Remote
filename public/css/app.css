@@ -4778,6 +4778,69 @@ details.block pre {
 .task__act:hover { border-color: var(--accent-dim); color: var(--accent); }
 .task__act.is-armed { border-color: var(--danger); background: var(--danger); color: #0b0e11; }
 
+/* ── a workflow, and the state of each of its steps ─────────── */
+/*
+ * A card rather than a row, because the question this screen answers is "which
+ * step stopped, and what did it say" — and that does not fit on one line.
+ * Colour is never the only signal: every step carries a mark and a word, so it
+ * reads the same to someone who cannot tell the red one from the green one.
+ */
+
+.wf {
+  padding: 16px 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background: var(--surface);
+  margin-bottom: 10px;
+}
+.wf--off { opacity: 0.62; }
+.wf__head { display: flex; align-items: flex-start; gap: 14px; }
+.wf__head > div:first-child { flex: 1; min-width: 0; }
+.wf__name { font-size: 14.5px; font-weight: 600; }
+.wf__when { margin-top: 6px; color: var(--text-faint); font-size: 12px; }
+.wf__acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+
+.wf__flag {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn, var(--accent));
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.wf__steps { margin: 12px 0 0; padding: 0; list-style: none; }
+.wf__step { display: flex; gap: 10px; padding: 5px 0; align-items: baseline; }
+.wf__step-mark {
+  flex: none;
+  width: 1.1em;
+  color: var(--text-faint);
+  font-size: 12px;
+  text-align: center;
+}
+.wf__step-text { min-width: 0; font-size: 13px; line-height: 1.5; }
+.wf__step-say {
+  display: block;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.wf__step--done .wf__step-mark { color: var(--accent); }
+.wf__step--running .wf__step-mark { color: var(--accent); }
+.wf__step--failed .wf__step-mark { color: var(--danger); }
+.wf__step--failed .wf__step-say { color: var(--danger); }
+/* Interrupted is not failure and must not read as it: the step may well have
+   done its work, and the point is that nobody can say. */
+.wf__step--unknown .wf__step-mark,
+.wf__step--unknown .wf__step-say { color: var(--warn, var(--text-dim)); }
+
+@media (max-width: 640px) {
+  .wf__head { flex-direction: column; }
+  .wf__acts { justify-content: flex-start; }
+}
+
 /* ── a switch, for the one setting a shelf carries ──────────── */
 
 .switch {

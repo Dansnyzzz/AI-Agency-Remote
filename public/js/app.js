@@ -1154,6 +1154,11 @@ $('open-scheduled').addEventListener('click', () => {
   gotoShelf('scheduled');
 });
 
+$('open-workflows').addEventListener('click', () => {
+  closeSidebar();
+  gotoShelf('workflows');
+});
+
 /** The folder on the machine: browse it, edit a file, save it, delete one. */
 const workspaceFiles = createWorkspace();
 

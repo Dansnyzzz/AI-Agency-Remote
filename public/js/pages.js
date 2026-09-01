@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { escapeHtml } from './markdown.js';
 import { openMenu } from './menu.js';
 import { editProjectDetails, projectMenuItems } from './project-page.js';
+import { workflowsView, workflowForm } from './workflows.js';
 import { toast } from './render.js';
 
 /**
@@ -558,6 +559,26 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
     },
     onNew: () => openTaskForm(),
   };
+
+  /* ── workflows ────────────────────────────────────────────────── */
+
+  // The fourth shelf, and the only one whose contents live in their own file:
+  // it reuses this shell but is otherwise self-contained, so `pages.js` does not
+  // grow another two hundred lines every time a shelf is added.
+  const wfForm = workflowForm({
+    toast,
+    reload: () => (showing === 'workflows' ? load() : null),
+  });
+
+  views.workflows = workflowsView({
+    blank: (mark, say, note) => blank(mark, say, note),
+    body,
+    toast,
+    openChat,
+    onLeave,
+    openForm: (id) => wfForm.open(id),
+    reload: () => load(),
+  });
 
   /* ── the create-a-task form ───────────────────────────────────── */
 

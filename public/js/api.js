@@ -74,6 +74,16 @@ export const api = {
   setTaskEnabled: (id, enabled) => request('PATCH', `/api/tasks/${id}`, { enabled }),
   deleteTask: (id) => request('DELETE', `/api/tasks/${id}`),
 
+  workflows: () => request('GET', '/api/workflows'),
+  workflow: (id) => request('GET', `/api/workflows/${id}`),
+  // Same reasoning as createTask: the schedule is written in the user's zone.
+  createWorkflow: (wf) => request('POST', '/api/workflows', { ...wf, tz: localZone() }),
+  updateWorkflow: (id, patch) => request('PATCH', `/api/workflows/${id}`, { ...patch, tz: localZone() }),
+  deleteWorkflow: (id) => request('DELETE', `/api/workflows/${id}`),
+  // Held open while steps run — the response is what keeps a serverless instance
+  // alive long enough to finish one honestly.
+  runWorkflow: (id) => request('POST', `/api/workflows/${id}/run`),
+
   connectors: () => request('GET', '/api/connectors'),
   connect: (service, token) => request('POST', `/api/connectors/${service}`, { token }),
   disconnect: (service) => request('DELETE', `/api/connectors/${service}`),

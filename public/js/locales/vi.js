@@ -31,6 +31,7 @@ export const vi = {
   'nav.projects': 'Dự án',
   'nav.artifacts': 'Tệp đã tạo',
   'nav.scheduled': 'Chạy theo giờ',
+  'nav.workflows': 'Chuỗi việc',
   'nav.workspace': 'Thư mục làm việc',
   'nav.settings': 'Cài đặt',
   'nav.conversations': 'HỘI THOẠI',

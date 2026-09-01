@@ -196,6 +196,19 @@
             <span class="rail__label" data-i18n="nav.scheduled">Scheduled</span>
           </button>
 
+          <!-- Several steps in order, run unattended. Distinct from Scheduled
+               because a workflow keeps its position: interrupted at step three
+               it resumes at step three rather than sending the email again. -->
+          <button class="rail__item" id="open-workflows" type="button" title="Workflows">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="4.5" cy="4.5" r="2.2" />
+              <circle cx="4.5" cy="15.5" r="2.2" />
+              <circle cx="15.5" cy="10" r="2.2" />
+              <path d="M6.7 4.5h4a2.5 2.5 0 0 1 2.5 2.5v1M6.7 15.5h4a2.5 2.5 0 0 0 2.5-2.5v-1" />
+            </svg>
+            <span class="rail__label" data-i18n="nav.workflows">Workflows</span>
+          </button>
+
           <!-- The folder on the machine the assistant works in. The assistant
                has been able to read and write it from the beginning; this is
                the same thing for the person sitting in front of it. -->
@@ -852,6 +865,51 @@
     <!-- ── Create a scheduled task ─────────────────────────────────────
          A name, the prompt to run, and when. The prompt is the whole task:
          a scheduled run is one turn of an ordinary conversation. -->
+    <!-- Steps are one per line rather than a row of inputs with add and remove
+         buttons: reordering four instructions is something a text box already
+         does well, and the row version is a lot of interface for the same
+         result. -->
+    <dialog id="workflow-form" class="sheet sheet--form" aria-labelledby="workflow-form-title">
+      <form method="dialog" class="sheet__head">
+        <h2 id="workflow-form-title">Create workflow</h2>
+        <button class="icon-btn" value="close" aria-label="Close">✕</button>
+      </form>
+      <div class="sheet__body">
+        <div class="form__group">
+          <label class="form__label" for="workflow-form-name">Name <span>*</span></label>
+          <input id="workflow-form-name" type="text" placeholder="Monday sales pack" autocomplete="off" />
+        </div>
+        <div class="form__group">
+          <label class="form__label" for="workflow-form-steps">Steps, one per line <span>*</span></label>
+          <textarea id="workflow-form-steps" rows="7"
+                    placeholder="Pull last week's numbers&#10;Chart them&#10;Email the chart to the team"></textarea>
+          <p class="form__aside">
+            Each line runs in turn, in one conversation, so a step can refer to what the step before it
+            produced. A run that is interrupted resumes where it stopped — and a step that was already
+            running is never repeated, because there is no way to tell whether it had finished.
+          </p>
+        </div>
+        <div class="form__row">
+          <div class="form__group">
+            <label class="form__label" for="workflow-form-when">When</label>
+            <input id="workflow-form-when" type="text" placeholder="mon 09:00, or leave empty" />
+          </div>
+          <div class="form__group">
+            <label class="form__label" for="workflow-form-repeat">Frequency</label>
+            <select id="workflow-form-repeat">
+              <option value="repeat">Every day or week at that time</option>
+              <option value="once">Once, then stop</option>
+            </select>
+          </div>
+        </div>
+        <p class="hint" id="workflow-form-error"></p>
+        <div class="form__foot">
+          <button class="btn btn--ghost" id="workflow-form-cancel" type="button">Cancel</button>
+          <button class="btn btn--primary" id="workflow-form-save" type="button">Save</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="task-form" class="sheet sheet--form" aria-labelledby="task-form-title">
       <form method="dialog" class="sheet__head">
         <h2 id="task-form-title">Create scheduled task</h2>

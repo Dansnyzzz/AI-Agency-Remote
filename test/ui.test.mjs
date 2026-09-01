@@ -2315,6 +2315,7 @@ section('the shelves');
   for (const [rail, title, action] of [
     ['#open-projects', 'Projects', 'New project'],
     ['#open-artifacts', 'Artifacts', 'New artifact'],
+    ['#open-workflows', 'Workflows', 'New workflow'],
     ['#open-scheduled', 'Scheduled tasks', 'New task'],
   ]) {
     await page.click(rail);
@@ -2406,6 +2407,73 @@ section('the shelves');
  * left to do, sitting beside a box that read as a second, different search.
  * Pressing the icon has to *become* the field and clearing has to give it back.
  */
+section('a workflow shows the state of every step');
+{
+  /*
+   * The reason this screen exists. A scheduled task reports one status line for
+   * a job with four parts, so "it didn't arrive" has no answer; a workflow has
+   * to name the step that stopped. Checked in the real DOM because the whole
+   * value is in what is on screen.
+   */
+  const made = await page.evaluate(async () => {
+    const res = await fetch('/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Monday sales pack',
+        steps: ['Pull last week numbers', 'Chart them', 'Email the team'],
+      }),
+    });
+    return { status: res.status, body: await res.json() };
+  });
+  check('a workflow can be created', made.status === 201, `${made.status}`);
+
+  await page.click('#open-workflows');
+  await page.waitForTimeout(700);
+
+  const shelf = await page.evaluate(() => {
+    const card = document.querySelector('.wf');
+    const steps = [...document.querySelectorAll('.wf__step')];
+    return {
+      cards: document.querySelectorAll('.wf').length,
+      name: card?.querySelector('.wf__name')?.textContent.trim() || '',
+      when: card?.querySelector('.wf__when')?.textContent.replace(/\s+/g, ' ').trim() || '',
+      steps: steps.length,
+      first: steps[0]?.querySelector('.wf__step-text')?.textContent.replace(/\s+/g, ' ').trim() || '',
+      marks: steps.every((s) => (s.querySelector('.wf__step-mark')?.textContent || '').trim().length > 0),
+      words: steps.every((s) => /waiting|running|done|failed|interrupted/.test(s.textContent)),
+      acts: [...(card?.querySelectorAll('.wf__acts button') || [])].map((b) => b.textContent.trim()),
+    };
+  });
+
+  check('the shelf shows it', shelf.cards === 1, `${shelf.cards} cards`);
+  check('  named', shelf.name === 'Monday sales pack', shelf.name);
+  check('  and says it runs on demand', /press it/.test(shelf.when), shelf.when);
+  check('  every step is drawn', shelf.steps === 3, `${shelf.steps}`);
+  check('  in the order they were written', /Pull last week numbers/.test(shelf.first), shelf.first);
+  // Colour alone would leave the state unreadable to anyone who cannot separate
+  // the red one from the green one, so each step carries a mark and a word.
+  check('  each carries a mark, not only a colour', shelf.marks);
+  check('  and says its state in words', shelf.words);
+  check('  with the actions a person needs', shelf.acts.includes('Run now') && shelf.acts.includes('Edit'), shelf.acts.join(','));
+
+  const sheet = await page.evaluate(() => {
+    document.querySelector('[data-edit]')?.click();
+    return true;
+  });
+  await page.waitForTimeout(500);
+  const form = await page.evaluate(() => ({
+    open: !!document.getElementById('workflow-form')?.open,
+    title: document.getElementById('workflow-form-title')?.textContent.trim() || '',
+    steps: document.getElementById('workflow-form-steps')?.value || '',
+  }));
+  check('editing opens the sheet', sheet && form.open, JSON.stringify(form).slice(0, 60));
+  check('  titled as an edit', form.title === 'Edit workflow', form.title);
+  check('  with one step per line, ready to reorder', form.steps.split('\n').length === 3, JSON.stringify(form.steps));
+
+  await page.evaluate(() => document.getElementById('workflow-form')?.close());
+}
+
 section('a shelf is searched from one field, not two');
 {
   await page.click('#open-projects');
