@@ -36,6 +36,7 @@ internet ever connects inward to your machine.
 | **Quick launcher** | A hotkey anywhere on the desktop opens one box. Type the thought, press Enter, and the app takes it from there. |
 | **Skills** | Teach a procedure once; it is offered back in every future conversation. |
 | **Scheduled tasks** | Daily or weekly work that runs unattended, into a conversation you read later. |
+| **Workflows** | Several steps in order, run unattended, where each step sees what the last produced. It keeps its position: a run cut off at step three carries on at step three rather than sending the same email twice — and a step that was interrupted mid-flight is never repeated automatically, because nothing can tell you whether it had already happened. The shelf names the step that stopped and why. |
 | **Sub-agents** | Fan a job out to several read-only agents at once and gather the answers. |
 | **Deep research** | For a question where being right matters more than being fast: it searches several angles, cross-checks sources, and answers through an internal proposer–critic–arbiter debate. Every conclusion carries a confidence — HIGH / MEDIUM / LOW / CONFLICTING, counted from independent sources, not guessed — and a cited source list, and any claim with no source is flagged as such. The full debate transcript is kept for audit. Runs on the conversation's own model, so it is affordable on a free one. |
 | **Light and dark** | Follows your system by default; `Settings → Behaviour` overrides it per browser. |

@@ -101,7 +101,7 @@ the journal says what was asked, and where they disagree the journal wins.
 | `/verify` | the CLAUDE.md §5 Definition-of-Done gate, run for real |
 | `/deploy-check` | Vercel Hobby readiness — the schema traps that fail a build |
 | `/migrate` | schema changes, which here work by **replay**, not numbered files |
-| `/new-tool` | adding to the agent's 86-tool catalogue, wired end to end |
+| `/new-tool` | adding to the agent's 92-tool catalogue, wired end to end |
 | `/new-provider` | adding an LLM provider without reintroducing a flat `max_tokens` |
 | `/audit-security` | tenancy, prompt injection, secrets |
 | `/audit-tokens` | what the app spends of the user's budget, measured |
