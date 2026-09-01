@@ -33,6 +33,14 @@ jobs:
       - name: Test suites
         run: npm test
 
+      # The guards in .claude/hooks are the only rules in this repo that a model
+      # cannot argue with, and they sit outside `npm test` because they are not
+      # application code. That is exactly how the sandbox suite came to be broken
+      # without anyone noticing, so this runs here too — a guard whose test does
+      # not block a merge is a guard that will eventually fail open unobserved.
+      - name: Hook guards
+        run: npm run test:hooks
+
       # The interface suite drives the real app in a real browser. It skips
       # itself when there is nothing to drive, so it is installed explicitly
       # here rather than left to chance.
