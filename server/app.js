@@ -51,6 +51,7 @@ import {
   validZone,
   sweep,
 } from './scheduler.js';
+import { runDueWorkflows, runWorkflowNow, normaliseSteps } from './workflows.js';
 import { connectedServices, connect, disconnect } from './connectors.js';
 import { mcpStatus, probeMcpServer, sealConfig, forgetMcp } from './mcp/registry.js';
 import {
@@ -312,7 +313,17 @@ export function createApp() {
       // scheduler sweeps on its minute tick, and a deployment has no minute
       // tick. Without this, four tables grow without bound.
       await sweep().catch(() => {});
-      res.json({ ran: await runDueTasks() });
+      const ran = await runDueTasks();
+      // Workflows share this heartbeat rather than adding a second cron: the
+      // free tier allows one a day, and spending it twice is not an option.
+      // They take what time is left, and a run that does not finish is resumed
+      // by the next nudge rather than restarted.
+      const workflows = await runDueWorkflows().catch((err) => ({
+        started: [],
+        advanced: [],
+        error: String(err?.message || err).slice(0, 200),
+      }));
+      res.json({ ran, workflows });
     }),
   );
 
@@ -1243,7 +1254,11 @@ export function createApp() {
         // A local run has a timer of its own ticking every minute.
         return res.json({ ran: [], skipped: 'the local scheduler handles this' });
       }
-      res.json({ ran: await runDueTasksForUser(req.user.id) });
+      const ran = await runDueTasksForUser(req.user.id);
+      // Same reasoning, scoped to the caller: this is the only thing that moves
+      // a half-finished workflow along between one daily cron and the next.
+      const workflows = await runDueWorkflows({ userId: req.user.id, limit: 2 }).catch(() => null);
+      res.json({ ran, workflows });
     }),
   );
 
@@ -1295,6 +1310,138 @@ export function createApp() {
     wrap(async (req, res) => {
       await getStore().deleteTask(req.user.id, req.params.id);
       res.json({ ok: true });
+    }),
+  );
+
+  /* ── workflows ──────────────────────────────────────────────────────
+   *
+   * Session auth throughout, scoped to `req.user.id` on every store call. An id
+   * in the path is never trusted to say whose row it is — it only narrows the
+   * query that is already scoped, which is what makes a missing row a 404
+   * rather than a leak that it exists for somebody else.
+   */
+
+  api.get(
+    '/workflows',
+    wrap(async (req, res) => {
+      const store = getStore();
+      const workflows = await store.listWorkflows(req.user.id);
+      // The last run of each, because "which step is it on" is the question the
+      // page exists to answer and a second round trip per row to find out is a
+      // waste on a list that is usually short.
+      const withRuns = await Promise.all(
+        workflows.map(async (wf) => {
+          const [lastRun] = await store.listWorkflowRuns(req.user.id, wf.id, 1);
+          return { ...wf, lastRun: lastRun ?? null };
+        }),
+      );
+      res.json({ workflows: withRuns });
+    }),
+  );
+
+  api.get(
+    '/workflows/:id',
+    wrap(async (req, res) => {
+      const store = getStore();
+      const workflow = await store.getWorkflow(req.user.id, req.params.id);
+      if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
+      res.json({ workflow, runs: await store.listWorkflowRuns(req.user.id, workflow.id, 10) });
+    }),
+  );
+
+  api.post(
+    '/workflows',
+    wrap(async (req, res) => {
+      try {
+        // Validate before writing. The task route learned this the hard way: the
+        // old order created the row and then returned 400, leaving something
+        // empty scheduled to run forever.
+        const steps = normaliseSteps(req.body?.steps);
+        const tz = validZone(req.body?.tz) ? req.body.tz : null;
+
+        // A workflow with no schedule is legitimate — it is one you run by hand.
+        let cron = null;
+        let nextRunAt = null;
+        if (req.body?.when) {
+          ({ cron, nextRunAt } = parseSchedule(req.body.when, { once: req.body?.repeat === false, tz }));
+        }
+
+        const prefs = await getPrefs(req.user.id);
+        const workflow = await getStore().createWorkflow(req.user.id, {
+          id: crypto.randomUUID(),
+          title: String(req.body?.title || '').trim() || 'Workflow',
+          steps,
+          model: req.body?.model || prefs.defaultModel,
+          cron,
+          tz,
+          nextRunAt,
+        });
+        res.status(201).json({ workflow });
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    }),
+  );
+
+  api.patch(
+    '/workflows/:id',
+    wrap(async (req, res) => {
+      try {
+        const patch = {};
+        if (req.body?.title !== undefined) patch.title = String(req.body.title).trim() || 'Workflow';
+        if (req.body?.steps !== undefined) patch.steps = normaliseSteps(req.body.steps);
+        if (req.body?.enabled !== undefined) patch.enabled = Boolean(req.body.enabled);
+        if (req.body?.model !== undefined) patch.model = req.body.model || null;
+
+        if (req.body?.when !== undefined) {
+          const tz = validZone(req.body?.tz) ? req.body.tz : null;
+          if (req.body.when) {
+            const { cron, nextRunAt } = parseSchedule(req.body.when, {
+              once: req.body?.repeat === false,
+              tz,
+            });
+            Object.assign(patch, { cron, tz, nextRunAt });
+          } else {
+            // Clearing the schedule leaves the workflow, and it is run by hand.
+            Object.assign(patch, { cron: null, nextRunAt: null });
+          }
+        }
+
+        const workflow = await getStore().updateWorkflow(req.user.id, req.params.id, patch);
+        if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
+        res.json({ workflow });
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    }),
+  );
+
+  api.delete(
+    '/workflows/:id',
+    wrap(async (req, res) => {
+      await getStore().deleteWorkflow(req.user.id, req.params.id);
+      res.json({ ok: true });
+    }),
+  );
+
+  /**
+   * Run one now, and carry it as far as this invocation can.
+   *
+   * The request is held open while steps execute, for the same reason
+   * `/tasks/run-due` is: on a serverless host the instance is frozen once the
+   * response is sent, and a workflow abandoned mid-step is exactly the state
+   * this whole feature exists to avoid. What does not fit in the budget is left
+   * durably at its cursor for the next nudge.
+   */
+  api.post(
+    '/workflows/:id/run',
+    wrap(async (req, res) => {
+      try {
+        const run = await runWorkflowNow(req.user.id, req.params.id);
+        res.json({ run });
+      } catch (err) {
+        res.status(err.message === 'No such workflow.' ? 404 : 400).json({ error: err.message });
+      }
     }),
   );
 

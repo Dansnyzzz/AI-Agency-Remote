@@ -86,8 +86,11 @@ export function createPgStore(connectionString) {
    *      computer. The choice was removed again and nothing reads the column
    *      now; it is left in place because dropping a column is a migration
    *      that risks data for no gain
+   *  14  workflows and workflow_runs — a job with several steps that keeps its
+   *      position, so an invocation cut off at the 300s ceiling is resumed
+   *      rather than started again from the top
    */
-  const SCHEMA_VERSION = 13;
+  const SCHEMA_VERSION = 14;
 
   let schemaReady = null;
   async function ready() {
@@ -1232,6 +1235,165 @@ export function createPgStore(connectionString) {
           chatId ?? null,
         ]);
       }
+    },
+
+    // ── workflows ───────────────────────────────────────────────────
+    async listWorkflows(userId) {
+      return q('SELECT * FROM workflows WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
+    },
+    async getWorkflow(userId, id) {
+      const rows = await q('SELECT * FROM workflows WHERE user_id = $1 AND id = $2', [userId, id]);
+      return rows[0] ?? null;
+    },
+    async createWorkflow(userId, wf) {
+      const rows = await q(
+        `INSERT INTO workflows (id, user_id, title, steps, model, cron, tz, next_run_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [
+          wf.id,
+          userId,
+          wf.title,
+          JSON.stringify(wf.steps),
+          wf.model ?? null,
+          wf.cron ?? null,
+          wf.tz ?? null,
+          wf.nextRunAt ?? null,
+        ],
+      );
+      return rows[0];
+    },
+    /**
+     * Only the fields named are touched. A workflow is edited in the middle of
+     * its own life — turning one off must not silently rewrite its steps.
+     */
+    async updateWorkflow(userId, id, patch) {
+      const sets = [];
+      const args = [userId, id];
+      const put = (column, value) => {
+        args.push(value);
+        sets.push(`${column} = $${args.length}`);
+      };
+
+      if (patch.title !== undefined) put('title', patch.title);
+      if (patch.steps !== undefined) put('steps', JSON.stringify(patch.steps));
+      if (patch.model !== undefined) put('model', patch.model);
+      if (patch.cron !== undefined) put('cron', patch.cron);
+      if (patch.tz !== undefined) put('tz', patch.tz);
+      if (patch.nextRunAt !== undefined) put('next_run_at', patch.nextRunAt);
+      if (patch.enabled !== undefined) put('enabled', patch.enabled);
+      if (!sets.length) {
+        // Nothing asked for. Return the row unchanged rather than building an
+        // `UPDATE ... SET` with no assignments, which is a syntax error.
+        const [current] = await q('SELECT * FROM workflows WHERE user_id = $1 AND id = $2', [userId, id]);
+        return current ?? null;
+      }
+
+      const rows = await q(
+        `UPDATE workflows SET ${sets.join(', ')} WHERE user_id = $1 AND id = $2 RETURNING *`,
+        args,
+      );
+      return rows[0] ?? null;
+    },
+    async deleteWorkflow(userId, id) {
+      await q('DELETE FROM workflows WHERE user_id = $1 AND id = $2', [userId, id]);
+    },
+
+    /**
+     * Claim one workflow that is due, the way `claimDueTask` does.
+     *
+     * Pushing `next_run_at` an hour forward in the statement that selects it is
+     * the lease: a second invocation arriving in the same second finds nothing
+     * due. The caller then sets the real next run from the cron.
+     */
+    async claimDueWorkflow(now = new Date().toISOString(), userId = null) {
+      const rows = await q(
+        `UPDATE workflows SET next_run_at = next_run_at + INTERVAL '1 hour'
+          WHERE id = (SELECT id FROM workflows
+                       WHERE enabled AND next_run_at IS NOT NULL AND next_run_at <= $1
+                         AND ($2::text IS NULL OR user_id = $2)
+                       ORDER BY next_run_at LIMIT 1
+                       FOR UPDATE SKIP LOCKED)
+      RETURNING *`,
+        [now, userId],
+      );
+      return rows[0] ?? null;
+    },
+
+    // ── workflow runs ───────────────────────────────────────────────
+    async createWorkflowRun(userId, run) {
+      const rows = await q(
+        `INSERT INTO workflow_runs (id, workflow_id, user_id, chat_id, status, steps, cursor, lease_until)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [
+          run.id,
+          run.workflowId,
+          userId,
+          run.chatId ?? null,
+          run.status ?? 'running',
+          JSON.stringify(run.steps),
+          run.cursor ?? 0,
+          run.leaseUntil ?? null,
+        ],
+      );
+      return rows[0];
+    },
+    async listWorkflowRuns(userId, workflowId, limit = 10) {
+      return q(
+        `SELECT * FROM workflow_runs WHERE user_id = $1 AND workflow_id = $2
+          ORDER BY started_at DESC LIMIT $3`,
+        [userId, workflowId, limit],
+      );
+    },
+    async getWorkflowRun(userId, id) {
+      const rows = await q('SELECT * FROM workflow_runs WHERE user_id = $1 AND id = $2', [userId, id]);
+      return rows[0] ?? null;
+    },
+    /**
+     * Take the lease on one run that is due to be worked on.
+     *
+     * The same trick as `claimDueTask`: the update *is* the claim. A run whose
+     * lease has not expired is invisible here, so a second invocation cannot
+     * start executing steps the first one is part-way through.
+     *
+     * `SKIP LOCKED` handles two processes racing; `lease_until` handles one
+     * process dying. Both happen on a serverless host, for different reasons.
+     */
+    async claimWorkflowRun({ now = new Date().toISOString(), leaseUntil, userId = null } = {}) {
+      const rows = await q(
+        `UPDATE workflow_runs SET lease_until = $2
+          WHERE id = (SELECT id FROM workflow_runs
+                       WHERE status = 'running'
+                         AND (lease_until IS NULL OR lease_until <= $1)
+                         AND ($3::text IS NULL OR user_id = $3)
+                       ORDER BY started_at LIMIT 1
+                       FOR UPDATE SKIP LOCKED)
+      RETURNING *`,
+        [now, leaseUntil, userId],
+      );
+      return rows[0] ?? null;
+    },
+    /** Write back position and per-step state, keeping the lease as given. */
+    async saveWorkflowRun(id, { status, steps, cursor, chatId, leaseUntil, finished }) {
+      const rows = await q(
+        `UPDATE workflow_runs
+            SET status      = COALESCE($2, status),
+                steps       = COALESCE($3::jsonb, steps),
+                cursor      = COALESCE($4, cursor),
+                chat_id     = COALESCE($5, chat_id),
+                lease_until = $6,
+                finished_at = CASE WHEN $7 THEN NOW() ELSE finished_at END
+          WHERE id = $1 RETURNING *`,
+        [
+          id,
+          status ?? null,
+          steps ? JSON.stringify(steps) : null,
+          cursor ?? null,
+          chatId ?? null,
+          leaseUntil ?? null,
+          Boolean(finished),
+        ],
+      );
+      return rows[0] ?? null;
     },
 
     // ── connectors ──────────────────────────────────────────────────

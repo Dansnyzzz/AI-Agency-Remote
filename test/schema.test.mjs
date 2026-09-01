@@ -60,6 +60,9 @@ section('a fresh database gets everything');
   check('and the document index', await tableExists('doc_chunks'));
 
   check('and the MCP server table', await tableExists('mcp_servers'));
+  check('and workflows', await tableExists('workflows'));
+  check('and the runs that keep their position', await tableExists('workflow_runs'));
+  check('which is the whole point of them', await columnExists('workflow_runs', 'cursor'));
   // The real output cap, so a request stops asking every model for 32000 tokens
   // it may not be able to produce.
   check('and shared models record their output cap', await columnExists('shared_models', 'max_output'));
@@ -79,15 +82,21 @@ section('the newest tables reach a database that predates them');
    * app for a while gets a missing table and a query that fails, while every test
    * passes because tests start from an empty folder.
    */
+  await driver.query('DROP TABLE IF EXISTS workflow_runs');
+  await driver.query('DROP TABLE IF EXISTS workflows');
   await driver.query('DROP TABLE IF EXISTS mcp_servers');
   await driver.query('ALTER TABLE shared_models DROP COLUMN IF EXISTS max_output');
   await driver.query("UPDATE settings SET value = '1' WHERE key = 'schema_version'");
 
   check('they really are gone first', !(await tableExists('mcp_servers')), 'otherwise this proves nothing');
+  check('the workflow tables too', !(await tableExists('workflows')), 'otherwise this proves nothing');
 
   await createPgStore(driver).init();
   check('opening it creates mcp_servers', await tableExists('mcp_servers'));
   check('and adds max_output back', await columnExists('shared_models', 'max_output'));
+  // The newest addition, and therefore the one most likely to have been written
+  // into schema.sql with the version left alone.
+  check('and the workflow tables arrive', await tableExists('workflows') && await tableExists('workflow_runs'));
 
   // Per account, or one person could choose what another person's turn executes.
   check('MCP servers belong to an account', await columnExists('mcp_servers', 'user_id'));

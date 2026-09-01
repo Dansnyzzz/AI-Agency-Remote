@@ -515,3 +515,55 @@ CREATE TABLE IF NOT EXISTS research_runs (
   completed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS research_runs_user_idx ON research_runs (user_id, created_at DESC);
+
+-- A job with several steps that depend on each other, run unattended.
+--
+-- A scheduled_task is one prompt and one agent turn, which already chains work
+-- within that turn. What it cannot do is survive being cut off: `maxDuration` on
+-- the deployment is 300s, four LLM steps can exceed that, and the invocation
+-- dies with the email possibly sent and possibly not. The next firing then does
+-- the whole thing again.
+--
+-- So a workflow keeps its position. `steps` here is the definition; the state of
+-- one execution lives in workflow_runs, which is resumable.
+CREATE TABLE IF NOT EXISTS workflows (
+  id          TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  steps       JSONB NOT NULL,           -- [{ id, instruction }] in order
+  model       TEXT,
+  cron        TEXT,                     -- 'HH:MM' daily, or 'DOW HH:MM' weekly
+  tz          TEXT,                     -- the IANA zone the schedule was written in
+  next_run_at TIMESTAMPTZ,              -- NULL for a workflow only ever run by hand
+  enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS workflows_user_idx ON workflows (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS workflows_due_idx  ON workflows (enabled, next_run_at);
+
+-- One execution of a workflow, in a conversation of its own.
+--
+-- `cursor` is the next step to run, so an invocation that stops at its time
+-- budget is resumed rather than restarted. `lease_until` is what stops two
+-- invocations running the same steps at once: a claim pushes it forward, and a
+-- process that dies simply lets it expire.
+--
+-- A step found still 'running' when the lease is reclaimed becomes 'unknown' and
+-- the run stops as 'needs_attention'. It is never retried: nobody can say
+-- whether the email went out, and repeating a side effect unattended is worse
+-- than stopping to ask.
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id          TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  chat_id     TEXT,
+  status      TEXT NOT NULL,            -- running | done | failed | needs_attention | cancelled
+  steps       JSONB NOT NULL,           -- [{ id, status, started_at, finished_at, summary, error }]
+  cursor      INTEGER NOT NULL DEFAULT 0,
+  lease_until TIMESTAMPTZ,
+  started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS workflow_runs_wf_idx   ON workflow_runs (workflow_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS workflow_runs_user_idx ON workflow_runs (user_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS workflow_runs_open_idx ON workflow_runs (status, lease_until);

@@ -527,6 +527,42 @@ section('schedules');
 }
 
 // ── connectors ──────────────────────────────────────────────────────
+section('workflow isolation');
+{
+  const steps = [{ id: 's1', instruction: 'do the private thing' }];
+  await store.createWorkflow(alice.id, { id: 'wf-alice', title: 'Alice weekly', steps, nextRunAt: null });
+  await store.createWorkflow(bob.id, { id: 'wf-bob', title: 'Bob weekly', steps, nextRunAt: null });
+
+  check('each account sees only its own', (await store.listWorkflows(alice.id)).length === 1);
+  check("and cannot fetch the other's by id", (await store.getWorkflow(bob.id, 'wf-alice')) === null);
+
+  // A patch scoped to the wrong account must change nothing, not throw and not
+  // succeed. Returning null is what makes the route answer 404 rather than 200.
+  check('nor patch it', (await store.updateWorkflow(bob.id, 'wf-alice', { enabled: false })) === null);
+  await store.deleteWorkflow(bob.id, 'wf-alice');
+  check('nor delete it', (await store.getWorkflow(alice.id, 'wf-alice')) !== null);
+
+  await store.createWorkflowRun(alice.id, {
+    id: 'run-alice',
+    workflowId: 'wf-alice',
+    chatId: null,
+    status: 'running',
+    steps: [{ id: 's1', status: 'pending' }],
+    cursor: 0,
+  });
+  check('a run belongs to one account too', (await store.getWorkflowRun(bob.id, 'run-alice')) === null);
+  check('and the list is scoped', (await store.listWorkflowRuns(bob.id, 'wf-alice', 10)).length === 0);
+
+  // The claim is the dangerous one: it is the only query that selects across
+  // accounts, so a missing filter here would hand one person's work to another.
+  const stolen = await store.claimWorkflowRun({
+    now: new Date().toISOString(),
+    leaseUntil: new Date(Date.now() + 60000).toISOString(),
+    userId: bob.id,
+  });
+  check("claiming scoped to an account cannot take another's run", stolen === null, stolen?.id);
+}
+
 section('connectors');
 {
   await store.saveConnector(alice.id, 'github', encryptSecret('ghp_secret_token'), 'alice');

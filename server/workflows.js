@@ -1,0 +1,341 @@
+import crypto from 'node:crypto';
+import { getStore } from './store/index.js';
+import { getPrefs } from './settings.js';
+import { runAgent } from './agent.js';
+import { parseSchedule } from './scheduler.js';
+
+/**
+ * Work with several steps that depend on each other, run unattended.
+ *
+ * A scheduled task is already a full agent turn with the whole tool catalogue,
+ * so it can chain work inside that turn. What it cannot do is **survive being
+ * cut off**, and that is the entire reason this file exists.
+ *
+ * `vercel.json` sets `maxDuration: 300` — the ceiling on the free tier. Four
+ * steps that each call a model and some tools go past it, and the invocation is
+ * killed with the email possibly sent and possibly not. The next firing then
+ * starts from the beginning and does everything a second time. The free tier's
+ * cron fires once a day, so "it will sort itself out next run" is not a recovery
+ * strategy either.
+ *
+ * So a run keeps its position. Steps execute one at a time in a conversation of
+ * their own; the cursor, and the state of every step, is written to the database
+ * as it goes. An invocation runs as many steps as fit in its time budget and
+ * then stops on purpose, and the next nudge — the daily cron, or the browser —
+ * carries on from where it stopped.
+ *
+ * Step N sees steps 1..N-1 because they are all in the same transcript. That is
+ * the whole dependency mechanism: no variables, no passing of results, and the
+ * finished job reads like an ordinary conversation because it is one.
+ */
+
+/**
+ * How long to keep starting new steps in one invocation.
+ *
+ * Under `maxDuration: 300`, leaving 100s of headroom means the run can always
+ * finish writing its own state and answer the request, rather than being killed
+ * with the row still saying `running`.
+ *
+ * The check happens *before* a step starts, never during one — a step is an
+ * agent turn and is not interruptible half way. A step that begins at 199s and
+ * takes three minutes will still be cut off, which is what the `unknown` state
+ * below is for.
+ */
+export const START_BUDGET_MS = 200_000;
+
+/**
+ * How long a claim holds. Longer than the start budget on purpose: a single
+ * step may legitimately run well past the point where we stop starting new
+ * ones, and a lease that expired underneath a live step would let a second
+ * invocation declare it lost while it was still working.
+ */
+export const LEASE_MS = 10 * 60_000;
+
+const nowIso = () => new Date().toISOString();
+const leaseUntil = (ms = LEASE_MS) => new Date(Date.now() + ms).toISOString();
+
+/** The step list as stored, normalised — an id per step so state can name it. */
+export function normaliseSteps(steps) {
+  if (!Array.isArray(steps) || !steps.length) {
+    throw new Error('A workflow needs at least one step.');
+  }
+  if (steps.length > 20) {
+    throw new Error('A workflow is capped at 20 steps. Split it, or make a step do more.');
+  }
+  return steps.map((step, i) => {
+    const instruction = String(typeof step === 'string' ? step : step?.instruction || '').trim();
+    if (!instruction) throw new Error(`Step ${i + 1} has no instruction.`);
+    return { id: step?.id || `s${i + 1}`, instruction };
+  });
+}
+
+/** The per-run state that mirrors a definition, before anything has run. */
+const freshState = (steps) =>
+  steps.map((s) => ({ id: s.id, status: 'pending', started_at: null, finished_at: null, summary: '', error: '' }));
+
+/**
+ * Run one step as an ordinary agent turn, and report what became of it.
+ *
+ * `runAgent` communicates by emitting rather than returning, so this listens for
+ * the four outcomes that matter to an unattended run and translates them into a
+ * step status. The distinction that earns its keep is `approval_required`:
+ * nobody is here to approve, so the honest answer is that the run needs a
+ * person — not that it failed, and certainly not that it finished.
+ */
+async function runStep({ user, chatId, modelId, instruction }) {
+  const store = getStore();
+
+  await store.appendMessage(user.id, chatId, {
+    id: crypto.randomUUID(),
+    role: 'user',
+    text: instruction,
+  });
+
+  let error = '';
+  let summary = '';
+  let stopReason = '';
+  let awaitingApproval = false;
+
+  try {
+    await runAgent({
+      userId: user.id,
+      user,
+      chatId,
+      modelId,
+      emit(event, data) {
+        if (event === 'error') error = String(data?.message || 'failed').slice(0, 400);
+        else if (event === 'approval_required') awaitingApproval = true;
+        else if (event === 'done') stopReason = String(data?.stopReason || '');
+        else if (event === 'message' && data?.message?.role === 'assistant' && data.message.text) {
+          summary = String(data.message.text).slice(0, 2_000);
+        }
+      },
+    });
+  } catch (err) {
+    error = String(err?.message || err).slice(0, 400);
+  }
+
+  if (error) return { status: 'failed', summary, error };
+  if (awaitingApproval) {
+    return {
+      status: 'needs_attention',
+      summary,
+      error:
+        'A tool in this step needs approval and nobody is watching. Approve it in the ' +
+        'conversation, or set the approval policy to allow it, then run the workflow again.',
+    };
+  }
+  if (stopReason === 'max_steps') {
+    return {
+      status: 'failed',
+      summary,
+      error: 'The step ran out of agent steps before finishing. Split it into smaller steps.',
+    };
+  }
+  return { status: 'done', summary, error: '' };
+}
+
+/**
+ * Begin a run: one conversation, one row, nothing executed yet.
+ *
+ * Deliberately separate from executing it. Creating the run is what makes the
+ * work durable, and it must happen before any step does anything, so that a
+ * crash one second later still leaves a record saying what was meant to happen.
+ */
+export async function startRun(userId, workflow, { chatTitle } = {}) {
+  const store = getStore();
+  const steps = normaliseSteps(workflow.steps);
+  const chatId = crypto.randomUUID();
+  const prefs = await getPrefs(userId);
+
+  await store.createChat(userId, {
+    id: chatId,
+    title: chatTitle || workflow.title,
+    model: workflow.model || prefs.defaultModel,
+  });
+
+  return store.createWorkflowRun(userId, {
+    id: crypto.randomUUID(),
+    workflowId: workflow.id,
+    chatId,
+    status: 'running',
+    steps: freshState(steps),
+    cursor: 0,
+    leaseUntil: null,
+  });
+}
+
+/**
+ * Carry one claimed run forward as far as the time budget allows.
+ *
+ * The caller must already hold the lease. On return the run is either finished
+ * or explicitly released, so nothing is left claimed by a process that has
+ * stopped working on it.
+ */
+export async function advanceRun(run, { deadline = Date.now() + START_BUDGET_MS } = {}) {
+  const store = getStore();
+  const user = await store.getUserById(run.user_id);
+  const workflow = user ? await store.getWorkflow(run.user_id, run.workflow_id) : null;
+
+  if (!user || !workflow) {
+    // The account or the definition went away between the claim and now.
+    return store.saveWorkflowRun(run.id, {
+      status: 'cancelled',
+      leaseUntil: null,
+      finished: true,
+    });
+  }
+
+  const definition = normaliseSteps(workflow.steps);
+  const state = Array.isArray(run.steps) ? run.steps.map((s) => ({ ...s })) : freshState(definition);
+
+  /**
+   * A step left mid-flight is never re-run.
+   *
+   * Reaching here with a step still marked `running` means the invocation that
+   * started it did not come back. Nobody can say whether it sent the email, and
+   * repeating a side effect with no one watching is worse than stopping to ask —
+   * so the step is marked unknown and the run waits for a person.
+   */
+  const orphan = state.findIndex((s) => s.status === 'running');
+  if (orphan >= 0) {
+    state[orphan] = {
+      ...state[orphan],
+      status: 'unknown',
+      finished_at: nowIso(),
+      error:
+        'This step was interrupted while running. It is not repeated automatically, because ' +
+        'there is no way to tell whether what it does had already happened.',
+    };
+    return store.saveWorkflowRun(run.id, {
+      status: 'needs_attention',
+      steps: state,
+      leaseUntil: null,
+      finished: true,
+    });
+  }
+
+  let cursor = Number(run.cursor) || 0;
+  const modelId = workflow.model || null;
+
+  while (cursor < definition.length) {
+    // Checked before starting, never during: an agent turn cannot be stopped
+    // half way, so the honest thing is not to begin one we cannot afford.
+    if (Date.now() >= deadline) {
+      return store.saveWorkflowRun(run.id, { steps: state, cursor, leaseUntil: null });
+    }
+
+    state[cursor] = { ...state[cursor], status: 'running', started_at: nowIso() };
+    await store.saveWorkflowRun(run.id, { steps: state, cursor, leaseUntil: leaseUntil() });
+
+    const outcome = await runStep({
+      user,
+      chatId: run.chat_id,
+      modelId,
+      instruction: definition[cursor].instruction,
+    });
+
+    state[cursor] = {
+      ...state[cursor],
+      status: outcome.status,
+      finished_at: nowIso(),
+      summary: outcome.summary,
+      error: outcome.error,
+    };
+
+    if (outcome.status !== 'done') {
+      return store.saveWorkflowRun(run.id, {
+        status: outcome.status === 'needs_attention' ? 'needs_attention' : 'failed',
+        steps: state,
+        cursor,
+        leaseUntil: null,
+        finished: true,
+      });
+    }
+
+    cursor += 1;
+    await store.saveWorkflowRun(run.id, { steps: state, cursor, leaseUntil: leaseUntil() });
+  }
+
+  return store.saveWorkflowRun(run.id, {
+    status: 'done',
+    steps: state,
+    cursor,
+    leaseUntil: null,
+    finished: true,
+  });
+}
+
+/** When a repeating workflow should run again after firing now. */
+function advance(cron, after = new Date(), tz = null) {
+  if (!cron) return null;
+  return parseSchedule(cron, { from: new Date(after.getTime() + 60_000), tz }).nextRunAt;
+}
+
+/**
+ * Everything that is due, and everything already in flight.
+ *
+ * Two phases on purpose. Due workflows only *create* runs — cheap, and it means
+ * a schedule that fires while the budget is already spent still leaves a durable
+ * record that it was meant to run. Executing is the second phase, and it works
+ * the same queue whether a run was made a second ago or left half-finished
+ * yesterday.
+ */
+export async function runDueWorkflows({ limit = 3, userId = null, budgetMs = START_BUDGET_MS } = {}) {
+  const store = getStore();
+  const deadline = Date.now() + budgetMs;
+  const started = [];
+  const advanced = [];
+
+  for (let i = 0; i < limit; i += 1) {
+    const workflow = await store.claimDueWorkflow(nowIso(), userId);
+    if (!workflow) break;
+    try {
+      const run = await startRun(workflow.user_id, workflow);
+      started.push({ workflowId: workflow.id, runId: run.id });
+    } catch (err) {
+      // A definition that cannot start (no steps, deleted account) must not stop
+      // the queue for everyone else.
+      started.push({ workflowId: workflow.id, error: String(err?.message || err).slice(0, 200) });
+    }
+    // Set the real next run now that the claim is safely taken. A one-shot
+    // workflow has no cron and simply stops being due.
+    const next = advance(workflow.cron, new Date(), workflow.tz);
+    await store.updateWorkflow(workflow.user_id, workflow.id, {
+      nextRunAt: next,
+      ...(next ? {} : { enabled: false }),
+    });
+  }
+
+  for (let i = 0; i < limit; i += 1) {
+    if (Date.now() >= deadline) break;
+    const run = await store.claimWorkflowRun({ now: nowIso(), leaseUntil: leaseUntil(), userId });
+    if (!run) break;
+    const done = await advanceRun(run, { deadline });
+    advanced.push({ runId: run.id, status: done?.status, cursor: done?.cursor });
+  }
+
+  return { started, advanced };
+}
+
+/** Start a workflow now, by hand, and take it as far as one invocation allows. */
+export async function runWorkflowNow(userId, workflowId, { budgetMs = START_BUDGET_MS } = {}) {
+  const store = getStore();
+  const workflow = await store.getWorkflow(userId, workflowId);
+  if (!workflow) throw new Error('No such workflow.');
+
+  const run = await startRun(userId, workflow);
+  const claimed = await store.claimWorkflowRun({
+    now: nowIso(),
+    leaseUntil: leaseUntil(),
+    userId,
+  });
+
+  // Another invocation got there first; the run is still queued and will be
+  // picked up. Report it rather than racing for it.
+  if (!claimed || claimed.id !== run.id) return run;
+
+  return advanceRun(claimed, { deadline: Date.now() + budgetMs });
+}
+
+export const __testing = { runStep, freshState, advance };

@@ -1,0 +1,335 @@
+/**
+ * Workflows: work with several steps that must survive being cut off.
+ *
+ * The failure this suite exists to prevent is the expensive one. A scheduled
+ * task that dies half way is re-run from the beginning next time, and if one of
+ * its steps sent an email, it sends it again. A workflow keeps its position
+ * instead — and, crucially, **refuses to repeat a step it cannot prove
+ * finished**. Both of those are logic with no model in it, so both are testable
+ * here.
+ *
+ * What is *not* covered, and is said plainly rather than implied: executing a
+ * step against a live model. `runAgent` resolves its provider internally and
+ * takes no injection, so the happy path of a step that calls a model and
+ * succeeds needs a real key and is not exercised here. The failure path is —
+ * with no key configured, a step fails, and this asserts that the run then stops
+ * rather than marching on to step two.
+ *
+ *   node test/workflow.test.mjs
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+process.env.ENCRYPTION_KEY ||= 'workflow-test-encryption-key';
+process.env.SESSION_SECRET ||= 'workflow-test-session-secret';
+process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-workflow-test-${process.pid}`);
+delete process.env.DATABASE_URL;
+delete process.env.POSTGRES_URL;
+delete process.env.VERCEL;
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+
+const { createApp } = await import('../server/app.js');
+const { initStore } = await import('../server/store/index.js');
+const store = await initStore();
+const { normaliseSteps, advanceRun, startRun } = await import('../server/workflows.js');
+
+const PORT = 5214;
+const server = createApp().listen(PORT);
+await new Promise((r) => server.once('listening', r));
+const base = `http://127.0.0.1:${PORT}`;
+
+let failures = 0;
+const section = (name) => console.log(`\n\x1b[1m${name}\x1b[0m`);
+const check = (label, pass, detail = '') => {
+  console.log(`  ${pass ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗ FAIL\x1b[0m'}  ${label}${detail ? ` — ${detail}` : ''}`);
+  if (!pass) failures += 1;
+};
+
+function jar() {
+  let cookie = '';
+  return {
+    async call(method, url, body) {
+      const res = await fetch(`${base}${url}`, {
+        method,
+        headers: {
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const set = res.headers.get('set-cookie');
+      if (set) cookie = set.split(';')[0];
+      const text = await res.text();
+      let json = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        /* an HTML error page is a fine thing to assert on as text */
+      }
+      return { status: res.status, body: json, text };
+    },
+  };
+}
+
+const alice = jar();
+await alice.call('POST', '/api/register', {
+  name: 'Alice',
+  email: 'alice@workflow.test',
+  password: 'a-long-enough-password',
+});
+
+const bob = jar();
+await bob.call('POST', '/api/register', {
+  name: 'Bob',
+  email: 'bob@workflow.test',
+  password: 'a-long-enough-password',
+});
+
+/* ── the definition ────────────────────────────────────────────── */
+
+section('a workflow is an ordered list of instructions');
+{
+  let refused = '';
+  try {
+    normaliseSteps([]);
+  } catch (err) {
+    refused = err.message;
+  }
+  check('an empty workflow is refused', /at least one step/.test(refused), refused);
+
+  try {
+    refused = '';
+    normaliseSteps(['do a thing', '   ']);
+  } catch (err) {
+    refused = err.message;
+  }
+  check('and so is a blank step', /Step 2 has no instruction/.test(refused), refused);
+
+  try {
+    refused = '';
+    normaliseSteps(Array.from({ length: 21 }, (_, i) => `step ${i}`));
+  } catch (err) {
+    refused = err.message;
+  }
+  check('twenty-one steps is too many', /capped at 20/.test(refused), refused);
+
+  const ok = normaliseSteps(['pull the numbers', { instruction: 'chart them' }]);
+  check('strings and objects both work', ok.length === 2 && ok[1].instruction === 'chart them');
+  check('and every step gets an id', ok.every((s) => !!s.id), JSON.stringify(ok));
+}
+
+let workflowId;
+section('creating one over HTTP');
+{
+  const bad = await alice.call('POST', '/api/workflows', { title: 'Nothing', steps: [] });
+  check('no steps is a 400 with a sentence', bad.status === 400 && /at least one step/.test(bad.body?.error || ''), `${bad.status}`);
+
+  const made = await alice.call('POST', '/api/workflows', {
+    title: 'Monday sales pack',
+    steps: ['Pull last week’s numbers', 'Chart them', 'Email the chart to the team'],
+    when: 'mon 09:00',
+    tz: 'Asia/Ho_Chi_Minh',
+  });
+  workflowId = made.body?.workflow?.id;
+  check('creating one works', made.status === 201 && !!workflowId, `${made.status}`);
+  check('the steps are stored in order', made.body?.workflow?.steps?.[2]?.instruction === 'Email the chart to the team');
+  check('the schedule is parsed', made.body?.workflow?.cron === 'mon 09:00', made.body?.workflow?.cron);
+  check('in the zone it was written in', made.body?.workflow?.tz === 'Asia/Ho_Chi_Minh');
+
+  const byHand = await alice.call('POST', '/api/workflows', {
+    title: 'On demand',
+    steps: ['Do the thing'],
+  });
+  check('a workflow with no schedule is allowed', byHand.status === 201, `${byHand.status}`);
+  check('and simply has no next run', byHand.body?.workflow?.next_run_at === null);
+
+  const listed = await alice.call('GET', '/api/workflows');
+  check('both appear on the list', listed.body?.workflows?.length === 2);
+  check('with no run yet', listed.body?.workflows?.[0]?.lastRun === null);
+}
+
+section('changing one');
+{
+  const paused = await alice.call('PATCH', `/api/workflows/${workflowId}`, { enabled: false });
+  check('pausing works', paused.body?.workflow?.enabled === false);
+  check('and does not touch the steps', paused.body?.workflow?.steps?.length === 3, 'a patch must not rewrite what it was not asked to');
+
+  const restepped = await alice.call('PATCH', `/api/workflows/${workflowId}`, {
+    steps: ['Pull the numbers', 'Send them'],
+    enabled: true,
+  });
+  check('steps can be replaced', restepped.body?.workflow?.steps?.length === 2);
+
+  const bad = await alice.call('PATCH', `/api/workflows/${workflowId}`, { steps: [] });
+  check('but not with nothing', bad.status === 400, `${bad.status}`);
+
+  const unscheduled = await alice.call('PATCH', `/api/workflows/${workflowId}`, { when: '' });
+  check('clearing the schedule leaves the workflow', unscheduled.body?.workflow?.cron === null);
+}
+
+/* ── one account cannot reach another's ─────────────────────────── */
+
+section('tenancy');
+{
+  const seen = await bob.call('GET', `/api/workflows/${workflowId}`);
+  check("another account gets 404, not 403", seen.status === 404, `${seen.status}`);
+
+  const patched = await bob.call('PATCH', `/api/workflows/${workflowId}`, { enabled: false });
+  check('and cannot change it', patched.status === 404, `${patched.status}`);
+
+  const ran = await bob.call('POST', `/api/workflows/${workflowId}/run`);
+  check('nor run it', ran.status === 404, `${ran.status}`);
+
+  await bob.call('DELETE', `/api/workflows/${workflowId}`);
+  const stillThere = await alice.call('GET', `/api/workflows/${workflowId}`);
+  check('a delete from the wrong account deletes nothing', stillThere.status === 200, `${stillThere.status}`);
+
+  const bobsList = await bob.call('GET', '/api/workflows');
+  check("and the list is only one's own", bobsList.body?.workflows?.length === 0);
+
+  const anonymous = await fetch(`${base}/api/workflows`);
+  check('signed out reaches nothing', anonymous.status === 401, `${anonymous.status}`);
+}
+
+/* ── the part that matters: being interrupted ───────────────────── */
+
+const aliceUser = (await store.listUsers?.())?.find?.((u) => u.email === 'alice@workflow.test');
+const aliceId = aliceUser?.id || (await store.getUserByEmail('alice@workflow.test')).id;
+
+section('a step left mid-flight is never repeated');
+{
+  const workflow = await store.createWorkflow(aliceId, {
+    id: 'wf-orphan',
+    title: 'Interrupted',
+    steps: normaliseSteps(['send the invoice', 'file a copy']),
+    nextRunAt: null,
+  });
+
+  // Exactly the state a killed invocation leaves behind: step one claimed and
+  // started, nothing written after it.
+  const run = await store.createWorkflowRun(aliceId, {
+    id: 'run-orphan',
+    workflowId: workflow.id,
+    chatId: null,
+    status: 'running',
+    steps: [
+      { id: 's1', status: 'running', started_at: new Date().toISOString(), finished_at: null, summary: '', error: '' },
+      { id: 's2', status: 'pending', started_at: null, finished_at: null, summary: '', error: '' },
+    ],
+    cursor: 0,
+  });
+
+  const after = await advanceRun(run, { deadline: Date.now() + 60_000 });
+
+  check('the run stops for a person', after.status === 'needs_attention', after.status);
+  check('the interrupted step is marked unknown', after.steps[0].status === 'unknown', after.steps[0].status);
+  check('and says why in a sentence', /no way to tell whether/.test(after.steps[0].error || ''), after.steps[0].error);
+  check('the step after it never ran', after.steps[1].status === 'pending', after.steps[1].status);
+  check('the lease is released', after.lease_until === null);
+  check('and the run is finished, not left open', !!after.finished_at);
+}
+
+section('a run stops at its time budget rather than half way through a step');
+{
+  const workflow = await store.createWorkflow(aliceId, {
+    id: 'wf-budget',
+    title: 'Long one',
+    steps: normaliseSteps(['step one', 'step two']),
+    nextRunAt: null,
+  });
+  const run = await store.createWorkflowRun(aliceId, {
+    id: 'run-budget',
+    workflowId: workflow.id,
+    chatId: null,
+    status: 'running',
+    steps: [
+      { id: 's1', status: 'pending', started_at: null, finished_at: null, summary: '', error: '' },
+      { id: 's2', status: 'pending', started_at: null, finished_at: null, summary: '', error: '' },
+    ],
+    cursor: 0,
+  });
+
+  // A deadline already in the past: no step may be started at all.
+  const after = await advanceRun(run, { deadline: Date.now() - 1 });
+
+  check('nothing was started', after.steps.every((s) => s.status === 'pending'), JSON.stringify(after.steps.map((s) => s.status)));
+  check('the run stays open for the next nudge', after.status === 'running', after.status);
+  check('the cursor is preserved', after.cursor === 0, `${after.cursor}`);
+  check('the lease is released so another invocation may take it', after.lease_until === null);
+  check('and it is not marked finished', !after.finished_at);
+}
+
+section('the lease is what stops two invocations running the same steps');
+{
+  const soon = new Date(Date.now() + 60_000).toISOString();
+  const first = await store.claimWorkflowRun({ now: new Date().toISOString(), leaseUntil: soon, userId: aliceId });
+  check('one invocation claims the open run', first?.id === 'run-budget', first?.id);
+
+  const second = await store.claimWorkflowRun({ now: new Date().toISOString(), leaseUntil: soon, userId: aliceId });
+  check('a second one finds nothing to take', second === null, second?.id);
+
+  const later = new Date(Date.now() + 120_000).toISOString();
+  const afterExpiry = await store.claimWorkflowRun({ now: later, leaseUntil: soon, userId: aliceId });
+  check('but once the lease expires it may be picked up', afterExpiry?.id === 'run-budget', afterExpiry?.id);
+}
+
+section('a definition that has gone away cancels its run');
+{
+  const workflow = await store.createWorkflow(aliceId, {
+    id: 'wf-gone',
+    title: 'Doomed',
+    steps: normaliseSteps(['do something']),
+    nextRunAt: null,
+  });
+  const run = await store.createWorkflowRun(aliceId, {
+    id: 'run-gone',
+    workflowId: workflow.id,
+    chatId: null,
+    status: 'running',
+    steps: [{ id: 's1', status: 'pending', started_at: null, finished_at: null, summary: '', error: '' }],
+    cursor: 0,
+  });
+  await store.deleteWorkflow(aliceId, workflow.id);
+
+  const after = await store.getWorkflowRun(aliceId, run.id);
+  check('deleting the workflow takes its runs with it', after === null, 'ON DELETE CASCADE');
+}
+
+section('a failing step stops the run instead of marching on');
+{
+  // No provider key is configured in this suite, so the first step cannot reach
+  // a model. What is asserted is not the error text but the shape of the
+  // response to it: step one fails, step two is never attempted.
+  const workflow = await store.createWorkflow(aliceId, {
+    id: 'wf-fail',
+    title: 'No key here',
+    steps: normaliseSteps(['ask the model something', 'then do something else']),
+    nextRunAt: null,
+  });
+
+  const run = await startRun(aliceId, workflow);
+  check('starting a run creates its conversation first', !!run.chat_id, 'durable before anything executes');
+
+  const after = await advanceRun(run, { deadline: Date.now() + 60_000 });
+  check('the run is marked failed', after.status === 'failed', after.status);
+  check('step one records what went wrong', !!after.steps[0].error, after.steps[0].error?.slice(0, 60));
+  check('step two was never attempted', after.steps[1].status === 'pending', after.steps[1].status);
+  check('and the lease is released', after.lease_until === null);
+}
+
+section('deleting');
+{
+  const gone = await alice.call('DELETE', `/api/workflows/${workflowId}`);
+  check('a workflow can be deleted', gone.status === 200, `${gone.status}`);
+
+  const after = await alice.call('GET', `/api/workflows/${workflowId}`);
+  check('and is then a 404', after.status === 404, `${after.status}`);
+}
+
+fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+console.log(
+  failures ? `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n` : '\n\x1b[32mAll workflow checks passed.\x1b[0m\n',
+);
+server.close();
+process.exit(failures ? 1 : 0);

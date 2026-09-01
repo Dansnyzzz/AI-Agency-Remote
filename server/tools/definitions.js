@@ -1334,6 +1334,68 @@ export const TOOLS = [
     },
   },
   /**
+   * Work with several steps that depend on each other.
+   *
+   * Two tools, not four, and both `secondary`. The catalogue is trimmed by what
+   * share of the context window it takes, so every tool added here is a tax on
+   * every request of every account — and this is a feature most conversations
+   * never touch. Create, change and delete therefore share one tool with an
+   * `action`, rather than being three.
+   *
+   * The line against `schedule_task`: use that for one instruction. Use this
+   * when the job has stages that must happen in order and one of them would be
+   * ruinous to repeat — because a workflow keeps its position and never re-runs
+   * a step it cannot prove was finished.
+   */
+  {
+    name: 'workflow_write',
+    scope: 'cloud',
+    readOnly: false,
+    secondary: true,
+    description:
+      'Create, change or delete a multi-step job that runs unattended. Each step is one instruction, run in order, in a conversation of its own that the user can read. Use this instead of schedule_task when the work has stages that depend on each other — pulling numbers, then charting them, then sending the result — because a workflow resumes where it stopped instead of starting over.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['create', 'update', 'delete'],
+          description: 'What to do. Updating or deleting needs the id from workflow_status.',
+        },
+        id: { type: 'string', description: 'The workflow id, for update and delete.' },
+        title: { type: 'string', description: 'Short label, e.g. "Monday sales pack".' },
+        steps: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'The steps in order, each a full instruction. A step sees what earlier steps produced, so it may refer to them. Up to 20.',
+        },
+        when: {
+          type: 'string',
+          description:
+            'Time of day as "17:00", or a weekday and time as "mon 09:00". Leave it out for a workflow the user runs by hand.',
+        },
+        repeat: { type: 'boolean', description: 'True to repeat daily or weekly; false to run once. Defaults to true.' },
+        enabled: { type: 'boolean', description: 'Set false to pause without deleting.' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'workflow_status',
+    scope: 'cloud',
+    readOnly: true,
+    secondary: true,
+    description:
+      'List the multi-step workflows on this account and how the last run of each went, step by step. Use it before changing or deleting one, and when the user asks why something did not arrive — it names the step that stopped and why.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'One workflow, in more detail. Omit for all of them.' },
+      },
+    },
+  },
+  /**
    * Seeing and stopping the work it scheduled.
    *
    * `schedule_task` could create a repeating job and then had no way to look at

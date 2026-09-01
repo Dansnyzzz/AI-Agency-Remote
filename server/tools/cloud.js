@@ -9,6 +9,7 @@ import { evaluate } from './calc.js';
 import { extractFromPage } from './extract.js';
 import { resolveForUser } from '../autoPick.js';
 import { parseSchedule } from '../scheduler.js';
+import { normaliseSteps } from '../workflows.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
 import { sendEmail, emailBackend } from '../email.js';
@@ -633,6 +634,100 @@ async function cancelTaskTool({ id }, { userId }) {
   return `Deleted the scheduled task "${task.title}". It will not run again.`;
 }
 
+/**
+ * Create, change or delete a workflow.
+ *
+ * One tool for three verbs because the catalogue is charged against every
+ * request's context window; see the note beside the definition.
+ */
+async function workflowWriteTool({ action, id, title, steps, when, repeat, enabled }, { userId }) {
+  const store = getStore();
+
+  if (action === 'delete') {
+    // Checked first, the same way cancel_task is: reporting success for a delete
+    // that matched nothing is how somebody comes to believe a job was stopped
+    // while it keeps running.
+    const workflow = id ? await store.getWorkflow(userId, id) : null;
+    if (!workflow) throw new Error(`There is no workflow with the id "${id}". Call workflow_status to see them.`);
+    await store.deleteWorkflow(userId, id);
+    return `Deleted the workflow "${workflow.title}". It will not run again.`;
+  }
+
+  if (action === 'update') {
+    const existing = id ? await store.getWorkflow(userId, id) : null;
+    if (!existing) throw new Error(`There is no workflow with the id "${id}". Call workflow_status to see them.`);
+
+    const patch = {};
+    if (title !== undefined) patch.title = String(title).trim() || existing.title;
+    if (steps !== undefined) patch.steps = normaliseSteps(steps);
+    if (enabled !== undefined) patch.enabled = Boolean(enabled);
+    if (when !== undefined) {
+      if (when) Object.assign(patch, parseSchedule(when, { once: repeat === false }));
+      else Object.assign(patch, { cron: null, nextRunAt: null });
+    }
+
+    const updated = await store.updateWorkflow(userId, id, patch);
+    const schedule = updated.cron ? `repeats ${updated.cron}` : 'runs by hand';
+    return `Updated "${updated.title}" — ${updated.steps.length} step(s), ${schedule}${updated.enabled ? '' : ', paused'}.`;
+  }
+
+  const ordered = normaliseSteps(steps);
+  const prefs = await getPrefs(userId);
+  const schedule = when ? parseSchedule(when, { once: repeat === false }) : { cron: null, nextRunAt: null };
+
+  const workflow = await store.createWorkflow(userId, {
+    id: crypto.randomUUID(),
+    title: String(title || '').trim() || 'Workflow',
+    steps: ordered,
+    model: prefs.defaultModel,
+    cron: schedule.cron,
+    nextRunAt: schedule.nextRunAt,
+  });
+
+  const first = workflow.next_run_at ? new Date(workflow.next_run_at).toLocaleString() : null;
+  return [
+    `Created the workflow "${workflow.title}" with ${ordered.length} step(s). Id ${workflow.id}.`,
+    first ? `First run: ${first}${schedule.cron ? ` (repeats ${schedule.cron})` : ''}.` : 'It runs when asked, not on a clock.',
+    'Each step runs in order in one conversation, and a step that is interrupted is never repeated automatically.',
+  ].join(' ');
+}
+
+/** What is set up, and how the last run of each went — step by step. */
+async function workflowStatusTool({ id }, { userId }) {
+  const store = getStore();
+  const workflows = id
+    ? [await store.getWorkflow(userId, id)].filter(Boolean)
+    : await store.listWorkflows(userId);
+
+  if (!workflows.length) {
+    return id ? `There is no workflow with the id "${id}".` : 'There are no workflows on this account.';
+  }
+
+  const lines = [];
+  for (const wf of workflows) {
+    const [run] = await store.listWorkflowRuns(userId, wf.id, 1);
+    const schedule = wf.cron ? `repeats ${wf.cron}` : 'runs by hand';
+    lines.push(`- ${wf.title} — id ${wf.id}`);
+    lines.push(`    ${schedule}${wf.enabled ? '' : ' (paused)'}, ${wf.steps.length} step(s)`);
+
+    if (!run) {
+      lines.push('    never run');
+      continue;
+    }
+
+    lines.push(`    last run ${new Date(run.started_at).toISOString()} — ${run.status}`);
+    for (const [i, step] of (run.steps || []).entries()) {
+      const detail = step.error ? ` — ${String(step.error).replace(/\s+/g, ' ').slice(0, 160)}` : '';
+      lines.push(`      ${i + 1}. ${step.status}${detail}`);
+    }
+    if (run.status === 'needs_attention') {
+      lines.push('    This one is waiting for a person. Nothing is repeated until it is dealt with.');
+    }
+  }
+
+  return ['Workflows on this account:', '', ...lines].join('\n');
+}
+
 async function searchDocsTool({ query, limit, source }, { userId }) {
   return searchDocs(userId, { query, limit, source });
 }
@@ -813,6 +908,8 @@ export const CLOUD_IMPLEMENTATIONS = {
   schedule_task: scheduleTaskTool,
   list_tasks: listTasksTool,
   cancel_task: cancelTaskTool,
+  workflow_write: workflowWriteTool,
+  workflow_status: workflowStatusTool,
   search_docs: searchDocsTool,
   list_indexed: listIndexedTool,
   forget_docs: forgetDocsTool,
