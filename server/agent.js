@@ -27,7 +27,10 @@ import { log } from './util/trace.js';
  * without tool support, so the only thing the toggle could still do was take
  * abilities away for no reason. Every conversation is an agent conversation.
  */
-function buildSystemPrompt({ workerOnline, worker, policy, extra, skills, connectors, project, mcpServers }) {
+// Exported for the eval suite, which asserts against the prompt the loop
+// actually builds rather than a copy of it — a rule deleted here has to fail
+// there, and it only does if both read the same function.
+export function buildSystemPrompt({ workerOnline, worker, policy, extra, skills, connectors, project, mcpServers }) {
   const lines = [
     'You are AI Remote — an agentic assistant the user drives from their phone, tablet, or laptop.',
     'Work autonomously: use your tools to find things out rather than asking the user to look them up.',

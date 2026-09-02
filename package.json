@@ -17,7 +17,7 @@
     "db:init": "node scripts/db-init.js",
     "lint": "eslint .",
     "test:hooks": "node .claude/hooks/hooks.test.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run test:sandbox && npm run test:hooks",
+    "check": "npm run lint && npm run typecheck && npm test && npm run eval && npm run test:sandbox && npm run test:hooks",
     "gate": "node .claude/hooks/gate.js run",
     "accounts": "node scripts/whoami.js",
     "reset-password": "node scripts/reset-password.js",
@@ -59,7 +59,10 @@
     "typecheck": "node scripts/typecheck.js",
     "typecheck:list": "node scripts/typecheck.js --list",
     "typecheck:update": "node scripts/typecheck.js --update",
-    "coverage": "c8 --config .c8rc.json npm test"
+    "coverage": "c8 --config .c8rc.json npm test",
+    "eval": "node test/eval/run.mjs",
+    "eval:live": "node test/eval/run.mjs --live",
+    "eval:json": "node test/eval/run.mjs --json"
   },
   "engines": {
     "node": ">=20"

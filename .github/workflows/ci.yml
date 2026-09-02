@@ -27,6 +27,19 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # A ratchet, not a wall: the 429 pre-existing errors are frozen per file
+      # and this fails only when the count goes up. See scripts/typecheck.js.
+      - name: Type-check
+        run: npm run typecheck
+
+      # Whether the assistant is still *able* to choose well: that the right
+      # tool is on offer for the question, that the rule telling it to stop at a
+      # sign-in page is still in the prompt, that uploading a private key still
+      # asks first. Free and deterministic — the version that measures what a
+      # model actually does with all that costs money and runs nightly.
+      - name: Agent eval
+        run: npm run eval
+
       # Tenancy, agent loop, HTTP layer, devices and pairing, and the deployment
       # paths under VERCEL=1. The last is the reason this job blocks a merge:
       # those branches only ever execute in production otherwise.
