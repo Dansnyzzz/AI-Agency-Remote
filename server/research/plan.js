@@ -1,4 +1,5 @@
 import { askModel, extractJson } from './llm.js';
+import { modelForRole } from '../roleModel.js';
 
 const SYSTEM = [
   'You are a research planner. Break the question into 4 to 6 web-search queries',
@@ -27,12 +28,16 @@ export function parsePlan(text) {
  * rather than stalling on a formatting slip.
  */
 export async function planQuestions(question, { userId, entry, stream, budget, signal, chatId = null }) {
+  // Turning one question into search queries is rewriting, not reasoning, so it
+  // runs on the cheap tier where there is one. See server/roleModel.js.
+  const writer = await modelForRole(userId, 'research.plan', entry);
+
   for (let attempt = 0; attempt < 2; attempt += 1) {
     // `low` effort on purpose: this turns one question into a handful of search
     // queries. It is a rewriting job, not a reasoning one, and paying for deep
     // thinking on it buys nothing measurable.
     const text = await askModel({
-      userId, entry, system: SYSTEM, prompt: question, stream, budget, signal,
+      userId, entry: writer, system: SYSTEM, prompt: question, stream, budget, signal,
       chatId, role: 'research.plan', effort: 'low',
     });
     const queries = parsePlan(text);

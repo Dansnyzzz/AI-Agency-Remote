@@ -3,6 +3,7 @@ import { getStore } from './store/index.js';
 import { streamCompletion } from './providers/index.js';
 import { estimateCost } from './providers/catalog.js';
 import { record as recordUsage } from './usage.js';
+import { modelForRole } from './roleModel.js';
 
 /**
  * Keeping a long conversation inside the model's window.
@@ -215,11 +216,19 @@ export async function compact({ userId, chatId, entry, prefs, messages, signal, 
 
   if (!transcript.trim()) return null;
 
+  /**
+   * Folding a transcript into prose is a writing job, not a reasoning one — and
+   * it is routinely the largest single prompt the account sends. It runs on the
+   * cheap tier where the account has one, and on the conversation's own model
+   * where it does not. See server/roleModel.js.
+   */
+  const writer = await modelForRole(userId, 'compaction', entry, prefs);
+
   let summary = '';
   let spent = null;
   for await (const ev of stream({
     userId,
-    entry,
+    entry: writer,
     system: SYSTEM,
     messages: [{ id: 'compact', role: 'user', text: transcript }],
     // No tools: this is a writing job, and a summariser that starts running
@@ -245,9 +254,9 @@ export async function compact({ userId, chatId, entry, prefs, messages, signal, 
   if (spent) {
     await recordUsage(userId, {
       chatId,
-      model: entry.id,
+      model: writer.id,
       usage: spent,
-      costUsd: estimateCost(entry, spent) || 0,
+      costUsd: estimateCost(writer, spent) || 0,
       role: 'compaction',
     }).catch(() => {});
   }

@@ -383,6 +383,68 @@ section('a restart clears the text the reader had already seen');
 
 removeTemp(process.env.DATA_DIR);
 
+// ── not every call in a turn deserves the turn's model ──────────────
+section('the roles that transcribe get a cheaper model');
+{
+  const { modelForRole, __testing: roleTesting } = await import('../server/roleModel.js');
+  const { resolveModel } = await import('../server/providers/catalog.js');
+
+  const opus = resolveModel('anthropic/claude-opus-5');
+  const haiku = resolveModel('anthropic/claude-haiku-4-5');
+
+  /*
+   * A conversation set to Opus is set to Opus because the *answering* is worth
+   * it. Folding the older turns into a summary is a writing job — routinely the
+   * largest single prompt the account sends — and was being billed at the
+   * flagship rate for no benefit anybody could name.
+   */
+  const forCompaction = await modelForRole('u-nobody', 'compaction', opus, {});
+  check('compaction moves off the flagship', forCompaction.id === haiku.id, forCompaction.id);
+  check(
+    '  and it is genuinely cheaper',
+    forCompaction.price.in < opus.price.in,
+    `${forCompaction.price.in} < ${opus.price.in}`,
+  );
+
+  const forExtract = await modelForRole('u-nobody', 'web_extract', opus, {});
+  check('so does reading facts off a page', forExtract.id === haiku.id, forExtract.id);
+
+  /*
+   * And the ones that decide do not. This is the half that keeps the feature
+   * honest: a cheap model that summarises badly loses the decisions a
+   * conversation rests on, so the line is drawn at transcribing versus
+   * reasoning rather than wherever the saving is largest.
+   */
+  for (const role of ['turn', 'subagent', 'research.propose', 'research.arbitrate']) {
+    const kept = await modelForRole('u-nobody', role, opus, {});
+    check(`${role} keeps the conversation's model`, kept.id === opus.id, kept.id);
+  }
+
+  /*
+   * Never up. A curated list that routed a small model to a larger one would
+   * cost money while claiming to save it, so the swap has to be *provably*
+   * cheaper — which also means a provider whose catalogue entries carry no
+   * verified price is left alone rather than guessed at.
+   */
+  const alreadyCheap = await modelForRole('u-nobody', 'compaction', haiku, {});
+  check('a conversation already on the small model stays there', alreadyCheap.id === haiku.id);
+
+  const { cheaperThan } = roleTesting;
+  check('an unpriced candidate is not a saving', !cheaperThan({ price: null }, opus));
+  check('nor is an unpriced current model', !cheaperThan(haiku, { price: null }));
+  check('and equal price is not cheaper', !cheaperThan(haiku, haiku));
+
+  /*
+   * Routing is an optimisation and sits in the middle of a turn, so it must
+   * never be the reason one fails. A provider with no cheap entry, and a broken
+   * entry, both fall back to what the conversation was already using.
+   */
+  const unknownProvider = { id: 'x/y', provider: 'nowhere', price: { in: 99, out: 99 } };
+  const fallenBack = await modelForRole('u-nobody', 'compaction', unknownProvider, {});
+  check('an unknown provider falls back rather than failing', fallenBack.id === 'x/y');
+  check('and a missing entry is survivable', (await modelForRole('u-nobody', 'compaction', null, {})) === null);
+}
+
 console.log(
   failures === 0
     ? '\n\x1b[32mAll fallback checks passed.\x1b[0m\n'

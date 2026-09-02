@@ -1,5 +1,6 @@
 import { askModel, extractJson } from '../research/llm.js';
 import { untrusted } from './untrusted.js';
+import { modelForRole } from '../roleModel.js';
 
 /**
  * Read a page for the few facts wanted, rather than pasting the page in.
@@ -95,8 +96,12 @@ export async function extractFromPage({
    * The prompt already forbids inference in as many words; paying for deep
    * thinking on top of that buys nothing and risks the invention it warns about.
    */
+  // Copying stated facts off a page is not a job for the conversation's model.
+  // Routed to the cheap tier where the account has one — see roleModel.js.
+  const reader = await modelForRole(userId, 'web_extract', entry);
+
   const reply = await askModel({
-    userId, entry, system: SYSTEM, prompt, stream, budget, signal,
+    userId, entry: reader, system: SYSTEM, prompt, stream, budget, signal,
     chatId, role: 'web_extract', effort: 'low',
   });
   return present(target, wanted, extractJson(reply), reply);
