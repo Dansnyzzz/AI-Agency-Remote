@@ -88,10 +88,33 @@ function is(condition, what, detail = '') {
 const bash = (command) => ({ tool_input: { command } });
 const write = (file_path) => ({ cwd: root, tool_input: { file_path } });
 
+/**
+ * Which branch the guard should believe it is on.
+ *
+ * Declared here rather than beside the branch section further down, because the
+ * push checks below need it too and did not have it. Without a branch injected
+ * they read the *real* one, so `git push origin feature` — a command that has
+ * nothing to do with the protected branch — was blocked whenever the suite ran
+ * on `main`, and `npm run check` could never be green there.
+ *
+ * That is worse than an ordinary flaky test. The whole premise of this ledger
+ * is that only a green gate may stamp work as verified, so a gate that cannot
+ * go green on the default branch disables the mechanism it exists to enforce.
+ */
+const onBranch = (name) => ({ ...process.env, CLAUDE_GUARD_BRANCH: name });
+
 console.log('\n[1mguard-bash[0m');
 check('guard-bash.js', bash('npm test'), ALLOW, 'an ordinary command runs');
-check('guard-bash.js', bash('git push origin feature'), ALLOW, 'a normal push runs');
-check('guard-bash.js', bash('git push --force-with-lease origin feature'), ALLOW, '--force-with-lease is the safe form');
+// Both name a feature branch as the destination, so they must run whatever
+// branch the suite itself happens to be checked out on. See `onBranch`.
+check('guard-bash.js', bash('git push origin feature'), ALLOW, 'a normal push runs', onBranch('feature/x'));
+check(
+  'guard-bash.js',
+  bash('git push --force-with-lease origin feature'),
+  ALLOW,
+  '--force-with-lease is the safe form',
+  onBranch('feature/x'),
+);
 check('guard-bash.js', bash('npm install express'), ALLOW, 'installing a package runs');
 
 check('guard-bash.js', bash(['rm', '-rf', 'build'].join(' ')), BLOCK, 'recursive force-delete');
@@ -130,7 +153,6 @@ check('lint-changed.js', write('server/app.js'), ALLOW, 'a clean source file pas
  * ------------------------------------------------------------------------- */
 
 console.log('\n[1mguard-bash · protected branch[0m');
-const onBranch = (name) => ({ ...process.env, CLAUDE_GUARD_BRANCH: name });
 
 check('guard-bash.js', bash('git commit -m "x"'), BLOCK, 'committing on main', onBranch('main'));
 check('guard-bash.js', bash('git commit -m "x"'), BLOCK, 'committing on master', onBranch('master'));
