@@ -32,7 +32,7 @@ fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
 const { createApp } = await import('../server/app.js');
 const { initStore } = await import('../server/store/index.js');
 const store = await initStore();
-const { normaliseSteps, advanceRun, startRun } = await import('../server/workflows.js');
+const { normaliseSteps, advanceRun, startRun, runWorkflowNow } = await import('../server/workflows.js');
 
 const PORT = 5214;
 const server = createApp().listen(PORT);
@@ -316,6 +316,153 @@ section('a failing step stops the run instead of marching on');
   check('step one records what went wrong', !!after.steps[0].error, after.steps[0].error?.slice(0, 60));
   check('step two was never attempted', after.steps[1].status === 'pending', after.steps[1].status);
   check('and the lease is released', after.lease_until === null);
+}
+
+/* ── the mistakes found by auditing the first version ───────────── */
+
+section('a second press does not start a second run');
+{
+  const wf = await store.createWorkflow(aliceId, {
+    id: 'wf-twice',
+    title: 'Only once',
+    steps: normaliseSteps(['ask the model something']),
+    nextRunAt: null,
+  });
+
+  // Left open, exactly as a run part-way through its steps would be.
+  await store.createWorkflowRun(aliceId, {
+    id: 'run-open',
+    workflowId: wf.id,
+    chatId: null,
+    status: 'running',
+    steps: [{ id: 's1', status: 'pending' }],
+    cursor: 0,
+  });
+
+  let refused = null;
+  try {
+    await runWorkflowNow(aliceId, wf.id);
+  } catch (err) {
+    refused = err;
+  }
+  check('starting it again is refused', /already running/.test(refused?.message || ''), refused?.message);
+  check('  as a 409, so the client can say something true', refused?.status === 409, `${refused?.status}`);
+  check(
+    '  and no second run was created',
+    (await store.listWorkflowRuns(aliceId, wf.id, 10)).length === 1,
+    'a second press must not buy a second set of model calls',
+  );
+}
+
+section('running by hand claims its own run, not the oldest one');
+{
+  /*
+   * The first version claimed "the next open run", which is ordered oldest
+   * first — so pressing Run now took somebody else's queued run, discovered it
+   * was the wrong one, and walked away having just leased it for ten minutes.
+   */
+  const older = await store.createWorkflow(aliceId, {
+    id: 'wf-older',
+    title: 'Queued yesterday',
+    steps: normaliseSteps(['step']),
+    nextRunAt: null,
+  });
+  await store.createWorkflowRun(aliceId, {
+    id: 'run-older',
+    workflowId: older.id,
+    chatId: null,
+    status: 'running',
+    steps: [{ id: 's1', status: 'pending' }],
+    cursor: 0,
+  });
+
+  const mine = await store.createWorkflow(aliceId, {
+    id: 'wf-mine',
+    title: 'Pressed just now',
+    steps: normaliseSteps(['step']),
+    nextRunAt: null,
+  });
+
+  await runWorkflowNow(aliceId, mine.id).catch(() => null);
+
+  const [minesRun] = await store.listWorkflowRuns(aliceId, mine.id, 1);
+  check('the run that was pressed is the one that moved', minesRun?.status !== 'running', minesRun?.status);
+
+  const untouched = await store.getWorkflowRun(aliceId, 'run-older');
+  check('the older run was not claimed', untouched.status === 'running', untouched.status);
+  check(
+    '  and is not left leased by a process that walked away',
+    untouched.lease_until === null,
+    `${untouched.lease_until}`,
+  );
+}
+
+section('the shelf gets every last run in one query');
+{
+  const rows = await store.listWorkflowsWithLastRun(aliceId);
+  check('every workflow comes back', rows.length >= 3, `${rows.length}`);
+
+  const withRun = rows.find((r) => r.id === 'wf-mine');
+  check('one that has run carries its run', !!withRun?.run_id, withRun?.run_id);
+  check('  with the per-step state, which is the point', Array.isArray(withRun?.run_steps), typeof withRun?.run_steps);
+
+  const neverRun = rows.find((r) => r.id === 'wf-twice');
+  check('one that has an open run carries that', !!neverRun?.run_id);
+
+  // The join must not multiply rows: one line per workflow, however many runs
+  // it has had.
+  await store.createWorkflowRun(aliceId, {
+    id: 'run-second',
+    workflowId: 'wf-mine',
+    chatId: null,
+    status: 'done',
+    steps: [{ id: 's1', status: 'done' }],
+    cursor: 1,
+  });
+  const again = await store.listWorkflowsWithLastRun(aliceId);
+  check(
+    'a second run does not duplicate the workflow',
+    again.filter((r) => r.id === 'wf-mine').length === 1,
+    `${again.filter((r) => r.id === 'wf-mine').length} rows`,
+  );
+}
+
+section('finished runs are eventually swept, unfinished ones never');
+{
+  for (const [id, status] of [
+    ['sweep-done', 'done'],
+    ['sweep-failed', 'failed'],
+    ['sweep-attention', 'needs_attention'],
+    ['sweep-running', 'running'],
+  ]) {
+    await store.createWorkflowRun(aliceId, {
+      id,
+      workflowId: 'wf-mine',
+      chatId: null,
+      status,
+      steps: [{ id: 's1', status: 'done' }],
+      cursor: 1,
+    });
+    // Only a finished run gets a finished_at, which is exactly what the pruner
+    // keys on — so stamping it here is also the assertion that it does.
+    if (status !== 'running') {
+      await store.saveWorkflowRun(id, { status, leaseUntil: null, finished: true });
+    }
+  }
+
+  // A window of zero days: anything already finished is older than it.
+  await store.pruneWorkflowRuns(0);
+
+  check('an old finished run is gone', (await store.getWorkflowRun(aliceId, 'sweep-done')) === null);
+  check('so is an old failed one', (await store.getWorkflowRun(aliceId, 'sweep-failed')) === null);
+  // These two are the state the feature exists to preserve. Sweeping them away
+  // would delete the evidence that something needs a person.
+  check(
+    'one waiting for a person is kept',
+    (await store.getWorkflowRun(aliceId, 'sweep-attention')) !== null,
+    'that is the record saying a step was interrupted',
+  );
+  check('and one still going is kept', (await store.getWorkflowRun(aliceId, 'sweep-running')) !== null);
 }
 
 section('deleting');

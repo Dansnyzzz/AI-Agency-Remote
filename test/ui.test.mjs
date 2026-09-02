@@ -1420,7 +1420,22 @@ check('the search box stays inside the dialog', fit.searchInside);
 
 section('choosing a model by provider');
 const providers = await page.$$eval('#provider-filter .seg__btn', (els) => els.map((e) => e.dataset.provider));
-check('every provider is offered', providers.join() === 'all,anthropic,openai,google,openrouter', providers.join(' '));
+check(
+  'every provider is offered',
+  providers.join() === 'all,anthropic,openai,google,openrouter,orcarouter',
+  providers.join(' '),
+);
+
+/**
+ * `auto` is not a provider's model and is deliberately in every list.
+ *
+ * It is the "I don't know which model is strong" answer, resolved per turn to
+ * the best free model the account can run, and `renderResults` puts it above
+ * everything on every tab except Paid. Filtering it out here is the difference
+ * between testing the provider filter and testing that the Auto card exists —
+ * which the check below does directly, so that it cannot quietly disappear.
+ */
+const AUTO = 'auto';
 
 for (const [provider, pattern] of [
   ['anthropic', /^anthropic\//],
@@ -1433,11 +1448,13 @@ for (const [provider, pattern] of [
     ids: [...document.querySelectorAll('[data-model]')].map((e) => e.dataset.model),
     chipsHidden: document.getElementById('vendor-row').hidden,
   }));
+  const own = view.ids.filter((id) => id !== AUTO);
   check(
     `${provider} shows only its own models`,
-    view.ids.length > 0 && view.ids.every((id) => pattern.test(id)),
-    `${view.ids.length} models`,
+    own.length > 0 && own.every((id) => pattern.test(id)),
+    `${own.length} models${own.find((id) => !pattern.test(id)) ? `, stray ${own.find((id) => !pattern.test(id))}` : ''}`,
   );
+  check(`${provider} offers Auto alongside them`, view.ids.includes(AUTO), view.ids.slice(0, 3).join(','));
   check(`${provider} hides the vendor chips`, view.chipsHidden === true);
 }
 
@@ -1447,10 +1464,15 @@ const library = await page.evaluate(() => ({
   ids: [...document.querySelectorAll('[data-model]')].map((e) => e.dataset.model),
   chipsHidden: document.getElementById('vendor-row').hidden,
 }));
+const libraryOwn = library.ids.filter((id) => id !== AUTO);
 check(
   'OpenRouter shows the library and nothing built in',
-  library.ids.length > 0 && library.ids.every((id) => id.startsWith('openrouter/')),
-  `${library.ids.length} models`,
+  libraryOwn.length > 0 && libraryOwn.every((id) => id.startsWith('openrouter/')),
+  `${libraryOwn.length} models${
+    libraryOwn.find((id) => !id.startsWith('openrouter/'))
+      ? `, stray ${libraryOwn.find((id) => !id.startsWith('openrouter/'))}`
+      : ''
+  }`,
 );
 check('OpenRouter brings the vendor chips back', library.chipsHidden === false);
 
@@ -2283,9 +2305,22 @@ section('artifacts');
     check('in a sandbox with no same-origin', /allow-scripts/.test(running.sandbox) && !/allow-same-origin/.test(running.sandbox), running.sandbox);
     check('with its code one press away', running.tabs.includes('Code'), running.tabs.join(', '));
 
-    // The proof: what the page's own script wrote.
-    const frame = page.frames().find((f) => /\/run/.test(f.url()));
-    const text = frame ? await frame.evaluate(() => document.getElementById('out')?.textContent) : null;
+    /*
+     * The proof: what the page's own script wrote.
+     *
+     * Waited for rather than slept on. A fixed pause read the frame before it
+     * had finished loading roughly one run in three — which is worse than a
+     * failing test, because a suite that fails at random teaches people to
+     * re-run it until it is green and then to ignore it when it is not.
+     */
+    let text = null;
+    for (let i = 0; i < 40 && text !== 'ran 5'; i += 1) {
+      const frame = page.frames().find((f) => /\/run/.test(f.url()));
+      text = frame
+        ? await frame.evaluate(() => document.getElementById('out')?.textContent).catch(() => null)
+        : null;
+      if (text !== 'ran 5') await page.waitForTimeout(150);
+    }
     check('and the script inside it actually ran', text === 'ran 5', String(text));
 
     await page.click('#viewer-close');

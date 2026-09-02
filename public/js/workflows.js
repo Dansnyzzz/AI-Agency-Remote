@@ -52,7 +52,27 @@ const clip = (text, max = 140) => {
  * @param reload     re-run the shelf's own load
  */
 export function workflowsView({ blank, body, toast, openChat, onLeave, openForm, reload }) {
+  /**
+   * A run continues after the request that started it returns.
+   *
+   * An invocation stops at its time budget and the next nudge carries on, so a
+   * long workflow moves between steps with nothing on screen changing. Without
+   * this the shelf shows the state it had when it was opened, and the honest
+   * reading of a stale "step 2 of 4" is that the thing has hung.
+   *
+   * Only while something is actually running, only while the shelf is on
+   * screen, and one timer at a time — a poll that outlives its page is a
+   * request every few seconds for the rest of the session.
+   */
+  let poll = null;
+  const stopPolling = () => {
+    if (poll) clearTimeout(poll);
+    poll = null;
+  };
+
   return {
+    /** The shell calls this when the shelf is left, so the timer dies with it. */
+    onHide: stopPolling,
     title: 'Workflows',
     newLabel: 'New workflow',
     orderLabel: 'Sort by',
@@ -154,6 +174,17 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
     },
 
     wire: () => {
+      // Re-wiring happens on every render, so the previous timer goes first or
+      // they accumulate one per refresh.
+      stopPolling();
+      if (body.querySelector('.wf__step--running')) {
+        poll = setTimeout(() => {
+          poll = null;
+          // Only if the shelf is still the thing on screen.
+          if (body.isConnected && !body.closest('#page')?.hidden) reload();
+        }, 5000);
+      }
+
       for (const button of body.querySelectorAll('[data-open]')) {
         button.addEventListener('click', () => {
           onLeave();

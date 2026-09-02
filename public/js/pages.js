@@ -642,6 +642,9 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
 
     async show(which) {
       if (!views[which]) return;
+      // A shelf may have left something running — a poll, a timer. Switching
+      // between shelves has to end it, or it outlives the page it belongs to.
+      if (showing && showing !== which) views[showing]?.onHide?.();
       showing = which;
       query = '';
       order = views[which].orders?.[0]?.id || 'all';
@@ -662,6 +665,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
 
     /** Back to the conversation. */
     hide() {
+      if (showing) views[showing]?.onHide?.();
       showing = null;
       page.hidden = true;
       $('thread').hidden = false;

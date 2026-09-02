@@ -267,6 +267,12 @@ export async function sweep() {
     store.prunePairings(),
     store.pruneOrphanAttachments(),
     store.pruneFinishedJobs(),
+    // Both write a few kilobytes per run and nothing was removing either. The
+    // list above exists because three of its four pruners had been written and
+    // never called; adding a fifth without calling it would be the same bug with
+    // a different name.
+    store.pruneWorkflowRuns(),
+    store.pruneResearchRuns(),
   ]);
 }
 

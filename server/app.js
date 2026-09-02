@@ -312,13 +312,21 @@ export function createApp() {
       // Also the deployment's only chance to take the bins out: the local
       // scheduler sweeps on its minute tick, and a deployment has no minute
       // tick. Without this, four tables grow without bound.
+      // The 300s ceiling is for the whole invocation, not per phase. Sweeping
+      // and then running up to five full agent turns can spend most of it, so
+      // what workflows get is what is *left* — handing them a fresh budget is
+      // how the function gets killed with a run in mid-step, which is the exact
+      // failure workflows exist to avoid.
+      const started = Date.now();
+      const remaining = () => Math.max(0, 240_000 - (Date.now() - started));
+
       await sweep().catch(() => {});
       const ran = await runDueTasks();
+
       // Workflows share this heartbeat rather than adding a second cron: the
-      // free tier allows one a day, and spending it twice is not an option.
-      // They take what time is left, and a run that does not finish is resumed
-      // by the next nudge rather than restarted.
-      const workflows = await runDueWorkflows().catch((err) => ({
+      // free tier allows one a day, and spending it twice is not an option. A
+      // run that does not finish is resumed by the next nudge, not restarted.
+      const workflows = await runDueWorkflows({ budgetMs: remaining() }).catch((err) => ({
         started: [],
         advanced: [],
         error: String(err?.message || err).slice(0, 200),
@@ -1324,18 +1332,25 @@ export function createApp() {
   api.get(
     '/workflows',
     wrap(async (req, res) => {
-      const store = getStore();
-      const workflows = await store.listWorkflows(req.user.id);
-      // The last run of each, because "which step is it on" is the question the
-      // page exists to answer and a second round trip per row to find out is a
-      // waste on a list that is usually short.
-      const withRuns = await Promise.all(
-        workflows.map(async (wf) => {
-          const [lastRun] = await store.listWorkflowRuns(req.user.id, wf.id, 1);
-          return { ...wf, lastRun: lastRun ?? null };
-        }),
-      );
-      res.json({ workflows: withRuns });
+      // One query, not one per workflow. "Which step is it on" is the question
+      // this page exists to answer, so the last run has to come with the list —
+      // and fetching them in a loop is the N+1 CLAUDE.md §7 names by name.
+      const rows = await getStore().listWorkflowsWithLastRun(req.user.id);
+      const workflows = rows.map(({ run_id: runId, run_status, run_steps, run_chat_id, run_cursor, run_started_at, run_finished_at, ...wf }) => ({
+        ...wf,
+        lastRun: runId
+          ? {
+              id: runId,
+              status: run_status,
+              steps: run_steps,
+              chat_id: run_chat_id,
+              cursor: run_cursor,
+              started_at: run_started_at,
+              finished_at: run_finished_at,
+            }
+          : null,
+      }));
+      res.json({ workflows });
     }),
   );
 
@@ -1440,7 +1455,9 @@ export function createApp() {
         const run = await runWorkflowNow(req.user.id, req.params.id);
         res.json({ run });
       } catch (err) {
-        res.status(err.message === 'No such workflow.' ? 404 : 400).json({ error: err.message });
+        // 409 for "already running" — the client can say something true about
+        // it, which a flat 400 would not let it do.
+        res.status(err.status || (err.message === 'No such workflow.' ? 404 : 400)).json({ error: err.message });
       }
     }),
   );

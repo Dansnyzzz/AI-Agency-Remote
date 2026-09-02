@@ -883,6 +883,42 @@ export function createPgStore(connectionString) {
         [String(olderThanHours)],
       );
     },
+    /**
+     * Finished workflow runs, past the point anyone looks at them.
+     *
+     * Each run keeps a summary of what every step said, so a weekly workflow with
+     * six steps writes a few kilobytes a week for ever. The comment above `sweep`
+     * describes exactly this failure — a table that grows because the tidying was
+     * written and never called — so this is wired into it rather than left as a
+     * method nobody reaches.
+     *
+     * Only *finished* runs, and only past the window. A run still going, or one
+     * waiting for a person, is the state the feature exists to preserve.
+     */
+    async pruneWorkflowRuns(keepDays = 60) {
+      await q(
+        `DELETE FROM workflow_runs
+          WHERE status IN ('done', 'failed', 'cancelled')
+            AND finished_at IS NOT NULL
+            AND finished_at < NOW() - ($1 || ' days')::interval`,
+        [String(keepDays)],
+      );
+    },
+    /**
+     * Deep-research transcripts, same reasoning.
+     *
+     * A run stores the whole proposer/critic/arbiter debate and its source
+     * ledger. That is there to be audited, which is worth keeping for a while and
+     * not for ever; nothing was deleting them at all.
+     */
+    async pruneResearchRuns(keepDays = 90) {
+      await q(
+        `DELETE FROM research_runs
+          WHERE completed_at IS NOT NULL
+            AND completed_at < NOW() - ($1 || ' days')::interval`,
+        [String(keepDays)],
+      );
+    },
     async getJob(userId, id) {
       const rows = await q('SELECT id, status, result FROM tool_jobs WHERE id = $1 AND user_id = $2', [
         id,
@@ -1241,6 +1277,36 @@ export function createPgStore(connectionString) {
     async listWorkflows(userId) {
       return q('SELECT * FROM workflows WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
     },
+    /**
+     * Every workflow with the state of its most recent run, in one query.
+     *
+     * The shelf's whole purpose is showing which step stopped, so it needs the
+     * last run of each — and fetching them one at a time is the N+1 CLAUDE.md §7
+     * names outright. `DISTINCT ON` is the Postgres way to say "the newest row
+     * per group" without a correlated subquery per workflow.
+     */
+    async listWorkflowsWithLastRun(userId) {
+      return q(
+        `SELECT w.*,
+                r.id          AS run_id,
+                r.status      AS run_status,
+                r.steps       AS run_steps,
+                r.chat_id     AS run_chat_id,
+                r.cursor      AS run_cursor,
+                r.started_at  AS run_started_at,
+                r.finished_at AS run_finished_at
+           FROM workflows w
+           LEFT JOIN (
+             SELECT DISTINCT ON (workflow_id) *
+               FROM workflow_runs
+              WHERE user_id = $1
+              ORDER BY workflow_id, started_at DESC
+           ) r ON r.workflow_id = w.id
+          WHERE w.user_id = $1
+          ORDER BY w.created_at DESC`,
+        [userId],
+      );
+    },
     async getWorkflow(userId, id) {
       const rows = await q('SELECT * FROM workflows WHERE user_id = $1 AND id = $2', [userId, id]);
       return rows[0] ?? null;
@@ -1358,17 +1424,34 @@ export function createPgStore(connectionString) {
      * `SKIP LOCKED` handles two processes racing; `lease_until` handles one
      * process dying. Both happen on a serverless host, for different reasons.
      */
-    async claimWorkflowRun({ now = new Date().toISOString(), leaseUntil, userId = null } = {}) {
+    async claimWorkflowRun({ now = new Date().toISOString(), leaseUntil, userId = null, id = null } = {}) {
       const rows = await q(
         `UPDATE workflow_runs SET lease_until = $2
           WHERE id = (SELECT id FROM workflow_runs
                        WHERE status = 'running'
                          AND (lease_until IS NULL OR lease_until <= $1)
                          AND ($3::text IS NULL OR user_id = $3)
+                         AND ($4::text IS NULL OR id = $4)
                        ORDER BY started_at LIMIT 1
                        FOR UPDATE SKIP LOCKED)
       RETURNING *`,
-        [now, leaseUntil, userId],
+        [now, leaseUntil, userId, id],
+      );
+      return rows[0] ?? null;
+    },
+    /**
+     * Is a run of this workflow already going?
+     *
+     * Pressing "Run now" twice must not start the job twice. The lease stops two
+     * processes working the *same* run; it says nothing about a second run of the
+     * same definition, and each one costs a full set of model calls.
+     */
+    async openWorkflowRun(userId, workflowId) {
+      const rows = await q(
+        `SELECT * FROM workflow_runs
+          WHERE user_id = $1 AND workflow_id = $2 AND status = 'running'
+          ORDER BY started_at LIMIT 1`,
+        [userId, workflowId],
       );
       return rows[0] ?? null;
     },

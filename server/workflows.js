@@ -318,22 +318,48 @@ export async function runDueWorkflows({ limit = 3, userId = null, budgetMs = STA
   return { started, advanced };
 }
 
-/** Start a workflow now, by hand, and take it as far as one invocation allows. */
+/**
+ * Start a workflow now, by hand, and take it as far as one invocation allows.
+ *
+ * Two things this has to get right, and both were got wrong first time.
+ *
+ * It claims **the run it just created, by id**. Claiming "the next open run"
+ * takes the oldest one in the queue instead — some other workflow, quite likely
+ * — and then, on finding it was not the one wanted, walks away having just put a
+ * ten-minute lease on it. One press of a button would stall an unrelated job and
+ * do nothing visible.
+ *
+ * And it refuses to start a second run of a workflow already going. The lease
+ * stops two processes working the same run; nothing stopped a second *run* of
+ * the same definition, so an impatient second press bought a second set of model
+ * calls and a second email.
+ */
 export async function runWorkflowNow(userId, workflowId, { budgetMs = START_BUDGET_MS } = {}) {
   const store = getStore();
   const workflow = await store.getWorkflow(userId, workflowId);
   if (!workflow) throw new Error('No such workflow.');
+
+  const already = await store.openWorkflowRun(userId, workflowId);
+  if (already) {
+    const err = new Error(
+      'This workflow is already running. It carries on where it left off on its own — wait for it, ' +
+        'rather than starting a second copy that would repeat every step.',
+    );
+    err.status = 409;
+    throw err;
+  }
 
   const run = await startRun(userId, workflow);
   const claimed = await store.claimWorkflowRun({
     now: nowIso(),
     leaseUntil: leaseUntil(),
     userId,
+    id: run.id,
   });
 
-  // Another invocation got there first; the run is still queued and will be
-  // picked up. Report it rather than racing for it.
-  if (!claimed || claimed.id !== run.id) return run;
+  // Something else claimed it in the moment between creating it and asking for
+  // it. It is durable and queued, so say so rather than racing.
+  if (!claimed) return run;
 
   return advanceRun(claimed, { deadline: Date.now() + budgetMs });
 }
