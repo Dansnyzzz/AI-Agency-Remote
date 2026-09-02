@@ -1,3 +1,4 @@
+import { log } from './util/trace.js';
 import crypto from 'node:crypto';
 import { getStore, isServerless } from './store/index.js';
 import { getPrefs } from './settings.js';
@@ -291,7 +292,7 @@ let timer = null;
 export function startScheduler() {
   if (timer || isServerless()) return;
   timer = setInterval(() => {
-    runDueTasks().catch((err) => console.error('[scheduler]', err.message));
+    runDueTasks().catch((err) => log.error('scheduled tasks failed', err));
     sweep();
   }, 60_000);
   timer.unref?.();

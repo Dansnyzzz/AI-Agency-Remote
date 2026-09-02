@@ -17,6 +17,7 @@ import { estimateCost } from './providers/catalog.js';
 import { loadForTranscript, toParts } from './attachments.js';
 import { projectPrompt } from './projects.js';
 import { compact, shouldCompact, measure, activeTranscript } from './compact.js';
+import { log } from './util/trace.js';
 
 /**
  * There is one mode.
@@ -440,7 +441,7 @@ async function mapWithLimit(items, limit, worker) {
   return out;
 }
 
-async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint }) {
+async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools }) {
   const results = await mapWithLimit(
     toolCalls,
     MAX_PARALLEL_TOOLS,
@@ -477,6 +478,17 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint 
         ...(shot ? { shot } : {}),
       };
       emit('tool_result', result);
+      /**
+       * The model asked for tools it does not yet have.
+       *
+       * Recorded on the shared set the loop rebuilds the catalogue from, so they
+       * are in the request that goes out on the next step. Nothing is added
+       * mid-request — that is not something any provider allows — and nothing
+       * needs to be: the next step carries more than the last one did.
+       */
+      if (call.name === 'load_tools' && !isError && onLoadTools) {
+        onLoadTools(Array.isArray(call.input?.names) ? call.input.names : []);
+      }
       if (call.name === 'update_plan' && !isError) {
         // Normalised through the same function the tool answered with, so the
         // panel and the model never disagree about what the plan is. A list too
@@ -624,10 +636,26 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     project: project?.briefing,
     mcpServers: mcp.servers,
   });
-  const tools = availableTools({
+  /**
+   * Tools the model has asked for this turn.
+   *
+   * The catalogue is re-sent on every request of every step, so its size is paid
+   * per step rather than per turn — about 12,000 tokens, of which roughly half
+   * describes things a given turn was never going to touch. The rarely-used half
+   * is withheld and listed by name in `load_tools` instead; when the model asks
+   * for something, it goes in here and the catalogue is rebuilt before the next
+   * step.
+   *
+   * Rebuilding per step is what makes this work on every provider rather than
+   * only the one with a native mechanism for it: nothing is added mid-request,
+   * the next request simply carries more.
+   */
+  const activated = new Set();
+  const buildTools = () => availableTools({
     workerOnline,
     desktopOnline: !!worker?.info?.desktop,
     policy,
+    activated,
     // So a connector tool that cannot work is never offered, and so the
     // catalogue is cut down to fit a genuinely small window rather than eating
     // it. See `availableTools`.
@@ -641,6 +669,12 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     // Tools from outside this repository, already in the same shape.
     extra: mcp.tools,
   });
+
+  /** Take the names `load_tools` asked for, so the next step carries them. */
+  const activate = (names) => {
+    for (const name of names) if (typeof name === 'string') activated.add(name);
+    log.info('tools activated', { names: names.join(','), total: activated.size });
+  };
 
   const totals = { input: 0, output: 0, cost: 0 };
 
@@ -679,7 +713,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       };
       for (const r of toolMessage.results) emit('tool_result', r);
     } else {
-      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint });
+      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate });
     }
     await store.appendMessage(userId, chatId, toolMessage);
     messages.push(toolMessage);
@@ -732,7 +766,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
         // A conversation that cannot be summarised is still a conversation. Let
         // the turn proceed and fail on its own terms, which at least says what
         // the actual limit was.
-        console.error('[ai-remote] compaction failed:', err.message);
+        log.error('compaction failed', err, { step: step + 1 });
       }
     }
 
@@ -768,7 +802,10 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
           loaded,
           entry,
         ),
-        tools,
+        // Rebuilt per step: anything `load_tools` activated last step is in it
+        // now. On a turn that activates nothing this returns the same list every
+        // time, so the cached prefix is undisturbed.
+        tools: buildTools(),
         effort: prefs.effort,
         signal,
       })) {
@@ -834,7 +871,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       return; // The client resumes by calling back with a decision.
     }
 
-    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint });
+    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate });
     await store.appendMessage(userId, chatId, toolMessage);
     messages.push(toolMessage);
   }

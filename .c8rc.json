@@ -1,0 +1,42 @@
+{
+  "$comment": [
+    "Coverage, so 'coverage has not dropped' can be checked rather than asserted.",
+    "",
+    "CLAUDE.md §5 and the deploy gate both ask for it and neither could measure it:",
+    "there was no coverage tool at all, so the box was ticked on faith or skipped.",
+    "",
+    "Not wired into `npm run check`, deliberately. Instrumenting every suite roughly",
+    "doubles the wall-clock time of a run that is already minutes long, and the gate",
+    "is something to run often. `npm run coverage` is what you run before a release",
+    "or when a number is in dispute.",
+    "",
+    "The thresholds are the measured baseline rounded down by a point, not an",
+    "aspirational round number. A threshold that fails on the day it lands teaches",
+    "people to pass --check-coverage=false, which is worse than having none. The",
+    "point of slack absorbs the ordinary drift of a suite that talks to a real",
+    "database and a real browser.",
+    "",
+    "Measured 2026-09-02: statements 57.81%, branches 74.28%, functions 68.59%.",
+    "Statements and lines are low because `all: true` counts every file including",
+    "the ones only a paired computer or a live provider key ever executes — the",
+    "worker's desktop layer and the office writers, mostly. Branches at 74% is the",
+    "honest signal here: the logic that is reachable without hardware is tested."
+  ],
+  "check-coverage": true,
+  "statements": 56,
+  "branches": 73,
+  "functions": 67,
+  "lines": 56,
+  "all": true,
+  "include": ["server/**/*.js", "worker/**/*.js", "public/js/**/*.js"],
+  "exclude": [
+    "test/**",
+    "node_modules/**",
+    "data/**",
+    "public/js/locales/**",
+    "scripts/**"
+  ],
+  "reporter": ["text-summary", "lcov"],
+  "report-dir": "./coverage",
+  "skip-full": true
+}

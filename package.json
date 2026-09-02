@@ -17,7 +17,7 @@
     "db:init": "node scripts/db-init.js",
     "lint": "eslint .",
     "test:hooks": "node .claude/hooks/hooks.test.mjs",
-    "check": "npm run lint && npm test && npm run test:sandbox && npm run test:hooks",
+    "check": "npm run lint && npm run typecheck && npm test && npm run test:sandbox && npm run test:hooks",
     "gate": "node .claude/hooks/gate.js run",
     "accounts": "node scripts/whoami.js",
     "reset-password": "node scripts/reset-password.js",
@@ -55,7 +55,11 @@
     "test:workspace": "node test/workspace.test.mjs",
     "test:i18n": "node test/i18n.test.mjs",
     "test:capabilities": "node test/capabilities.test.mjs",
-    "test:mcp": "node test/mcp.test.mjs"
+    "test:mcp": "node test/mcp.test.mjs",
+    "typecheck": "node scripts/typecheck.js",
+    "typecheck:list": "node scripts/typecheck.js --list",
+    "typecheck:update": "node scripts/typecheck.js --update",
+    "coverage": "c8 --config .c8rc.json npm test"
   },
   "engines": {
     "node": ">=20"
@@ -73,6 +77,8 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.4",
-    "eslint": "^9.39.0"
+    "c8": "^12.0.0",
+    "eslint": "^9.39.0",
+    "typescript": "^7.0.2"
   }
 }

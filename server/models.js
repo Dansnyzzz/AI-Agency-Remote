@@ -1,6 +1,7 @@
 import { getStore } from './store/index.js';
 import { getApiKeys } from './settings.js';
 import { CATALOG, resolveModel } from './providers/catalog.js';
+import { log } from './util/trace.js';
 
 const OPENROUTER_MODELS = 'https://openrouter.ai/api/v1/models';
 const ORCAROUTER_MODELS = 'https://api.orcarouter.ai/v1/models';
@@ -199,7 +200,7 @@ export async function refreshLibrary() {
   const models = [];
   settled.forEach((result, i) => {
     if (result.status === 'fulfilled') models.push(...result.value);
-    else console.error(`[ai-remote] ${CATALOGUE_SOURCES[i].provider} catalogue refresh failed:`, result.reason?.message);
+    else log.error('catalogue refresh failed', result.reason, { provider: CATALOGUE_SOURCES[i].provider });
   });
 
   // Every source failing is a real failure — surface it so `refreshIfStale` can
@@ -227,7 +228,7 @@ export async function refreshIfStale() {
   try {
     return await refreshLibrary();
   } catch (err) {
-    console.error('[ai-remote] model library refresh failed:', err.message);
+    log.error('model library refresh failed', err);
     return status;
   }
 }

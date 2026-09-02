@@ -54,6 +54,7 @@ import {
 import { runDueWorkflows, runWorkflowNow, normaliseSteps } from './workflows.js';
 import { connectedServices, connect, disconnect } from './connectors.js';
 import { redactSecrets } from './redact.js';
+import { withTrace, newTraceId, annotate, log, mark, since } from './util/trace.js';
 import { mcpStatus, probeMcpServer, sealConfig, forgetMcp } from './mcp/registry.js';
 import {
   withStorageShim,
@@ -222,6 +223,26 @@ export function createApp() {
 
   /** `req.body` is undefined in Express 5 when no JSON arrived — never assume it. */
   const body = (req) => req.body || {};
+
+  /**
+   * One id, in scope for everything this request goes on to do.
+   *
+   * An agent turn fans out through the loop, the provider adapters, the tool
+   * executor, a queue the user's own machine reads, and back — and until this
+   * there was nothing to join those records on. Held in `AsyncLocalStorage` so
+   * no function underneath has to accept it as a parameter; threading it through
+   * forty signatures is how this kind of thing gets half done and abandoned.
+   *
+   * A caller's own `x-request-id` is honoured so a browser can correlate its
+   * side too, but never trusted verbatim: it lands in log lines, and a header is
+   * whatever the caller typed.
+   */
+  app.use((req, res, next) => {
+    const supplied = String(req.headers['x-request-id'] || '').replace(/[^\w-]/g, '').slice(0, 64);
+    const requestId = supplied || newTraceId();
+    res.setHeader('X-Request-Id', requestId);
+    withTrace({ requestId, method: req.method, path: req.path }, () => next());
+  });
 
   // Every request waits for the schema to be ready. On Vercel each invocation
   // may be a cold one, so this cannot happen once at startup.
@@ -2543,6 +2564,12 @@ export function createApp() {
           .catch(() => {});
       }, 15_000);
 
+      // Whose turn this is, and which one, on every line the loop emits from
+      // here down — including the ones written from inside a tool call.
+      annotate({ userId: req.user.id, chatId, runId });
+      const started = mark();
+      log.info('turn started', { model: req.body?.model || 'default' });
+
       try {
         await runAgent({
           userId: req.user.id,
@@ -2560,9 +2587,11 @@ export function createApp() {
           signal: controller.signal,
         });
       } catch (err) {
+        log.error('turn failed', err, { ms: since(started) });
         emit('error', { message: readableFailure(err) });
         emit('done', { stopReason: 'error' });
       } finally {
+        log.info('turn ended', { ms: since(started) });
         clearInterval(ping);
         // Released whatever happened, including an abort — holding the lock
         // after the loop has stopped would lock the user out of their own chat.

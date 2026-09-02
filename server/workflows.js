@@ -238,12 +238,39 @@ export async function advanceRun(run, { deadline = Date.now() + START_BUDGET_MS 
     state[cursor] = { ...state[cursor], status: 'running', started_at: nowIso() };
     await store.saveWorkflowRun(run.id, { steps: state, cursor, leaseUntil: leaseUntil() });
 
-    const outcome = await runStep({
-      user,
-      chatId: run.chat_id,
-      modelId,
-      instruction: definition[cursor].instruction,
-    });
+    /**
+     * Hold the lease for as long as the step actually takes.
+     *
+     * It was taken once, for ten minutes, and never renewed — so a step that ran
+     * longer than that had its claim expire underneath it while it was still
+     * working. The next nudge would then find an unclaimed run whose current step
+     * says `running`, conclude the invocation that started it had died, and mark
+     * the whole run `unknown` for a person to sort out. Two processes on the same
+     * run, and a job stopped for no reason.
+     *
+     * On a deployment the 300s function ceiling hides this; a local run has no
+     * ceiling at all, and a step that drives a browser through a slow site
+     * genuinely passes ten minutes. Renewing on a timer costs one small update a
+     * minute and removes the whole class.
+     *
+     * `unref` so a pending tick can never be the thing keeping the process alive.
+     */
+    const heartbeat = setInterval(() => {
+      store.saveWorkflowRun(run.id, { leaseUntil: leaseUntil() }).catch(() => {});
+    }, 60_000);
+    heartbeat.unref?.();
+
+    let outcome;
+    try {
+      outcome = await runStep({
+        user,
+        chatId: run.chat_id,
+        modelId,
+        instruction: definition[cursor].instruction,
+      });
+    } finally {
+      clearInterval(heartbeat);
+    }
 
     state[cursor] = {
       ...state[cursor],

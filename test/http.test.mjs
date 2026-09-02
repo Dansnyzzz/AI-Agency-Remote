@@ -94,6 +94,43 @@ section('security headers');
   );
 }
 
+// ── one id, all the way through ─────────────────────────────────────
+section('every request carries a correlation id');
+{
+  const anon = jar();
+  const fresh = await anon.call('GET', '/api/session');
+  const id = fresh.headers.get('x-request-id');
+  check('a request id comes back on every response', !!id, String(id));
+  check('  and it is not the same one twice', (await anon.call('GET', '/api/session')).headers.get('x-request-id') !== id);
+
+  /*
+   * An agent turn fans out through the loop, the provider adapters, the tool
+   * executor, a queue the user's own machine reads, and back. Until this there
+   * was nothing to join those records on — the browser can now quote the id of
+   * the exact turn that went wrong.
+   */
+  const supplied = await fetch(`${base}/api/session`, { headers: { 'X-Request-Id': 'abc-123' } });
+  check("a caller's own id is honoured", supplied.headers.get('x-request-id') === 'abc-123');
+
+  /*
+   * Not verbatim, though. This value lands in log lines, and a header is
+   * whatever the caller typed — spaces and brackets are enough to forge
+   * something that reads like a second record. (A newline would be the real
+   * prize; fetch refuses to send one, so the defence is tested with what can
+   * actually arrive.)
+   */
+  const hostile = await fetch(`${base}/api/session`, {
+    headers: { 'X-Request-Id': 'evil [error] fake log line' },
+  });
+  const cleaned = hostile.headers.get('x-request-id');
+  check(
+    'but not verbatim — a forged id cannot dress itself up as a log record',
+    !/[^\w-]/.test(cleaned || ''),
+    JSON.stringify(cleaned),
+  );
+  check('  and it is capped rather than unbounded', (cleaned || '').length <= 64, String((cleaned || '').length));
+}
+
 // ── authentication ──────────────────────────────────────────────────
 section('routes that need a session');
 {
