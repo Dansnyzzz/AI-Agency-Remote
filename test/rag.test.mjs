@@ -159,7 +159,7 @@ section('editing a file replaces its passages instead of piling up');
     ],
   });
 
-  const rows = await store.docVectors(alice.id, 'text-embedding-3-small');
+  const rows = await store.docVectorPage(alice.id, 'text-embedding-3-small');
   const lease = rows.filter((r) => r.path === 'documents/lease.md');
   check('the old passages are gone', lease.length === 1, `${lease.length} left`);
   check('and the other file is untouched', rows.some((r) => r.path === 'documents/recipes.md'));
@@ -206,8 +206,8 @@ section('vectors from a different embedding model are not compared');
   });
   // Rewrite one source as if it had been embedded by Google — the situation
   // somebody lands in by switching provider keys.
-  await store.docVectors(bob.id, 'text-embedding-3-small');
-  const rows = await store.docChunks(bob.id, (await store.docVectors(bob.id, 'text-embedding-3-small')).map((r) => r.id));
+  await store.docVectorPage(bob.id, 'text-embedding-3-small');
+  const rows = await store.docChunks(bob.id, (await store.docVectorPage(bob.id, 'text-embedding-3-small')).map((r) => r.id));
   const legacy = rows.find((r) => r.path === 'legacy/old.md');
   await store.replaceDocChunks(bob.id, 'legacy/old.md', [
     { ...legacy, id: legacy.id, model: 'text-embedding-004', dims: 768, source: 'legacy', ordinal: 0 },
@@ -327,6 +327,104 @@ section('cost is not spent twice on the same text');
  * only showed up under a full `npm test`, where the machine is busy enough for
  * the race to land — on its own the suite always looked fine.
  */
+// ── the scan streams instead of accumulating ────────────────────────
+section('vectors are read a page at a time');
+{
+  /*
+   * The search used to hold every vector it had ever read. A 1536-dimension
+   * vector is 8,192 characters of base64, so ten thousand chunks was ~82MB per
+   * search and fifty thousand was past what a serverless function survives —
+   * while the file's own comment named fifty thousand as the working ceiling.
+   *
+   * Correctness across a page boundary is the thing to pin: a bounded top-K that
+   * silently loses the best match because it fell on page two is worse than the
+   * unbounded version it replaced.
+   */
+  const many = Array.from({ length: 25 }, (_, i) => ({
+    text: i === 17 ? 'the escrow deposit is precisely four months of rent' : `filler passage number ${i}`,
+  }));
+  await ingestBatch(alice.id, {
+    source: 'paged',
+    files: [{ path: 'paged/big.md', mtime: 5000, chunks: many }],
+  });
+
+  const first = await store.docVectorPage(alice.id, 'text-embedding-3-small', { limit: 10 });
+  check('a page is capped at the limit asked for', first.length === 10, `${first.length}`);
+
+  const second = await store.docVectorPage(alice.id, 'text-embedding-3-small', {
+    after: first[first.length - 1].id,
+    limit: 10,
+  });
+  check('the next page continues from the cursor', second.length === 10, `${second.length}`);
+  check(
+    '  and does not repeat what the first page held',
+    !second.some((row) => first.some((f) => f.id === row.id)),
+  );
+
+  const all = new Set();
+  let after = null;
+  for (;;) {
+    const page = await store.docVectorPage(alice.id, 'text-embedding-3-small', { after, limit: 7 });
+    if (!page.length) break;
+    for (const row of page) all.add(row.id);
+    after = page[page.length - 1].id;
+  }
+  const total = (await store.docSources(alice.id)).reduce((n, s) => n + s.chunks, 0);
+  check('walking every page sees every row exactly once', all.size === total, `${all.size} of ${total}`);
+
+  // The needle is on a later page than the shortlist would reach if the top-K
+  // were being filled greedily and never revisited.
+  const found = await searchDocs(alice.id, { query: 'escrow deposit four months', source: 'paged' });
+  check('a match on a later page is still found', /four months of rent/.test(found), found.slice(0, 160));
+}
+
+// ── the shortlist is reranked, not just cut ─────────────────────────
+section('hybrid reranking');
+{
+  const { fuseRankings, __testing: ragTesting } = await import('../server/rag.js');
+
+  /*
+   * The case the whole thing exists for.
+   *
+   * Embeddings are good at meaning and reliably bad at exact tokens. A question
+   * containing an invoice number, a version string or a surname puts that token
+   * somewhere arbitrary in the embedding space, so the one passage that actually
+   * contains it can rank below three passages that merely sound related.
+   *
+   * Dense says C is best. Lexical — which can see the literal token — says A is.
+   * Fusion has to move A up without throwing the dense opinion away entirely.
+   */
+  const fused = fuseRankings(['C', 'B', 'A'], ['A', 'C', 'B']);
+  check('a passage both rankings like comes first', fused[0] === 'A' || fused[0] === 'C', fused.join(' > '));
+  check('  and the exact-token match is no longer last', fused.indexOf('A') < 2, fused.join(' > '));
+  check('  while nothing is lost', fused.length === 3 && new Set(fused).size === 3, fused.join(' > '));
+
+  // Agreement is the easy case and must stay stable.
+  check(
+    'when both rankings agree, the order is theirs',
+    fuseRankings(['X', 'Y', 'Z'], ['X', 'Y', 'Z']).join('') === 'XYZ',
+  );
+
+  // One empty list is a real state — no passage shared a word with the question
+  // — and it must degrade to the other ranking rather than to nothing.
+  check('one empty list leaves the other intact', fuseRankings(['P', 'Q'], []).join('') === 'PQ');
+  check('two empty lists are not a crash', fuseRankings([], []).length === 0);
+
+  const { lexicalScore, terms } = ragTesting;
+  check('stop words are not searched on', terms('what is the pass mark').join(',') === 'pass,mark');
+  check('  and Vietnamese ones too', terms('giá của hợp đồng là gì').join(',') === 'giá,hợp,đồng');
+  check(
+    'a passage carrying the exact token scores above one that does not',
+    lexicalScore(['ora', '01555'], 'the error ORA-01555 means a snapshot is too old') >
+      lexicalScore(['ora', '01555'], 'snapshots can become too old to read from'),
+  );
+  check(
+    'and a long passage cannot win by sheer length',
+    lexicalScore(['deposit'], 'the deposit is 10%') >
+      lexicalScore(['deposit'], `the deposit is 10%. ${'padding text. '.repeat(400)}`),
+  );
+}
+
 await store.close?.();
 removeTemp(process.env.DATA_DIR);
 console.log(

@@ -481,6 +481,16 @@ CREATE TABLE IF NOT EXISTS doc_chunks (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS doc_chunks_user_idx ON doc_chunks (user_id, source);
+
+-- The shape the search actually asks for.
+--
+-- `docVectors` filters on (user_id, model) — vectors from two embedding models
+-- are not comparable, so the model is always in the predicate — while the only
+-- index was on (user_id, source). Every search therefore scanned the account's
+-- whole row set and discarded the rows belonging to another model afterwards.
+-- Ordered by id so the paged scan below walks a stable, index-ordered cursor
+-- rather than re-sorting a heap on every page.
+CREATE INDEX IF NOT EXISTS doc_chunks_search_idx ON doc_chunks (user_id, model, id);
 CREATE UNIQUE INDEX IF NOT EXISTS doc_chunks_place_idx ON doc_chunks (user_id, path, ordinal);
 
 -- Earlier versions of a file the assistant wrote.

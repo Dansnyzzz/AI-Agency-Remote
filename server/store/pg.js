@@ -59,6 +59,18 @@ export function createPgStore(connectionString) {
       : neon(connectionString);
 
   /**
+   * Whether this database has pgvector — probed once, then remembered.
+   *
+   * Neon ships it; the in-process Postgres a laptop runs does not. Rather than
+   * branching on which store we think we are, the question is asked of the
+   * database itself, so a deployment that later gains the extension picks it up
+   * on its next cold start and one that never has it is never asked twice.
+   *
+   * `null` means "not asked yet" and is distinct from `false`.
+   */
+  let vectorReady = null;
+
+  /**
    * Bumped whenever schema.sql changes. A database already stamped with this
    * value skips the DDL entirely.
    *
@@ -1256,11 +1268,75 @@ export function createPgStore(connectionString) {
      * eight away is the difference between a search that feels instant and one
      * that does not.
      */
-    async docVectors(userId, model) {
+    /**
+     * One page of an account's vectors, walked by id.
+     *
+     * This used to be `SELECT … WHERE user_id AND model` with no bound at all,
+     * and the caller held every row it returned. The arithmetic is unforgiving:
+     * a 1536-dimension vector is 6,144 bytes, which is 8,192 characters of
+     * base64, so ten thousand chunks is ~82MB pulled over the wire and held in
+     * memory *per search*, and fifty thousand is over 400MB — past what a
+     * 1024MB serverless function survives, and the file's own comment named
+     * fifty thousand as the working ceiling.
+     *
+     * Paging by id lets the caller keep a bounded top-K and throw the rest away
+     * as it goes, so peak memory is the size of K rather than the size of the
+     * corpus. It is still a full scan — that is what an exact nearest-neighbour
+     * search is — but a full scan that streams is a different proposition from
+     * one that accumulates.
+     */
+    async docVectorPage(userId, model, { after = null, limit = 2000 } = {}) {
       return q(
-        'SELECT id, path, embedding FROM doc_chunks WHERE user_id = $1 AND model = $2',
-        [userId, model],
+        `SELECT id, path, embedding FROM doc_chunks
+          WHERE user_id = $1 AND model = $2 AND ($3::text IS NULL OR id > $3)
+          ORDER BY id
+          LIMIT $4`,
+        [userId, model, after, Math.max(1, Math.min(Number(limit) || 2000, 10_000))],
       );
+    },
+
+    /**
+     * Nearest neighbours computed by the database, where the database can.
+     *
+     * Only meaningful with pgvector installed and the companion column
+     * populated; `vectorSearchReady()` is what decides whether this is called at
+     * all. Returns null rather than throwing when the extension is absent, so
+     * the caller falls back to the streaming scan above instead of failing.
+     */
+    async docVectorNearest(userId, model, queryVector, limit = 40) {
+      try {
+        const literal = `[${Array.from(queryVector).join(',')}]`;
+        return await q(
+          `SELECT id, path, 1 - (embedding_vec <=> $3::vector) AS score
+             FROM doc_chunks
+            WHERE user_id = $1 AND model = $2 AND embedding_vec IS NOT NULL
+            ORDER BY embedding_vec <=> $3::vector
+            LIMIT $4`,
+          [userId, model, literal, Math.max(1, Math.min(Number(limit) || 40, 500))],
+        );
+      } catch {
+        // No extension, no column, or a dimension mismatch. All three mean the
+        // same thing to the caller: do it the other way.
+        return null;
+      }
+    },
+
+    /**
+     * Whether this database can answer a nearest-neighbour query itself.
+     *
+     * Probed rather than assumed, and cached for the life of the process: Neon
+     * ships pgvector and the in-process Postgres a laptop runs does not, and the
+     * same code has to be correct on both.
+     */
+    async vectorSearchReady() {
+      if (vectorReady !== null) return vectorReady;
+      try {
+        const rows = await q("SELECT 1 AS ok FROM pg_extension WHERE extname = 'vector'");
+        vectorReady = rows.length > 0;
+      } catch {
+        vectorReady = false;
+      }
+      return vectorReady;
     },
 
     async docChunks(userId, ids) {
