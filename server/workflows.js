@@ -3,6 +3,7 @@ import { getStore } from './store/index.js';
 import { getPrefs } from './settings.js';
 import { runAgent } from './agent.js';
 import { parseSchedule } from './scheduler.js';
+import { redactSecrets } from './redact.js';
 
 /**
  * Work with several steps that depend on each other, run unattended.
@@ -91,6 +92,15 @@ async function runStep({ user, chatId, modelId, instruction }) {
     text: instruction,
   });
 
+  /**
+   * Everything captured here is written to the database and read back later —
+   * by the shelf, and by `workflow_status` into the model's own context. A
+   * provider that quotes a malformed key into its error message would put that
+   * key in all three, so it is stripped on the way in rather than on the way
+   * out of any one of them.
+   */
+  const clean = (text, max) => redactSecrets(String(text ?? '')).text.slice(0, max);
+
   let error = '';
   let summary = '';
   let stopReason = '';
@@ -103,16 +113,16 @@ async function runStep({ user, chatId, modelId, instruction }) {
       chatId,
       modelId,
       emit(event, data) {
-        if (event === 'error') error = String(data?.message || 'failed').slice(0, 400);
+        if (event === 'error') error = clean(data?.message || 'failed', 400);
         else if (event === 'approval_required') awaitingApproval = true;
         else if (event === 'done') stopReason = String(data?.stopReason || '');
         else if (event === 'message' && data?.message?.role === 'assistant' && data.message.text) {
-          summary = String(data.message.text).slice(0, 2_000);
+          summary = clean(data.message.text, 2_000);
         }
       },
     });
   } catch (err) {
-    error = String(err?.message || err).slice(0, 400);
+    error = clean(err?.message || err, 400);
   }
 
   if (error) return { status: 'failed', summary, error };

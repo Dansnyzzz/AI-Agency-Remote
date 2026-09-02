@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { getStore, isServerless } from './store/index.js';
 import { getPrefs } from './settings.js';
 import { runAgent, deriveTitle } from './agent.js';
+import { redactSecrets } from './redact.js';
 
 /**
  * Work that happens without anyone watching.
@@ -195,11 +196,13 @@ async function runTask(task) {
       chatId,
       modelId: task.model || prefs.defaultModel,
       emit(event, data) {
-        if (event === 'error') status = `error: ${String(data?.message).slice(0, 200)}`;
+        // Stored in last_status and shown in the interface, so a key quoted
+        // back by a provider must not survive the trip.
+        if (event === 'error') status = `error: ${redactSecrets(String(data?.message)).text.slice(0, 200)}`;
       },
     });
   } catch (err) {
-    status = `error: ${String(err?.message).slice(0, 200)}`;
+    status = `error: ${redactSecrets(String(err?.message)).text.slice(0, 200)}`;
   }
 
   await store.finishTask(task.id, { status, chatId, nextRunAt: advance(task.cron, new Date(), task.tz) });

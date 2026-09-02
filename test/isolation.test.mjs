@@ -29,6 +29,9 @@ import { checkQuota, limitFor } from '../server/usage.js';
 import { signupOpen } from '../server/auth.js';
 import { availableTools, assessRisk, riskReason, TOOLS } from '../server/tools/definitions.js';
 import { redactSecrets } from '../server/redact.js';
+// The single place a provider failure becomes text a person reads, which is why
+// it is also the place a credential quoted back by that provider must be lost.
+import { readableFailure } from '../server/app.js';
 import { parseSchedule } from '../server/scheduler.js';
 import { DESKTOP_IMPLEMENTATIONS } from '../worker/desktop.js';
 import { BROWSER_IMPLEMENTATIONS } from '../worker/browser.js';
@@ -369,6 +372,28 @@ section('secret redaction');
   check('a GitHub token is stripped', gone('ghp_' + 'd'.repeat(36)));
   check('a Slack token is stripped', gone('xoxb-' + 'e'.repeat(30)));
   check('a JWT is stripped', gone('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27u'));
+
+  /*
+   * The shape that actually leaked, rather than a made-up one.
+   *
+   * Handed a malformed key, the provider client reports it by quoting the value
+   * back: `Headers.append: "Bearer sk-or-v1-…" is an invalid header value`. That
+   * string was emitted to the browser, written into a workflow step's error, and
+   * read back to the model by workflow_status — the key putting itself in the
+   * conversation, the database and the next prompt, all at once.
+   *
+   * redactSecrets already knew the shape. It was only ever wired to memory
+   * writes, which is the one place a secret is *expected*; this is the place it
+   * turns up by accident, which is the worse one.
+   */
+  const leaked = 'Headers.append: "Bearer sk-or-v1-' + 'f'.repeat(64) + '" is an invalid header value.';
+  check('a key quoted back inside a provider error is stripped', gone(leaked), redactSecrets(leaked).text.slice(0, 70));
+  check('  and the sentence still explains itself', /invalid header value/.test(redactSecrets(leaked).text));
+  check('  and it is reported as found, not silently edited', caught(leaked));
+
+  // The same string through the function every provider failure passes on its
+  // way to a person: emitted over SSE, stored as a step error, shown on a shelf.
+  check('readableFailure strips it too', !readableFailure(new Error(leaked)).includes('sk-or-v1-'), readableFailure(new Error(leaked)).slice(0, 70));
 
   const assigned = redactSecrets('DATABASE_PASSWORD=hunter2andmore');
   check('a named secret loses its value', !assigned.text.includes('hunter2andmore'));

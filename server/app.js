@@ -53,6 +53,7 @@ import {
 } from './scheduler.js';
 import { runDueWorkflows, runWorkflowNow, normaliseSteps } from './workflows.js';
 import { connectedServices, connect, disconnect } from './connectors.js';
+import { redactSecrets } from './redact.js';
 import { mcpStatus, probeMcpServer, sealConfig, forgetMcp } from './mcp/registry.js';
 import {
   withStorageShim,
@@ -102,8 +103,23 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * this should be able to tell in one line whether to change the model, top up
  * the account, or wait.
  */
+/**
+ * Turn a provider failure into something a person can act on — with any
+ * credential taken out of it first.
+ *
+ * The redaction is not belt-and-braces. A provider client that is handed a
+ * malformed key reports it by quoting the value back: `Headers.append: "Bearer
+ * sk-or-v1-…" is an invalid header value`. That string is emitted to the browser
+ * over SSE, stored as a step's error, and read back to the model by
+ * `workflow_status` — so one bad key would put itself in the conversation, in
+ * the database, and in the next prompt.
+ *
+ * `redactSecrets` already knew every shape that matters; it was only ever wired
+ * to memory writes, which is the one place a secret was *expected* to appear.
+ * This is the place it appears by accident, which is the worse one.
+ */
 export function readableFailure(error) {
-  let message = String(error?.message || error || 'Something went wrong.');
+  let message = redactSecrets(String(error?.message || error || 'Something went wrong.')).text;
 
   // Unwrap as many layers of encoded JSON as the providers have nested.
   for (let depth = 0; depth < 4; depth += 1) {
