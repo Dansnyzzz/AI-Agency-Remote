@@ -4,9 +4,10 @@ import { usesInProcessTools, inProcessImplementations, workerStatus } from '../l
 import { getPrefs } from '../settings.js';
 import { TOOLS_BY_NAME } from './definitions.js';
 import { CLOUD_IMPLEMENTATIONS } from './cloud.js';
-import { isMcpTool, callMcpTool } from '../mcp/registry.js';
+import { isMcpTool, callMcpTool, splitMcpName } from '../mcp/registry.js';
 import { keepStepShot } from '../attachments.js';
 import { redactSecrets } from '../redact.js';
+import { untrusted } from './untrusted.js';
 
 const POLL_MS = 400;
 const DEFAULT_LOCAL_TIMEOUT_MS = 180_000;
@@ -121,7 +122,14 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
   if (isMcpTool(name)) {
     try {
       const { text, isError } = await callMcpTool(userId, name, input || {}, Number(input?.timeout_ms) || undefined);
-      return { isError, content: text };
+      /**
+       * Wrapped, because this is code from outside the repository returning text
+       * straight into the model's context. The tool is already graded
+       * `sensitive` so a person sees the call — but they see the *call*, not
+       * what it hands back, and what it hands back is the half that could carry
+       * an instruction. See server/tools/untrusted.js.
+       */
+      return { isError, content: untrusted(`the ${splitMcpName(name)?.server || 'MCP'} server`, text) };
     } catch (err) {
       return { isError: true, content: `${name} failed: ${safeError(err) || String(err)}` };
     }

@@ -21,6 +21,8 @@
  * to "I would rather spend Tavily credits than anything else".
  */
 
+import { untrusted } from './tools/untrusted.js';
+
 const DEFAULT_ORDER = ['exa', 'duckduckgo', 'tavily', 'brave'];
 
 const TIMEOUT_MS = 30_000;
@@ -306,5 +308,8 @@ export function formatResults(query, { engine, results, attempts }) {
   // Named, because which engine answered changes how much weight a result
   // deserves — and because a silent failover looks like a quality regression.
   const failed = attempts.length ? ` after ${attempts.map((a) => a.engine).join(', ')} failed` : '';
-  return `${results.length} results from ${engine}${failed}.\n\n${lines.join('\n\n')}`;
+  // Titles and snippets are written by whoever owns the page, so they are data
+  // like any other fetched text — and a search result is a cheap thing for an
+  // attacker to get in front of a model. See server/tools/untrusted.js.
+  return `${results.length} results from ${engine}${failed}.\n\n${untrusted(`${engine} search results`, lines.join('\n\n'))}`;
 }

@@ -287,8 +287,19 @@ section('a server plugged in reaches the assistant');
     input: { message: 'through the executor' },
     chatId: null,
   });
-  check('it runs through the normal tool path', ran.content === 'echo: through the executor', ran.content);
+  check('it runs through the normal tool path', ran.content.includes('echo: through the executor'), ran.content);
   check('and is not reported as an error', !ran.isError);
+
+  /*
+   * What a server hands back is wrapped before the model reads it.
+   *
+   * The tool is already graded `sensitive`, so a person sees the *call* — but
+   * they do not see the reply, and the reply is the half that can carry an
+   * instruction. This is code from outside the repository writing straight into
+   * the model's context, which is the definition of untrusted content.
+   */
+  check('and what the server said is marked as untrusted content', /^<untrusted source="the stub_server server">/.test(ran.content), ran.content.split('\n')[0]);
+  check('  closed properly', ran.content.trim().endsWith('</untrusted>'));
 
   const failed = await executeTool({ user: mine, name: 'mcp__stub_server__explode', input: {}, chatId: null });
   check('a failing MCP tool comes back as an error', failed.isError === true, failed.content);

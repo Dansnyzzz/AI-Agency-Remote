@@ -18,6 +18,7 @@ import { searchDocs, listSources, forgetSource } from '../rag.js';
 import { createDocument, extensionOf } from '../office/index.js';
 import { saveGenerated } from '../attachments.js';
 import { search, formatResults } from '../search.js';
+import { untrusted } from './untrusted.js';
 
 const MEMORY_KEY = 'memory';
 
@@ -45,6 +46,47 @@ function htmlToText(html) {
 /** Refuse a response too large to hold in memory before reading a byte of it. */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Read a response, and stop reading at the cap.
+ *
+ * The `content-length` check above only catches a server that *says* how much it
+ * is about to send. A chunked response declares nothing, and `res.text()` will
+ * happily read gigabytes into memory before `max_chars` ever gets a chance to
+ * clip it — so the limit that exists to protect the process was skipped by
+ * precisely the responses most likely to need it. A model can be talked into
+ * fetching any URL by the page it is reading, which makes this reachable rather
+ * than theoretical.
+ *
+ * Truncating rather than throwing: most of a very long page is still a useful
+ * answer, and `web_fetch` clips its output anyway.
+ */
+async function readCapped(res, host) {
+  if (!res.body) return res.text();
+
+  const decoder = new TextDecoder('utf-8');
+  const reader = res.body.getReader();
+  let read = 0;
+  let text = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      read += value.byteLength;
+      if (read > MAX_BODY_BYTES) {
+        text += decoder.decode(value.subarray(0, value.byteLength - (read - MAX_BODY_BYTES)));
+        text += `\n\n[stopped reading — ${host} sent more than ${Math.round(MAX_BODY_BYTES / 1024 / 1024)}MB]`;
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    // Let go of the connection rather than leaving it draining in the
+    // background after we have stopped caring about it.
+    await reader.cancel().catch(() => {});
+  }
+  return text;
+}
+
 async function webFetch({ url, max_chars = 20000 }) {
   let parsed;
   try {
@@ -69,13 +111,16 @@ async function webFetch({ url, max_chars = 20000 }) {
   }
 
   const type = res.headers.get('content-type') || '';
-  const body = await res.text();
+  const body = await readCapped(res, parsed.host);
   const text = /html/i.test(type) ? htmlToText(body) : body;
   const limit = Math.min(Math.max(Number(max_chars) || 20000, 500), 200_000);
   const clipped = text.slice(0, limit);
 
   return (
-    `# ${parsed.href}\n\n${clipped}` +
+    `# ${parsed.href}\n\n` +
+    // Wrapped, because this is the single most likely place for an instruction
+    // aimed at the model to enter the conversation. See server/tools/untrusted.js.
+    untrusted(parsed.href, clipped) +
     (text.length > limit ? `\n\n[truncated — ${text.length - limit} more characters]` : '')
   );
 }
@@ -364,7 +409,7 @@ async function showWidgetTool({ title, svg, html }) {
  * can. What changes is where the text goes: into a call of its own rather than
  * into the conversation.
  */
-async function extractTool({ url, what, fields }, { userId, signal }) {
+async function extractTool({ url, what, fields }, { userId, chatId, signal }) {
   const prefs = await getPrefs(userId);
   const entry = await resolveForUser(userId, prefs.defaultModel, { vision: false });
   return extractFromPage({
@@ -374,6 +419,9 @@ async function extractTool({ url, what, fields }, { userId, signal }) {
     userId,
     entry,
     signal,
+    // So the spend lands against the conversation that caused it, the same way
+    // an ordinary turn does — this call used to be booked nowhere at all.
+    chatId,
     fetchPage: (target) => webFetch({ url: target, max_chars: 60000 }),
   });
 }
