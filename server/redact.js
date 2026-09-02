@@ -19,10 +19,29 @@ const REDACTED = '[redacted]';
  * unambiguous: nothing else looks like `sk-ant-` followed by forty characters.
  */
 const KNOWN_KEYS = [
-  /\bsk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
-  /\bsk-or-v1-[A-Za-z0-9]{32,}/g, // OpenRouter
-  /\bsk-proj-[A-Za-z0-9_-]{20,}/g, // OpenAI project keys
-  /\bsk-[A-Za-z0-9]{32,}/g, // OpenAI classic
+  /**
+   * Every `sk-` key, whatever vendor segments the provider puts in front of the
+   * random part — `sk-ant-api03-…`, `sk-or-v1-…`, `sk-orca-…`, `sk-proj-…`, and
+   * OpenAI's bare `sk-…`.
+   *
+   * This replaces four hand-written prefixes, and the reason is a hole they
+   * left. OrcaRouter was added as a provider without being added here, so its
+   * keys were redacted by nothing: the old catch-all `sk-[A-Za-z0-9]{32,}`
+   * cannot cross the hyphen in `sk-orca-`, and stops after four characters.
+   * A key that leaks is not a place to keep a list somebody has to remember to
+   * update — see the suite, which now asserts this against every provider in
+   * the catalogue rather than against a sample somebody typed.
+   *
+   * What keeps it off ordinary prose is that the tail must be **unbroken**: a
+   * key ends in a long run with no hyphens in it, while English written with
+   * hyphens does not. `sk-onboarding-checklist-for-new-people` never assembles
+   * 24 characters without hitting a hyphen, so it survives untouched.
+   *
+   * The cost of that choice is honest and small: a 24-character unhyphenated
+   * word after `sk-` would be redacted. Erring that way is the right direction
+   * here, and the suite pins the prose that must not be touched.
+   */
+  /\bsk-(?:[A-Za-z0-9]{1,12}-){0,3}[A-Za-z0-9_]{24,}/g,
   /\bAIza[A-Za-z0-9_-]{30,}/g, // Google
   /\bgh[pousr]_[A-Za-z0-9]{30,}/g, // GitHub
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack

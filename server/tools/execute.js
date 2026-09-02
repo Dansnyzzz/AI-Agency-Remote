@@ -6,9 +6,30 @@ import { TOOLS_BY_NAME } from './definitions.js';
 import { CLOUD_IMPLEMENTATIONS } from './cloud.js';
 import { isMcpTool, callMcpTool } from '../mcp/registry.js';
 import { keepStepShot } from '../attachments.js';
+import { redactSecrets } from '../redact.js';
 
 const POLL_MS = 400;
 const DEFAULT_LOCAL_TIMEOUT_MS = 180_000;
+
+/**
+ * A tool's failure, with any credential taken out of it.
+ *
+ * `readableFailure` already does this for a provider error that ends a turn,
+ * and the unattended runners do it for a step's stored error. This is the third
+ * channel and it was the one still open, because it does not look like a place
+ * a provider key could appear.
+ *
+ * It is. `web_extract` and `deep_research` call a model *inside* a tool, so a
+ * client handed a malformed key reports it by quoting the value back — and that
+ * sentence becomes this tool's result, which is worse than the other two
+ * channels rather than better. A turn's error is shown once; a tool result is
+ * streamed to the browser, written into `messages`, and then re-sent to the
+ * model on every remaining step of the turn.
+ *
+ * The same treatment covers an MCP server that echoes its own bearer token, and
+ * a worker whose shell printed an environment variable.
+ */
+const safeError = (error) => redactSecrets(String(error?.message ?? error ?? '')).text;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -51,7 +72,7 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
 
     const result = job.result || {};
     if (job.status === 'error' || result.error) {
-      return { isError: true, content: String(result.error || 'The worker reported an error.') };
+      return { isError: true, content: safeError(result.error) || 'The worker reported an error.' };
     }
 
     /**
@@ -102,7 +123,7 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
       const { text, isError } = await callMcpTool(userId, name, input || {}, Number(input?.timeout_ms) || undefined);
       return { isError, content: text };
     } catch (err) {
-      return { isError: true, content: `${name} failed: ${err?.message || String(err)}` };
+      return { isError: true, content: `${name} failed: ${safeError(err) || String(err)}` };
     }
   }
 
@@ -163,6 +184,6 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
     const timeoutMs = Math.min(Number(input?.timeout_ms) || DEFAULT_LOCAL_TIMEOUT_MS, 600_000);
     return await runViaWorker({ user, userId, name, input: input || {}, chatId, timeoutMs, signal, deviceHint });
   } catch (err) {
-    return { isError: true, content: `${name} failed: ${err?.message || String(err)}` };
+    return { isError: true, content: `${name} failed: ${safeError(err) || String(err)}` };
   }
 }

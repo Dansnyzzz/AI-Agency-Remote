@@ -29,6 +29,9 @@ import { checkQuota, limitFor } from '../server/usage.js';
 import { signupOpen } from '../server/auth.js';
 import { availableTools, assessRisk, riskReason, TOOLS } from '../server/tools/definitions.js';
 import { redactSecrets } from '../server/redact.js';
+// The catalogue is what the redaction assertions are derived from, so a new
+// provider cannot be added without its key shape being covered.
+import { PROVIDERS } from '../server/providers/catalog.js';
 // The single place a provider failure becomes text a person reads, which is why
 // it is also the place a credential quoted back by that provider must be lost.
 import { readableFailure } from '../server/app.js';
@@ -402,8 +405,35 @@ section('secret redaction');
   check('a password in a URL goes', !redactSecrets('https://bob:s3cr3t@example.com').text.includes('s3cr3t'));
   check('a bearer header goes', !redactSecrets('Authorization: Bearer abcdef1234567890').text.includes('abcdef1234567890'));
 
+  /*
+   * Every provider in the catalogue, rather than the four somebody remembered.
+   *
+   * OrcaRouter was added as a provider and never added to the redaction list,
+   * so its keys were stripped by nothing at all: the old catch-all
+   * `sk-[A-Za-z0-9]{32,}` cannot cross the hyphen in `sk-orca-` and gives up
+   * after four characters. The list looked complete the whole time, which is
+   * exactly the failure a list maintained by hand produces eventually.
+   *
+   * So the assertion is now derived from `PROVIDERS`. Adding a provider with a
+   * key shape nothing covers fails here, on the day it is added, rather than the
+   * first time one of its keys is quoted back inside an error message.
+   */
+  for (const [id, spec] of Object.entries(PROVIDERS)) {
+    const hint = String(spec?.keyHint || '');
+    const prefix = hint.replace(/[…\s].*$/, '');
+    if (!prefix || !/^[A-Za-z]/.test(prefix)) continue;
+    const sample = `${prefix}${'k9'.repeat(24)}`;
+    check(`a ${id} key (${prefix}…) is stripped`, gone(sample), redactSecrets(sample).text);
+  }
+
   check('it says what it removed', caught('sk-ant-' + 'f'.repeat(40)));
   check('ordinary prose is untouched', redactSecrets('Remember that Alice prefers CSV exports.').found.length === 0);
+  // The generic `sk-` rule has to stay off hyphenated English, or every note
+  // mentioning a branch name comes back full of [redacted].
+  check(
+    'a hyphenated phrase starting sk- is not a key',
+    redactSecrets('see docs/sk-onboarding-checklist-for-new-people').found.length === 0,
+  );
   check(
     'and is returned unchanged',
     redactSecrets('The quarterly report goes out on Fridays.').text === 'The quarterly report goes out on Fridays.',
