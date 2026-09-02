@@ -17,6 +17,24 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>AI Remote</title>
     <link rel="icon" href="/logo.png" />
+
+    <!--
+      The document language, before any module has loaded.
+
+      `lang="en"` is a lie on a Vietnamese account, and it is a lie a screen
+      reader acts on: it announces Vietnamese text with English pronunciation
+      rules, which is closer to unintelligible than to accented. i18n.js does set
+      this correctly, but only after the module graph has loaded and run, and the
+      first paint is exactly when somebody using a screen reader starts reading.
+
+      A file rather than an inline script, and not for style: the app sends
+      `script-src 'self'` with no `'unsafe-inline'`, so an inline script here
+      would be silently blocked and the bug would look unfixed. Blocking rather
+      than deferred, because the attribute has to be right before the body is
+      parsed, which is when a screen reader starts reading it. It is a few
+      hundred bytes and it is on the same connection as the page.
+    -->
+    <script src="/js/lang-boot.js"></script>
     <!--
       No web fonts.
 

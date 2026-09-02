@@ -213,11 +213,42 @@ export function markKeyLimited(userId, provider, index, untilMs) {
   const until = Number(untilMs);
   if (!Number.isFinite(until)) return;
   resting.set(restKey(userId, provider, index), until);
+  sweepIfCrowded();
 }
 
 /** This key is invalid or spent. It does not come back on a timer. */
 export function markKeyDead(userId, provider, index) {
   resting.set(restKey(userId, provider, index), Infinity);
+  sweepIfCrowded();
+}
+
+/**
+ * Give the two maps back when they get large.
+ *
+ * Both grow by one entry per (account, provider) and are never emptied. On a
+ * serverless instance that is irrelevant — the process is gone in minutes — but
+ * a self-hosted server runs for months, and on a shared one every account that
+ * ever signed in leaves something behind permanently.
+ *
+ * Only elapsed cooldowns go. A dead key is `Infinity` and stays: it is a fact
+ * about the key, not a timer, and forgetting it would put a known-bad key back
+ * into the rotation to be probed again on the next turn. The cursor is dropped
+ * alongside its provider's rest entries because it is only a hint about where to
+ * start, and rediscovering it costs one request.
+ *
+ * Called from the two places that add entries rather than on a timer: a process
+ * with nothing happening in it has nothing to sweep, and an interval would keep
+ * a quiet server awake for no reason.
+ */
+const SWEEP_ABOVE = 500;
+function sweepIfCrowded() {
+  if (resting.size < SWEEP_ABOVE) return;
+  const now = Date.now();
+  for (const [slot, until] of resting) {
+    if (until !== Infinity && until <= now) resting.delete(slot);
+  }
+  // Still crowded means the entries are genuinely live, and that is fine —
+  // this is a leak guard, not a cap on how many accounts may hold keys.
 }
 
 /** Whether this key is currently resting. An elapsed cooldown has lifted. */
