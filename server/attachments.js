@@ -319,10 +319,29 @@ export async function loadForTranscript(userId, messages, { extractText = false 
   // Newest first: the ones just sent are the ones being asked about.
   const live = ids.slice(-LIVE_ATTACHMENTS);
 
+  /**
+   * One query, not eight.
+   *
+   * This runs inside the agent's per-step loop, so the round trips multiply by
+   * every step of every turn: ten steps carrying eight files was eighty
+   * *sequential* round trips against a database reached over HTTP, which is
+   * seconds of a turn spent purely waiting. Nothing about the work required
+   * them to be sequential — they are eight independent reads by primary key.
+   *
+   * Order is restored from `live` afterwards, because `IN` does not promise to
+   * return rows in the order they were asked for, and the order here is the
+   * order the files were sent in.
+   */
+  const rows = await store.getAttachments(userId, live);
+  const byId = new Map(rows.map((row) => [row.id, row]));
+
   const loaded = new Map();
   for (const id of live) {
-    const row = await store.getAttachment(userId, id);
+    const row = byId.get(id);
     if (!row) continue;
+    // Still sequential, and deliberately: this is CPU-bound parsing of a whole
+    // document, and running eight of those at once on a small instance trades a
+    // latency win for a memory spike.
     if (row.kind === 'office' || (extractText && row.kind === 'document')) {
       row.text = await readDocument(row);
     }

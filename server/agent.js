@@ -6,6 +6,7 @@ import { streamCompletion } from './providers/index.js';
 import { resolve as resolveModelId } from './models.js';
 import { isAuto, pickAutoModel } from './autoPick.js';
 import { availableTools, assessRisk, riskReason } from './tools/definitions.js';
+import { UNTRUSTED_RULE } from './tools/untrusted.js';
 import { executeTool } from './tools/execute.js';
 import { normalisePlan, PLAN_MIN_STEPS } from './tools/cloud.js';
 import { workerStatus } from './localTools.js';
@@ -268,6 +269,15 @@ function buildSystemPrompt({ workerOnline, worker, policy, extra, skills, connec
     );
   }
 
+  /**
+   * The boundary between what you were told and what you read.
+   *
+   * Placed before the user's own instructions and before the project, so that
+   * everything after it is read in its light — and stated once, in the stable
+   * part of the prompt, so it is cached rather than repeated per tool result.
+   */
+  lines.push('', UNTRUSTED_RULE);
+
   if (extra?.trim()) lines.push('', '## User instructions', extra.trim());
 
   // Last, and deliberately: a project's sources are what this particular
@@ -314,6 +324,39 @@ function withAttachments(messages, loaded, entry) {
  * immediately. So new user turns are lifted out and re-inserted after the
  * results, which is also when the model can actually act on them.
  */
+/**
+ * Attach a project's selected passages to the question they were selected for.
+ *
+ * They used to live at the end of the system prompt, and that is what killed
+ * prompt caching for every project conversation. `selectSources` picks passages
+ * by the *current* question, so the system block changed every turn — and since
+ * caching is a prefix match over tools, then system, then messages, a system
+ * block that changes invalidates the entire transcript behind it as well. The
+ * cache breakpoints were there; nothing could ever hit them.
+ *
+ * Here instead, on the last user turn — the one they were chosen to answer, and
+ * the one place they can change freely without disturbing anything cached in
+ * front of them. The model reads the same words; only the position moved.
+ *
+ * Non-destructive: the array is rebuilt and the stored message is never touched,
+ * because this is a wire detail and writing it into the transcript would send it
+ * again next turn, in the wrong place, with the wrong passages.
+ */
+export function withProjectSources(messages, passages) {
+  if (!passages?.trim()) return messages;
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role !== 'user') continue;
+    const copy = [...messages];
+    copy[i] = {
+      ...messages[i],
+      text: `${passages}\n\n---\n\n${messages[i].text || ''}`,
+    };
+    return copy;
+  }
+  return messages;
+}
+
 export function normaliseOrder(messages) {
   const out = [];
   let i = 0;
@@ -362,9 +405,46 @@ export function needsApproval(toolCalls, policy) {
   });
 }
 
+/**
+ * How many tool calls may be in flight at once.
+ *
+ * There was no ceiling: every call the model made in one turn started at the
+ * same instant. That is fine for three `web_fetch`es and genuinely dangerous for
+ * fifteen `run_command`s, which is fifteen shells starting together on somebody
+ * else's laptop — and there is no backpressure anywhere else in the chain to
+ * catch it. Parallelism is still most of why a turn feels fast, so this is a
+ * limit rather than a queue: four is comfortably more than a model asks for in
+ * the ordinary case, and it holds the pathological one to something a machine
+ * can survive.
+ */
+const MAX_PARALLEL_TOOLS = 4;
+
+/**
+ * Run every call, at most `MAX_PARALLEL_TOOLS` at a time, and return the results
+ * in the order they were requested.
+ *
+ * Order matters more than it looks: a tool result has to line up with the call
+ * it answers, and every provider rejects a batch where they do not.
+ */
+async function mapWithLimit(items, limit, worker) {
+  const out = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      out[i] = await worker(items[i], i);
+    }
+  });
+  await Promise.all(runners);
+  return out;
+}
+
 async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint }) {
-  const results = await Promise.all(
-    toolCalls.map(async (call) => {
+  const results = await mapWithLimit(
+    toolCalls,
+    MAX_PARALLEL_TOOLS,
+    async (call) => {
       const started = Date.now();
       emit('tool_call', { id: call.id, name: call.name, input: call.input });
       const { content, isError, file, widget, shot } = await executeTool({
@@ -405,7 +485,7 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint 
         if (steps.length >= PLAN_MIN_STEPS) emit('plan', { steps });
       }
       return result;
-    }),
+    },
   );
   return { id: newId(), role: 'tool', results };
 }
@@ -538,7 +618,10 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     extra: prefs.systemPrompt,
     skills,
     connectors: connectors.summary,
-    project: project?.text,
+    // The briefing only — stable across the whole conversation, so the cached
+    // prefix stays cached. The passages this question selected travel in the
+    // conversation instead; see `withProjectSources`.
+    project: project?.briefing,
     mcpServers: mcp.servers,
   });
   const tools = availableTools({
@@ -640,7 +723,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     if (prefs.autoCompact !== false && shouldCompact(messages, entry)) {
       emit('status', { phase: 'compacting' });
       try {
-        const summary = await compact({ userId, chatId, entry, prefs, messages });
+        const summary = await compact({ userId, chatId, entry, prefs, messages, signal });
         if (summary) {
           messages.push(summary);
           emit('compacted', { replaced: summary.replaced, text: summary.text });
@@ -678,7 +761,13 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
         // `activeTranscript` is what makes a folded conversation smaller: the
         // page still holds every turn, and only the summary plus what followed
         // it is sent.
-        messages: withAttachments(activeTranscript(normaliseOrder(messages)), loaded, entry),
+        messages: withAttachments(
+          // The project's passages ride on the question they were chosen for,
+          // rather than in the cached system block that they used to invalidate.
+          withProjectSources(activeTranscript(normaliseOrder(messages)), project?.passages),
+          loaded,
+          entry,
+        ),
         tools,
         effort: prefs.effort,
         signal,
@@ -717,7 +806,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       if (cost != null) totals.cost += cost;
       // Recorded per model call rather than per turn, so the usage page can
       // break spending down by model.
-      await recordUsage(userId, { chatId, model: entry.id, usage: done.usage, costUsd: cost || 0 });
+      await recordUsage(userId, { chatId, model: entry.id, usage: done.usage, costUsd: cost || 0, role: 'turn' });
     }
     assistant.model = entry.id;
 
@@ -767,4 +856,4 @@ export function deriveTitle(text) {
 }
 
 /** Exposed for the suite that pins how a restart is folded into a turn. */
-export const __testing = { applyStreamEvent };
+export const __testing = { applyStreamEvent, mapWithLimit, MAX_PARALLEL_TOOLS };

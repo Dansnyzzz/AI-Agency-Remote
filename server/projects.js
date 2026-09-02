@@ -305,7 +305,7 @@ export function renderProject({ project, sources, whole, truncated, names }) {
       '## Sources',
       'This project has no sources yet. Say so if the user asks about a document, rather than answering as though you had read one.',
     );
-    return lines.join('\n');
+    return { briefing: lines.join('\n'), passages: '' };
   }
 
   lines.push(
@@ -333,18 +333,50 @@ export function renderProject({ project, sources, whole, truncated, names }) {
     );
   }
 
-  if (!whole || truncated) {
-    lines.push(
-      '',
-      `Some sources are too long to include whole, so what follows is the parts that match this question, with \`[…]\` where text was left out. If the answer looks like it lies in a gap, say so — do not read across a \`[…]\` as though it were continuous.`,
+  /**
+   * The passages come back separately from the briefing above, and that split is
+   * worth a paragraph because it is worth real money.
+   *
+   * Everything above this line is the same on every turn of a conversation: the
+   * project's name, its instructions, the list of files, the grounding rules.
+   * Everything below is chosen by `selectSources` from *this* question, so it
+   * differs every turn.
+   *
+   * They used to be one string, and that string went into the system prompt —
+   * the one block carrying a cache breakpoint. Prompt caching is a prefix match
+   * over tools, then system, then messages, so a system block that changes every
+   * turn does not merely fail to cache itself: it invalidates the transcript
+   * behind it too. Every project conversation was paying full price for its
+   * entire prefix on every step of every turn.
+   *
+   * Keeping the briefing stable and moving the passages into the conversation
+   * puts the cache back to work, and costs nothing in quality — the model reads
+   * the same words either way.
+   */
+  const passages = [];
+
+  /**
+   * The truncation warning belongs here, with the passages it describes.
+   *
+   * It lived in the briefing and was the last thing keeping that block from
+   * being identical between turns: whether the shelf fits whole depends on the
+   * question asked, so a short question and a long one produced two different
+   * "stable" prefixes and neither could ever be a cache hit. It reads better
+   * here anyway — it is a note about the text immediately below it.
+   */
+  if (sources.length && (!whole || truncated)) {
+    passages.push(
+      'Some sources are too long to include whole, so what follows is the parts that match this ' +
+        'question, with `[…]` where text was left out. If the answer looks like it lies in a gap, ' +
+        'say so — do not read across a `[…]` as though it were continuous.',
     );
   }
 
   for (const source of sources) {
-    lines.push('', `### ${source.name}`, source.text);
+    passages.push('', `### ${source.name}`, source.text);
   }
 
-  return lines.join('\n');
+  return { briefing: lines.join('\n'), passages: passages.join('\n').trim() };
 }
 
 /**
@@ -366,9 +398,6 @@ export async function projectPrompt(userId, chat, question) {
     ? selectSources(files, question)
     : { whole: true, truncated: false, sources: [] };
 
-  return {
-    project,
-    text: renderProject({ project, names, ...picked }),
-    fileCount: files.length,
-  };
+  const { briefing, passages } = renderProject({ project, names, ...picked });
+  return { project, briefing, passages, fileCount: files.length };
 }

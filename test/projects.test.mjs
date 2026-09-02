@@ -153,27 +153,68 @@ section('what actually reaches the prompt');
   check('with the cuts marked', picked.sources[0].text.includes('[…]'));
   check('and it respects the budget', picked.sources[0].text.length < 1400, `${picked.sources[0].text.length}`);
 
-  const prompt = renderProject({
+  const { briefing, passages } = renderProject({
     project: { name: 'Exam', instructions: 'Answer in Vietnamese.', grounded: true },
     names: files.map((f) => f.name),
     ...small,
   });
-  check('the project is named', /# Project: Exam/.test(prompt));
-  check('its instructions are carried', /Answer in Vietnamese\./.test(prompt));
-  check('the sources are listed by name', /rules\.md, syllabus\.md/.test(prompt));
-  check('the text itself is there', /pass mark is 5\.0/.test(prompt));
+  check('the project is named', /# Project: Exam/.test(briefing));
+  check('its instructions are carried', /Answer in Vietnamese\./.test(briefing));
+  check('the sources are listed by name', /rules\.md, syllabus\.md/.test(briefing));
+  check('the text itself is there', /pass mark is 5\.0/.test(passages));
 
   // The four rules that make grounding mean something.
-  check('claims must name their file', /name the file it came from/.test(prompt));
-  check('not covered is a correct answer', /do not cover/.test(prompt));
-  check('gaps must not be filled from memory', /Do not fill gaps from general knowledge/.test(prompt));
-  check('disagreement is reported, not resolved silently', /If two sources disagree/.test(prompt));
+  check('claims must name their file', /name the file it came from/.test(briefing));
+  check('not covered is a correct answer', /do not cover/.test(briefing));
+  check('gaps must not be filled from memory', /Do not fill gaps from general knowledge/.test(briefing));
+  check('disagreement is reported, not resolved silently', /If two sources disagree/.test(briefing));
+
+  /*
+   * The split, which is the whole reason this returns two strings.
+   *
+   * The briefing is identical on every turn of a conversation; the passages are
+   * chosen from the question being asked. They used to be one string in the
+   * system prompt, which carries the cache breakpoint — so the cached prefix
+   * changed every turn, and because caching is a prefix match over tools, then
+   * system, then messages, it took the whole transcript's cache with it. Every
+   * project conversation paid full price for its entire prefix, on every step.
+   *
+   * Pinning it here because it is invisible: nothing about the output looks
+   * wrong when the passages leak back into the briefing, it just silently costs
+   * several times more.
+   */
+  check('the question-selected text is NOT in the briefing', !/pass mark is 5\.0/.test(briefing));
+  check('  which is what keeps the cached prefix identical between turns', !/### /.test(briefing));
+
+  /*
+   * Two different questions over the same shelf, including one short enough to
+   * fit whole and one that has to be searched — which is the case that caught
+   * the last invalidator. The "some sources are too long" note used to sit in
+   * the briefing, so whether the shelf happened to fit changed the supposedly
+   * stable prefix and no turn could ever be a cache hit.
+   */
+  const sameShelf = (question, budget) =>
+    renderProject({
+      project: { name: 'Exam', instructions: 'Answer in Vietnamese.', grounded: true },
+      names: files.map((f) => f.name),
+      ...selectSources(long, question, budget),
+    }).briefing;
+
+  check(
+    'a different question produces the same briefing byte for byte',
+    sameShelf('what is the pass mark', 800) === sameShelf('something else entirely', 800),
+    'if this ever differs, prompt caching is dead for every project chat',
+  );
+  check(
+    '  and so does one that fits the shelf whole',
+    sameShelf('what is the pass mark', 800) === sameShelf('what is the pass mark', 500_000),
+  );
 
   const loose = renderProject({
     project: { name: 'Exam', instructions: '', grounded: false },
     names: ['rules.md'],
     ...small,
-  });
+  }).briefing;
   check('the unrestricted mode says so instead', /general knowledge as well/.test(loose));
   check('and still asks for filenames', /name the file/.test(loose));
 
@@ -184,7 +225,42 @@ section('what actually reaches the prompt');
     whole: true,
     truncated: false,
   });
-  check('a project with no sources admits it', /no sources yet/.test(empty), empty.slice(-90));
+  check('a project with no sources admits it', /no sources yet/.test(empty.briefing), empty.briefing.slice(-90));
+  check('  and has no passages to carry', empty.passages === '');
+}
+
+// ── the passages ride on the question, not on the system prompt ─────
+section('project sources attach to the turn that selected them');
+{
+  const { withProjectSources } = await import('../server/agent.js');
+
+  const transcript = [
+    { id: 'm1', role: 'user', text: 'first question' },
+    { id: 'm2', role: 'assistant', text: 'an answer' },
+    { id: 'm3', role: 'user', text: 'what is the pass mark' },
+  ];
+  const out = withProjectSources(transcript, '### rules.md\nThe pass mark is 5.0');
+
+  check('the sources land on the last user turn', /pass mark is 5\.0/.test(out[2].text));
+  check('  along with what was actually asked', /what is the pass mark/.test(out[2].text));
+  check('earlier turns are untouched', out[0].text === 'first question' && out[1].text === 'an answer');
+  check(
+    'and the stored message is not mutated',
+    transcript[2].text === 'what is the pass mark',
+    'this is a wire detail — writing it into the transcript would resend it next turn with stale passages',
+  );
+  check('nothing to attach means nothing changes', withProjectSources(transcript, '') === transcript);
+
+  // A turn that ends in a tool result still has a user message further back, and
+  // that is where the question lives.
+  const midRun = [
+    { id: 'm1', role: 'user', text: 'the question' },
+    { id: 'm2', role: 'assistant', text: '', toolCalls: [{ id: 't', name: 'x', input: {} }] },
+    { id: 'm3', role: 'tool', results: [{ toolCallId: 't', name: 'x', content: 'ok' }] },
+  ];
+  const resumed = withProjectSources(midRun, '### rules.md\nbody');
+  check('mid-run, it still finds the question', /body/.test(resumed[0].text));
+  check('  and leaves the tool result alone', resumed[2] === midRun[2]);
 }
 
 section('a conversation inherits its project');
