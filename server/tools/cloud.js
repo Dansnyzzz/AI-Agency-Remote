@@ -19,6 +19,8 @@ import { createDocument, extensionOf } from '../office/index.js';
 import { saveGenerated } from '../attachments.js';
 import { search, formatResults } from '../search.js';
 import { untrusted } from './untrusted.js';
+// Only to tell a real tool name from one the model invented — see loadToolsTool.
+import { TOOLS_BY_NAME } from './definitions.js';
 
 const MEMORY_KEY = 'memory';
 
@@ -421,6 +423,40 @@ async function extractTool({ url, what, fields }, { userId, chatId, signal }) {
     chatId,
     fetchPage: (target) => webFetch({ url: target, max_chars: 60000 }),
   });
+}
+
+/**
+ * Hand the model tools it did not start the turn with.
+ *
+ * The work is done by the loop, not here: `runToolCalls` sees this call go
+ * through and adds the names to the set that `availableTools` is rebuilt from,
+ * so the schemas travel in the *next* request. No provider allows adding tools
+ * to a request already in flight, and none needs to.
+ *
+ * What this returns is therefore only the acknowledgement — but it has to be an
+ * honest one. A name that is not deferrable, or not a tool at all, is reported
+ * rather than silently accepted, because the alternative is a model that
+ * believes it now has something it will never be given and plans around it.
+ */
+async function loadToolsTool({ names }) {
+  const asked = (Array.isArray(names) ? names : []).map((n) => String(n || '').trim()).filter(Boolean);
+  if (!asked.length) throw new Error('Give the `names` of the tools to load.');
+
+  const known = asked.filter((n) => TOOLS_BY_NAME[n]);
+  const unknown = asked.filter((n) => !TOOLS_BY_NAME[n]);
+
+  if (!known.length) {
+    return (
+      `None of those are tools: ${unknown.join(', ')}. ` +
+      'Use the names exactly as they appear in the list on this tool, or carry on with what you have.'
+    );
+  }
+
+  return (
+    `Loaded ${known.join(', ')} — you will have ${known.length === 1 ? 'it' : 'them'} from your next step onward, ` +
+    'so make that call then rather than now.' +
+    (unknown.length ? ` (Not tools, and ignored: ${unknown.join(', ')}.)` : '')
+  );
 }
 
 async function calculateTool({ expression }) {
@@ -935,6 +971,7 @@ export const CLOUD_IMPLEMENTATIONS = {
   read_generated_file: readGeneratedFileTool,
   file_versions: fileVersionsTool,
   web_fetch: webFetch,
+  load_tools: loadToolsTool,
   web_search: webSearch,
   show_widget: showWidgetTool,
   chart: chartTool,

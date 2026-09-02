@@ -523,12 +523,24 @@ section('the tool catalogue is cut to fit a small window');
 
   check('a crowded window gets shorter descriptions', cost(tight) < cost(roomy), `${cost(tight)} vs ${cost(roomy)}`);
   check('a tiny one drops the secondary tools too', tiny.length < tight.length, `${tiny.length} vs ${tight.length}`);
+  /*
+   * `create_file` used to be on this list and is deliberately no longer: writing
+   * a document is a real job and a rare one, so it is deferred and loaded on
+   * request. The tools here are the ones a turn needs *immediately* — an extra
+   * round trip before reading a file would be absurd. test/toolbudget.test.mjs
+   * pins which side of that line every tool falls on.
+   */
   check(
     'but never the core loop',
-    ['read_file', 'write_file', 'run_command', 'web_search', 'create_file', 'update_plan'].every((n) =>
+    ['read_file', 'write_file', 'run_command', 'web_search', 'update_plan'].every((n) =>
       tiny.some((t) => t.name === n),
     ),
     tiny.map((t) => t.name).join(' '),
+  );
+  check(
+    'and a deferred tool is offered rather than lost',
+    tiny.some((t) => t.name === 'load_tools'),
+    'the model can still ask for anything held back',
   );
   check('an unknown window is not treated as no room', cost(availableTools({ ...base })) === cost(roomy));
 

@@ -21,11 +21,27 @@ const check = (l, ok, d = '') => {
   if (!ok) failures += 1;
 };
 
-const { availableTools, __testing } = await import('../server/tools/definitions.js');
+const { availableTools, TOOLS, __testing } = await import('../server/tools/definitions.js');
 const { estimateTokens } = __testing;
 
+/**
+ * The whole catalogue, with nothing held back.
+ *
+ * `activated` naming every tool is how deferral is switched off for a
+ * measurement: what these sections are about is *trimming* — shortening
+ * descriptions and dropping optional tools to fit a window — and deferral is a
+ * separate mechanism that would otherwise change the numbers underneath them.
+ * The section at the bottom tests deferral on its own terms.
+ */
+const everything = new Set(TOOLS.map((t) => t.name));
 const all = (context, workerOnline = true) =>
-  availableTools({ workerOnline, desktopOnline: workerOnline, policy: 'auto', context });
+  availableTools({
+    workerOnline,
+    desktopOnline: workerOnline,
+    policy: 'auto',
+    context,
+    activated: everything,
+  });
 const full = (t) => t.description.length;
 
 section('a catalogue that fits comfortably is left alone');
@@ -65,8 +81,8 @@ section('the decision is by share, not by absolute window size');
 {
   // The bug this replaces: the same catalogue was trimmed or not depending only
   // on the window, so a small catalogue in a mid-size window was cut for nothing.
-  const small = availableTools({ workerOnline: false, desktopOnline: false, policy: 'auto', context: 65_000 });
-  const smallUntrimmed = availableTools({ workerOnline: false, desktopOnline: false, policy: 'auto', context: 0 });
+  const small = availableTools({ workerOnline: false, desktopOnline: false, policy: 'auto', context: 65_000, activated: everything });
+  const smallUntrimmed = availableTools({ workerOnline: false, desktopOnline: false, policy: 'auto', context: 0, activated: everything });
   check(
     'a small catalogue in a 65k window keeps its guidance',
     small.map(full).join() === smallUntrimmed.map(full).join(),
@@ -75,13 +91,74 @@ section('the decision is by share, not by absolute window size');
 
   // The same window, but with a paired computer the catalogue is far larger —
   // now it does need cutting.
-  const large = availableTools({ workerOnline: true, desktopOnline: true, policy: 'auto', context: 65_000 });
+  const large = availableTools({ workerOnline: true, desktopOnline: true, policy: 'auto', context: 65_000, activated: everything });
   const largeUntrimmed = availableTools({ workerOnline: true, desktopOnline: true, policy: 'auto', context: 0 });
   check(
     'the same window with a full catalogue does get cut',
     estimateTokens(large) < estimateTokens(largeUntrimmed),
     `${estimateTokens(large)} < ${estimateTokens(largeUntrimmed)}`,
   );
+}
+
+// ── the rarely-used half is described, not sent ─────────────────────
+section('tools a turn probably will not use are deferred');
+{
+  const opts = {
+    workerOnline: true,
+    desktopOnline: true,
+    policy: 'guarded',
+    connected: ['slack', 'github', 'notion', 'telegram', 'meta'],
+    providers: ['google', 'openai'],
+  };
+  const loaded = availableTools({ ...opts, context: 200_000, activated: everything });
+  const deferred = availableTools({ ...opts, context: 200_000, activated: new Set() });
+
+  const saved = estimateTokens(loaded) - estimateTokens(deferred);
+  check(
+    'a 200k window sends far fewer tokens of schema',
+    saved > 4000,
+    `${estimateTokens(loaded)} → ${estimateTokens(deferred)} tok, saved ${saved}`,
+  );
+
+  const names = new Set(deferred.map((t) => t.name));
+  check('the meta-tool is offered instead', names.has('load_tools'));
+  check('  and it names what is missing', /- chart:/.test(deferred.find((t) => t.name === 'load_tools').description));
+
+  /*
+   * The line between the two halves is the whole design. A turn that needs to
+   * read a file, run a command, drive the browser or search needs it now — an
+   * extra round trip to be handed `read_file` would be absurd. Writing a
+   * spreadsheet or posting to Slack is a different kind of act.
+   */
+  for (const core of ['read_file', 'write_file', 'run_command', 'web_search', 'web_fetch', 'browser_look', 'search_docs', 'update_plan']) {
+    check(`${core} is never deferred`, names.has(core));
+  }
+  for (const rare of ['chart', 'create_file', 'slack_post', 'deep_research', 'desktop_click', 'schedule_task']) {
+    check(`${rare} waits to be asked for`, !names.has(rare));
+  }
+
+  // Asking for one brings it back, and only it.
+  const after = availableTools({ ...opts, context: 200_000, activated: new Set(['chart']) });
+  const afterNames = new Set(after.map((t) => t.name));
+  check('activating a tool loads it', afterNames.has('chart'));
+  check('  without loading its neighbours', !afterNames.has('create_file'));
+
+  /*
+   * Above a certain window the catalogue is genuinely noise and the extra round
+   * trip would cost more than the schemas do. The threshold is a share for that
+   * reason, not an absolute.
+   */
+  const roomy = availableTools({ ...opts, context: 1_000_000, activated: new Set() });
+  check(
+    'a very large window keeps everything to hand',
+    !roomy.some((t) => t.name === 'load_tools') && roomy.some((t) => t.name === 'chart'),
+    `${estimateTokens(roomy)} tok of 1M`,
+  );
+
+  // A sub-agent gets one short read-only job; a round trip to load a tool would
+  // be a large fraction of its entire life.
+  const sub = availableTools({ ...opts, context: 200_000, activated: new Set(), subagent: true, policy: 'readonly' });
+  check('a sub-agent is exempt', !sub.some((t) => t.name === 'load_tools'));
 }
 
 console.log(

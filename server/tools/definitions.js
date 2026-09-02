@@ -157,6 +157,37 @@ export const TOOLS = [
     },
   },
   {
+    /**
+     * Declared here even though `availableTools` builds the copy the model
+     * actually sees.
+     *
+     * `hidden: true` keeps it out of the ordinary catalogue — it is offered only
+     * when something is being withheld, and its description has to name what
+     * that is, which is not knowable at declaration time. But it is a real tool
+     * with a real implementation, and the suite asserts that every implemented
+     * tool is declared. Synthesising it out of thin air would have quietly
+     * broken that invariant, which exists to catch exactly this.
+     */
+    name: 'load_tools',
+    scope: 'cloud',
+    hidden: true,
+    readOnly: true,
+    description:
+      'Load extra tools you do not currently have. The list of what is available is filled in when ' +
+      'this is offered, which is only when something is being withheld.',
+    parameters: {
+      type: 'object',
+      properties: {
+        names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'The tool names to load, exactly as listed.',
+        },
+      },
+      required: ['names'],
+    },
+  },
+  {
     name: 'fs_search',
     scope: 'local',
     hidden: true,
@@ -2026,6 +2057,92 @@ function firstSentence(text) {
  * @param extra          tools from outside this file — MCP servers — already in
  *                       the same shape
  */
+/**
+ * Tools the model can ask for rather than being handed.
+ *
+ * The whole catalogue is re-sent on every request of every step — 92 tools,
+ * about 12,400 tokens — so its size is not paid once per turn but once per step
+ * for the life of the conversation. On a twenty-step job that is a quarter of a
+ * million tokens spent describing things the model was never going to use.
+ *
+ * These are the ones a given turn usually does not need: writing an Office
+ * document, drawing a chart, driving a desktop, posting to a connector,
+ * defining a workflow. They are named here rather than flagged on each tool so
+ * the decision is auditable in one place — and so it is obvious that the
+ * everyday ones are *not* on the list. Reading files, running commands, driving
+ * the browser sandbox, searching the web and the user's own documents all stay
+ * loaded, because a turn that needs them needs them immediately.
+ *
+ * Deferred does not mean hidden: `load_tools` lists every one of them by name
+ * and first sentence, which costs a fraction of their schemas, and the model
+ * activates what it wants for the rest of the turn.
+ */
+const DEFERRABLE = new Set([
+  // Making documents and pictures — real jobs, and rare ones.
+  'create_file', 'edit_file', 'update_file', 'file_versions', 'read_generated_file',
+  'chart', 'show_widget', 'calculate', 'generate_image', 'edit_image', 'export_pdf',
+  // Somebody else's screen.
+  'desktop_look', 'desktop_click', 'desktop_type', 'desktop_key', 'desktop_scroll',
+  'desktop_windows', 'desktop_launch', 'desktop_focus', 'desktop_close', 'desktop_wait',
+  // Reaching out of the conversation, where a mistake is visible to other people.
+  'send_email', 'slack_post', 'telegram_send', 'meta_page_post',
+  'github', 'github_write', 'notion_search',
+  // Standing machinery: defined once and then left alone for weeks.
+  'workflow_write', 'workflow_status', 'skill_write', 'skill_read',
+  'schedule_task', 'list_tasks', 'cancel_task',
+  // Composite fan-outs. Expensive to run and never the first thing tried.
+  'deep_research', 'run_parallel',
+  // Indexing and its housekeeping. Searching stays loaded; building the index
+  // is a deliberate act somebody asks for by name.
+  'index_folder', 'list_indexed', 'forget_docs',
+]);
+
+/**
+ * Above this share of the window, the deferrable tools are described rather
+ * than sent.
+ *
+ * Low on purpose. The saving is per step and the cost is one extra model call,
+ * paid only in the turns that genuinely reach for a deferred tool — so on a
+ * twenty-step job the arithmetic is heavily one-sided. It is a share rather than
+ * an absolute so that a model with a very large window, where the catalogue is
+ * genuinely noise-level, keeps everything to hand.
+ */
+const DEFER_ABOVE_SHARE = 0.05;
+
+/**
+ * The meta-tool, with its index filled in.
+ *
+ * Built from the declaration in TOOLS rather than from nothing, so the name,
+ * scope and parameters have exactly one definition — see the note on the
+ * declaration for why it is `hidden` there.
+ */
+function loadToolsTool(deferred) {
+  const index = deferred
+    .map((t) => `- ${t.name}: ${firstSentence(t.description)}`)
+    .join('\n');
+  return {
+    ...TOOLS_BY_NAME.load_tools,
+    hidden: false,
+    description:
+      'Load extra tools you do not currently have. These exist but their full descriptions are ' +
+      'withheld to keep the prompt small; ask for the ones you need and they are available from ' +
+      'your next step onward. Available to load:\n' +
+      `${index}\n` +
+      'Ask for every one you will need in a single call — each call costs a step.',
+    parameters: {
+      type: 'object',
+      properties: {
+        names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'The tool names to load, exactly as listed above.',
+        },
+      },
+      required: ['names'],
+    },
+  };
+}
+
 export function availableTools({
   workerOnline,
   desktopOnline,
@@ -2035,6 +2152,12 @@ export function availableTools({
   context,
   extra = [],
   subagent = false,
+  /**
+   * Names the model has asked for this turn. The agent loop keeps the set and
+   * recomputes this list each step, which is what makes activation work on every
+   * provider rather than only the one with a native mechanism for it.
+   */
+  activated = null,
 }) {
   // Planning is reading with a different brief: the model still needs to look
   // at everything, and `update_plan` is read-only, so the same filter serves.
@@ -2074,6 +2197,28 @@ export function availableTools({
    *
    * Zero is "nobody said", not "no room": an unknown window is left alone.
    */
+  /**
+   * Hold back the tools this turn probably will not use.
+   *
+   * Done before the description-trimming below, and it is the bigger lever:
+   * trimming shortens sentences, this removes whole schemas. A sub-agent is
+   * exempt — it gets one short read-only job and an extra round trip to load a
+   * tool would be a large fraction of its whole life.
+   */
+  if (window && !subagent) {
+    const held = offered.filter((t) => DEFERRABLE.has(t.name) && !activated?.has(t.name));
+    if (held.length && estimateTokens(offered) > window * DEFER_ABOVE_SHARE) {
+      const kept = offered.filter((t) => !held.includes(t));
+      kept.push(loadToolsTool(held));
+      return trimToFit(kept, window);
+    }
+  }
+
+  return trimToFit(offered, window);
+}
+
+/** Cut descriptions, then optional tools, until the catalogue fits the window. */
+function trimToFit(offered, window) {
   if (!window) return offered;
   if (estimateTokens(offered) <= window * TRIM_ABOVE_SHARE) return offered;
 
