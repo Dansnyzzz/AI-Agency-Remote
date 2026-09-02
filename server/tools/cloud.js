@@ -64,25 +64,22 @@ async function readCapped(res, host) {
   if (!res.body) return res.text();
 
   const decoder = new TextDecoder('utf-8');
-  const reader = res.body.getReader();
   let read = 0;
   let text = '';
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      read += value.byteLength;
+    for await (const chunk of res.body) {
+      read += chunk.length;
       if (read > MAX_BODY_BYTES) {
-        text += decoder.decode(value.subarray(0, value.byteLength - (read - MAX_BODY_BYTES)));
+        text += decoder.decode(chunk.subarray(0, chunk.length - (read - MAX_BODY_BYTES)));
         text += `\n\n[stopped reading — ${host} sent more than ${Math.round(MAX_BODY_BYTES / 1024 / 1024)}MB]`;
         break;
       }
-      text += decoder.decode(value, { stream: true });
+      text += decoder.decode(chunk, { stream: true });
     }
   } finally {
     // Let go of the connection rather than leaving it draining in the
     // background after we have stopped caring about it.
-    await reader.cancel().catch(() => {});
+    res.body.destroy?.();
   }
   return text;
 }

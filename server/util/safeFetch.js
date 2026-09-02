@@ -1,5 +1,7 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import http from 'node:http';
+import https from 'node:https';
 
 /**
  * Fetching a URL the model chose, without handing it the inside of the network.
@@ -61,7 +63,7 @@ export async function assertPublic(url) {
   if (!/^https?:$/.test(url.protocol)) {
     throw new Error(`Only http and https URLs can be fetched — "${url.protocol}" is not one.`);
   }
-  if (/^(1|true|yes)$/i.test(process.env.ALLOW_PRIVATE_FETCH || '')) return;
+  if (/^(1|true|yes)$/i.test(process.env.ALLOW_PRIVATE_FETCH || '')) return null;
 
   const host = url.hostname.replace(/^\[|\]$/g, '');
 
@@ -70,7 +72,7 @@ export async function assertPublic(url) {
     if (isPrivateAddress(host)) {
       throw new Error(`${host} is a private address. This tool only reaches the public internet.`);
     }
-    return;
+    return null;
   }
 
   let records;
@@ -90,10 +92,108 @@ export async function assertPublic(url) {
       );
     }
   }
+
+  /**
+   * The verified answer goes back to the caller, and that is the point.
+   *
+   * Checking a name and then handing the *name* to something that resolves it
+   * again is a time-of-check/time-of-use gap, and it is the standard way past a
+   * guard like this one: a record with a one-second TTL answers with a public
+   * address for the check and `169.254.169.254` for the connection a moment
+   * later. Every careful thing above — reading all the records, re-checking each
+   * redirect — rested on a second lookup nobody controlled.
+   *
+   * So the connection is pinned to what was actually verified. See `safeFetch`.
+   */
+  return records;
 }
 
 /**
- * `fetch`, with every hop checked.
+ * One request, to an address that has already been checked.
+ *
+ * `node:https` rather than `fetch`, and the reason is the `lookup` option. Node's
+ * `fetch` gives no way to say which address to connect to, so a verified name is
+ * handed back to a resolver that answers again, independently — which is the
+ * gap this whole module exists to close. `http.request` passes `lookup` down to
+ * the socket, so the connection goes to the address that was actually checked.
+ *
+ * The URL is still what is passed in, so TLS SNI and the `Host` header are the
+ * hostname rather than the IP: connecting by address alone would break every
+ * virtual-hosted site and every certificate.
+ *
+ * The response is shaped like a `fetch` response in the four ways this codebase
+ * uses one — `ok`, `status`, `statusText`, `headers.get()` — plus `text()` and a
+ * `body` that is the Node stream, which both callers already iterate.
+ */
+function request(url, init, records) {
+  const client = url.protocol === 'https:' ? https : http;
+
+  const options = {
+    method: init.method || 'GET',
+    headers: init.headers instanceof Headers ? Object.fromEntries(init.headers) : init.headers,
+    signal: init.signal,
+    /**
+     * No connection pooling.
+     *
+     * Node's global agent keeps sockets alive, and a caller that gives up on a
+     * response without draining it — `if (!res.ok) throw`, which both callers do
+     * — leaves one held open with the event loop still awake. A short script
+     * simply never exits; a long-lived server accumulates them.
+     *
+     * There is a second reason, and it is the one that matters here: a pooled
+     * socket outlives the check that approved it. This module's whole promise is
+     * that a connection goes to an address that was verified for *this* request,
+     * and reusing a socket from an earlier one quietly reintroduces exactly the
+     * gap the pinning above closes.
+     */
+    agent: false,
+  };
+
+  /**
+   * Pin the socket to a verified address.
+   *
+   * `records` is null when there was nothing to resolve — a literal IP, already
+   * checked — or when ALLOW_PRIVATE_FETCH is on, in which case pinning would be
+   * fighting the setting.
+   */
+  if (records?.length) {
+    const [{ address, family }] = records;
+    options.lookup = (hostname, opts, cb) => {
+      if (opts?.all) return cb(null, [{ address, family }]);
+      return cb(null, address, family);
+    };
+  }
+
+  return new Promise((resolve, reject) => {
+    const req = client.request(url, options, (res) => {
+      resolve({
+        ok: res.statusCode >= 200 && res.statusCode < 300,
+        status: res.statusCode,
+        statusText: res.statusMessage || '',
+        headers: {
+          get: (name) => {
+            const value = res.headers[String(name).toLowerCase()];
+            return value == null ? null : String(Array.isArray(value) ? value.join(', ') : value);
+          },
+        },
+        body: res,
+        async text() {
+          let out = '';
+          res.setEncoding('utf8');
+          for await (const chunk of res) out += chunk;
+          return out;
+        },
+      });
+    });
+    req.on('error', reject);
+    if (init.body != null) req.write(init.body);
+    req.end();
+  });
+}
+
+/**
+ * `fetch`, with every hop checked — and connected to the address that was
+ * checked, rather than to whatever a second lookup says a moment later.
  *
  * Redirects are followed by hand rather than by the runtime, which is the only
  * way to inspect each destination before connecting to it.
@@ -102,13 +202,15 @@ export async function safeFetch(input, init = {}) {
   let url = input instanceof URL ? input : new URL(String(input));
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    await assertPublic(url);
+    const records = await assertPublic(url);
 
-    const res = await fetch(url, { ...init, redirect: 'manual' });
+    const res = await request(url, init, records);
     if (![301, 302, 303, 307, 308].includes(res.status)) return res;
 
     const location = res.headers.get('location');
     if (!location) return res;
+    // Nothing reads a redirect's body, and leaving it unread holds the socket.
+    res.body.resume();
     const next = new URL(location, url);
 
     // Credentials must not survive a cross-origin hop, and a body must not be

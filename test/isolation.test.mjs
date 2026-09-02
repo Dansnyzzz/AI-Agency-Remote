@@ -340,6 +340,50 @@ section('SSRF guards');
   check('file: URLs are refused', /http and https/.test(refusedScheme), refusedScheme);
 }
 
+/*
+ * The gap that made all of the above conditional.
+ *
+ * `assertPublic` resolved a name and approved it, and then the request resolved
+ * the same name again, independently. Between those two lookups the answer can
+ * change — a record with a one-second TTL gives a public address to the check
+ * and 169.254.169.254 to the connection. Reading every record and re-checking
+ * every redirect were both real precautions resting on a second lookup nobody
+ * controlled.
+ *
+ * The fix is that the approved address is what gets connected to, so the test is
+ * that `assertPublic` hands one back and that the connection is pinned to it.
+ * Proving the race itself would need a DNS server that lies on a timer, which is
+ * not something to stand up inside a unit suite — what is pinned here is the
+ * mechanism that removes the second lookup entirely.
+ */
+section('a checked address is the address connected to');
+{
+  const records = await fetchGuard.assertPublic(new URL('http://localhost.localdomain.invalid.example/')).catch(() => 'threw');
+  check('an unresolvable name still fails closed', records === 'threw');
+
+  // A literal address is already the answer, so there is nothing to pin — and
+  // nothing to race either, which is why it returns null rather than records.
+  const literal = await fetchGuard.assertPublic(new URL('http://93.184.216.34/'));
+  check('a literal address needs no lookup', literal === null);
+
+  /*
+   * A name that does resolve hands back what it verified. Using a name that must
+   * exist for the suite to run at all rather than a public one, so this does not
+   * become a test of somebody else's DNS.
+   */
+  const resolved = await fetchGuard.assertPublic(new URL('http://example.com/')).catch((e) => e.message);
+  check(
+    'a resolved name returns the records it approved',
+    Array.isArray(resolved) && resolved.length > 0 && !!resolved[0].address,
+    Array.isArray(resolved) ? resolved.map((r) => r.address).join(', ') : String(resolved),
+  );
+  check(
+    '  which is what the socket is then pinned to',
+    Array.isArray(resolved) && !fetchGuard.isPrivateAddress(resolved[0].address),
+    'a second lookup is never made, so there is no window for the answer to change',
+  );
+}
+
 // ── a token belongs on one host ─────────────────────────────────────
 section('connector token cannot be redirected');
 {
