@@ -67,17 +67,23 @@ function parseClaims(text) {
 /**
  * @returns { claims: [{text, conflicting}], transcript: [{role, text}] }
  */
-export async function runDebate({ question, findings, ledger, userId, entry, stream, budget, rounds = 2, signal }) {
+export async function runDebate({
+  question, findings, ledger, userId, entry, stream, budget, rounds = 2, signal, chatId = null,
+}) {
   const transcript = [];
   const evidence = evidenceBlock(question, findings, ledger);
   const overBudget = () => budget && budget.cap && budget.spent >= budget.cap;
 
-  let draft = await askModel({ userId, entry, system: PROPOSER, prompt: evidence, stream, budget, signal });
+  let draft = await askModel({
+    userId, entry, system: PROPOSER, prompt: evidence, stream, budget, signal,
+    chatId, role: 'research.propose',
+  });
   transcript.push({ role: 'proposer', text: draft });
 
   for (let round = 0; round < rounds && !overBudget(); round += 1) {
     const critique = await askModel({
       userId, entry, system: CRITIC, prompt: `${evidence}\n\nDraft:\n${draft}`, stream, budget, signal,
+      chatId, role: 'research.critique',
     });
     transcript.push({ role: 'critic', text: critique });
 
@@ -89,12 +95,14 @@ export async function runDebate({ question, findings, ledger, userId, entry, str
 
     draft = await askModel({
       userId, entry, system: PROPOSER_REVISE, prompt: `${evidence}\n\nYour draft:\n${draft}\n\nCritic:\n${critique}`, stream, budget, signal,
+      chatId, role: 'research.revise',
     });
     transcript.push({ role: 'proposer', text: draft });
   }
 
   const verdict = await askModel({
     userId, entry, system: ARBITER, prompt: `${evidence}\n\nDraft:\n${draft}`, stream, budget, signal,
+    chatId, role: 'research.arbitrate',
   });
   transcript.push({ role: 'arbiter', text: verdict });
 

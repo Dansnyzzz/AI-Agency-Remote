@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS usage_events (
 );
 CREATE INDEX IF NOT EXISTS usage_events_user_time_idx ON usage_events (user_id, created_at DESC);
 
+-- Tokens served from the provider's prompt cache, which are billed at about a
+-- tenth of the input rate. They were being folded into input_tokens and then
+-- priced at the full rate, so a well-cached agentic conversation reported a
+-- cost several times what it actually was. Kept as a column of its own rather
+-- than netted off, because the ratio against input_tokens *is* the cache hit
+-- rate, and there was previously nowhere to read that at all.
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+
+-- Which part of the system spent this: the conversation turn itself, a
+-- sub-agent fan-out, a compaction, a research role, a page extraction. Without
+-- it, spend that never went through the agent loop was invisible on the usage
+-- page and, worse, uncounted against a shared key's monthly limit.
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'turn';
+
 -- Per-user preferences and encrypted provider keys.
 CREATE TABLE IF NOT EXISTS user_settings (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

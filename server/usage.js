@@ -47,20 +47,46 @@ export async function checkQuota(user, { usingSharedKey, store = getStore() }) {
   return { allowed: true, used: tokens, limit };
 }
 
-export async function record(userId, { chatId, model, usage, costUsd }) {
+/**
+ * Book what a model call cost, whoever made it.
+ *
+ * `role` is the field that closes a real hole. This function had exactly two
+ * callers — the agent loop and the sub-agent fan-out — so compaction, every
+ * role of a deep_research run, and `web_extract`'s page reader all spent tokens
+ * that appeared nowhere. On a deployment sharing one key that is not merely a
+ * reporting gap: `checkQuota` enforces the monthly limit against the total in
+ * this table, so an account could run research all day and never approach a cap
+ * it was, on paper, subject to.
+ *
+ * Anything that calls a model passes its own role now, and the usage page can
+ * finally say where the money went.
+ */
+export async function record(userId, { chatId, model, usage, costUsd, role = 'turn' }) {
   if (!usage) return;
   await getStore().recordUsage(userId, {
     id: crypto.randomUUID(),
     chatId,
     model,
+    role,
     inputTokens: usage.input || 0,
     outputTokens: usage.output || 0,
+    // A subset of inputTokens, not an addition to it — see estimateCost. Held
+    // separately because the ratio between the two is the cache hit rate, which
+    // there was previously no way to read at all.
+    cacheReadTokens: usage.cacheRead || 0,
     costUsd: costUsd || 0,
   });
 }
 
 export async function summary(userId) {
   const store = getStore();
-  const [month, byModel] = await Promise.all([store.usageThisMonth(userId), store.usageByModel(userId, 30)]);
-  return { month, byModel };
+  const [month, byModel, byRole] = await Promise.all([
+    store.usageThisMonth(userId),
+    store.usageByModel(userId, 30),
+    store.usageByRole(userId, 30),
+  ]);
+  // Cached input as a share of all input, which is the number to watch when
+  // tuning what goes in the cached prefix and what does not.
+  const cacheHitRate = month.tokens > 0 ? (month.cacheRead || 0) / month.tokens : 0;
+  return { month: { ...month, cacheHitRate }, byModel, byRole };
 }

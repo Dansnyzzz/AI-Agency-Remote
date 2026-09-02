@@ -187,6 +187,7 @@ export async function runParallel({
       model: entry.id,
       usage,
       costUsd: estimateCost(entry, usage) || 0,
+      role: 'subagent',
     });
   }
 

@@ -14,7 +14,10 @@ export const CATALOG = [
     model: 'claude-opus-5',
     label: 'Claude Opus 5',
     context: 1_000_000,
-    maxOutput: 64_000,
+    // 128k is what the model actually allows, and the adapter streams, which is
+    // the condition attached to asking for an output that large. At 64_000 a
+    // long report was being cut off half way for no reason but this line.
+    maxOutput: 128_000,
     thinking: true,
     price: { in: 5, out: 25 },
     tags: ['flagship', 'agentic'],
@@ -25,9 +28,13 @@ export const CATALOG = [
     model: 'claude-sonnet-5',
     label: 'Claude Sonnet 5',
     context: 1_000_000,
-    maxOutput: 64_000,
+    maxOutput: 128_000,
     thinking: true,
-    price: { in: 3, out: 15 },
+    // $3/$15 was Sonnet 4.6's price, carried over by mistake — every Sonnet 5
+    // estimate read 50% high. Checked against platform.claude.com/docs pricing
+    // on 2026-09-02, which also records that the increase to $3/$15 once
+    // scheduled for 2026-09-01 was cancelled and $2/$10 is now the standard.
+    price: { in: 2, out: 10 },
     tags: ['balanced'],
   },
   {
@@ -241,9 +248,46 @@ export function resolveModel(id, sharedRow = null) {
   throw new Error(`Unknown model "${id}". Pick one from the model browser.`);
 }
 
+/**
+ * What a cached prompt token costs, as a multiple of the ordinary input rate.
+ *
+ * Anthropic's published ratios, and the same shape everywhere else that bills
+ * for caching at all. Reading from the cache is the whole reason to write to it:
+ * a tenth of the price, against a quarter more paid once to put it there.
+ */
+const CACHE_READ_RATE = 0.1;
+const CACHE_WRITE_RATE = 1.25;
+// Both are per-model in principle — Fable 5.1 and Mythos 5.1 read at 0.025x —
+// so an entry may say so. Nothing in this catalogue does yet; the override
+// exists so that adding one of them is a data change rather than a code change.
+const cacheRates = (entry) => ({
+  read: Number.isFinite(entry?.cacheRead) ? entry.cacheRead : CACHE_READ_RATE,
+  write: Number.isFinite(entry?.cacheWrite) ? entry.cacheWrite : CACHE_WRITE_RATE,
+});
+
+/**
+ * Price a turn, taking cached prompt tokens at the rate they were actually
+ * billed at.
+ *
+ * `usage.input` is the whole prompt — the gauge needs that — and `cacheRead` /
+ * `cacheWrite` are subsets of it. Charging the full input rate for all three,
+ * which is what this did before, overstates a well-cached agentic conversation
+ * by close to ten times on the cached portion. That is not a rounding error on a
+ * page whose only job is to tell somebody what they are spending.
+ *
+ * Defensive about the arithmetic: a provider that reports a cached count larger
+ * than the prompt it belongs to must not produce a negative bill.
+ */
 export function estimateCost(entry, usage) {
   if (!entry?.price || !usage) return null;
-  const input = (usage.input || 0) / 1e6 * entry.price.in;
+
+  const total = usage.input || 0;
+  const read = Math.min(usage.cacheRead || 0, total);
+  const written = Math.min(usage.cacheWrite || 0, Math.max(0, total - read));
+  const fresh = Math.max(0, total - read - written);
+
+  const rate = cacheRates(entry);
+  const input = (fresh + read * rate.read + written * rate.write) / 1e6 * entry.price.in;
   const output = (usage.output || 0) / 1e6 * entry.price.out;
   return input + output;
 }

@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { getStore } from './store/index.js';
 import { streamCompletion } from './providers/index.js';
+import { estimateCost } from './providers/catalog.js';
+import { record as recordUsage } from './usage.js';
 
 /**
  * Keeping a long conversation inside the model's window.
@@ -188,7 +190,7 @@ const SYSTEM = [
  * @returns the summary message that was appended, or null when there was
  *   nothing worth folding.
  */
-export async function compact({ userId, chatId, entry, prefs, messages, stream = streamCompletion }) {
+export async function compact({ userId, chatId, entry, prefs, messages, signal, stream = streamCompletion }) {
   const store = getStore();
   const live = activeTranscript(messages);
   const start = tailStart(live);
@@ -214,6 +216,7 @@ export async function compact({ userId, chatId, entry, prefs, messages, stream =
   if (!transcript.trim()) return null;
 
   let summary = '';
+  let spent = null;
   for await (const ev of stream({
     userId,
     entry,
@@ -223,9 +226,30 @@ export async function compact({ userId, chatId, entry, prefs, messages, stream =
     // commands is a summariser that has misunderstood the assignment.
     tools: [],
     effort: prefs?.effort === 'low' ? 'low' : 'medium',
-    signal: undefined,
+    // Cancellable. Somebody pressing stop means the whole turn, and a
+    // compaction is the one call in it that can run for a while on a long
+    // transcript — carrying on with it after the stop spends money on a
+    // summary that nobody is waiting for.
+    signal,
   })) {
     if (ev.type === 'text') summary += ev.delta;
+    else if (ev.type === 'done' && ev.usage) spent = ev.usage;
+  }
+
+  /**
+   * Book it. Folding a conversation up is a full model call over the whole
+   * transcript — routinely the largest single prompt the account sends — and it
+   * was recorded nowhere. On a deployment sharing one key that made the monthly
+   * limit enforceable only against the visible half of the spend.
+   */
+  if (spent) {
+    await recordUsage(userId, {
+      chatId,
+      model: entry.id,
+      usage: spent,
+      costUsd: estimateCost(entry, spent) || 0,
+      role: 'compaction',
+    }).catch(() => {});
   }
 
   summary = summary.trim();

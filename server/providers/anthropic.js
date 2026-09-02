@@ -179,11 +179,25 @@ export async function* streamAnthropic({
     stopReason: final.stop_reason,
     toolCalls,
     raw: { anthropic: final.content },
+    /**
+     * `input` stays the **whole** prompt, cached parts included, because that is
+     * what the context gauge and the compaction trigger read: how much of the
+     * window this turn actually occupied. Netting the cache off here would make
+     * a long conversation look like it had room it does not have.
+     *
+     * The two cached figures ride alongside as subsets of it, so pricing can
+     * take them at their real rates — a cache read costs about a tenth of an
+     * input token and a cache write about a quarter more. They used to be summed
+     * into `input` and left there, and `estimateCost` then charged the full rate
+     * for all of it: on a well-cached agentic conversation the usage page
+     * reported several times what the turn had really cost.
+     */
     usage: {
       input: (final.usage?.input_tokens || 0) + (final.usage?.cache_read_input_tokens || 0) +
         (final.usage?.cache_creation_input_tokens || 0),
       output: final.usage?.output_tokens || 0,
       cacheRead: final.usage?.cache_read_input_tokens || 0,
+      cacheWrite: final.usage?.cache_creation_input_tokens || 0,
     },
   };
 }

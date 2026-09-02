@@ -447,11 +447,25 @@ section('output budget follows the model');
     String(outputBudget(gpt4)),
   );
 
-  // Built-ins carry their own figure and must be untouched by any of this. Opus
-  // says 64000 and was being cut to 32000, so long documents were truncated.
+  /*
+   * Built-ins carry their own figure and must be untouched by any of this.
+   *
+   * The number moved once already — Opus was being cut to a flat 32000, so long
+   * documents were truncated — and it has moved again for the same reason. The
+   * catalogue said 64000 where the model allows 128000, and `outputBudget`
+   * faithfully clamped a long report to half of what could have been written.
+   * The condition attached to asking for an output that large is streaming, and
+   * the adapter streams.
+   */
   check(
-    'Claude Opus keeps its full 64000 rather than the old flat 32000',
-    outputBudget(resolveModel('anthropic/claude-opus-5')) === 64_000,
+    'Claude Opus is offered the full 128000 the model allows',
+    outputBudget(resolveModel('anthropic/claude-opus-5')) === 128_000,
+    String(outputBudget(resolveModel('anthropic/claude-opus-5'))),
+  );
+  check(
+    'and so is Sonnet 5',
+    outputBudget(resolveModel('anthropic/claude-sonnet-5')) === 128_000,
+    String(outputBudget(resolveModel('anthropic/claude-sonnet-5'))),
   );
   check('a model with no context at all still gets a usable number', outputBudget({}) === 32_000);
 }
@@ -704,6 +718,46 @@ section('the model is told both when to plan and when not to');
     /three or more/.test(firstSentence),
     firstSentence,
   );
+}
+
+// ── tool calls do not all start at once ─────────────────────────────
+section('parallel tool calls have a ceiling');
+{
+  const { __testing: agentTesting } = await import('../server/agent.js');
+  const { mapWithLimit, MAX_PARALLEL_TOOLS } = agentTesting;
+
+  /*
+   * There was no ceiling: every call the model made in one turn started at the
+   * same instant. Three `web_fetch`es is fine; fifteen `run_command`s is fifteen
+   * shells starting together on somebody's laptop, and nothing else in the chain
+   * pushes back.
+   */
+  let inFlight = 0;
+  let peak = 0;
+  const order = await mapWithLimit([...Array(12).keys()], MAX_PARALLEL_TOOLS, async (n) => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 5));
+    inFlight -= 1;
+    return n * 2;
+  });
+
+  check('never more than the limit are in flight', peak <= MAX_PARALLEL_TOOLS, `peak ${peak}`);
+  check('and it does use the parallelism it is allowed', peak > 1, `peak ${peak}`);
+
+  /*
+   * Order is not cosmetic here. A tool result has to line up with the call it
+   * answers, and every provider rejects a batch where they do not — so a
+   * limiter that returned results in completion order would break every
+   * parallel tool call in the app.
+   */
+  check(
+    'results come back in the order they were requested',
+    order.join(',') === [...Array(12).keys()].map((n) => n * 2).join(','),
+    order.join(','),
+  );
+
+  check('an empty list is not a deadlock', (await mapWithLimit([], 4, async () => 1)).length === 0);
 }
 
 fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });

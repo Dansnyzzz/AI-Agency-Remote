@@ -48,7 +48,7 @@ export async function runDeepResearch({ question, userId, user, chatId, signal, 
 
   const overBudget = () => budget.spent >= budget.cap;
 
-  const queries = await planQuestions(question, { userId, entry, stream, budget, signal });
+  const queries = await planQuestions(question, { userId, entry, stream, budget, signal, chatId });
   const { ledger, findings } = await gatherEvidence(queries, search ? { search } : {});
 
   let claims = [];
@@ -56,7 +56,9 @@ export async function runDeepResearch({ question, userId, user, chatId, signal, 
   // Only debate if the budget has not already gone and there is something to
   // reason over; with no evidence there is nothing honest to synthesise.
   if (!overBudget()) {
-    ({ claims, transcript } = await runDebate({ question, findings, ledger, userId, entry, stream, budget, signal }));
+    ({ claims, transcript } = await runDebate({
+      question, findings, ledger, userId, entry, stream, budget, signal, chatId,
+    }));
   }
 
   const status = overBudget() ? 'budget' : 'complete';

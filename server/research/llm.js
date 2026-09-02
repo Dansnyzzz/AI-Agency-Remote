@@ -1,4 +1,6 @@
 import { streamCompletion } from '../providers/index.js';
+import { estimateCost } from '../providers/catalog.js';
+import { record as recordUsage } from '../usage.js';
 
 /**
  * One model call for a research role, its output collected to a string and its
@@ -14,20 +16,64 @@ import { streamCompletion } from '../providers/index.js';
  * `budget.spent` is the running token total the orchestrator checks against
  * `budget.cap`; `tokensIn`/`tokensOut` accumulate for the audit record.
  */
-export async function askModel({ userId, entry, system, prompt, stream = streamCompletion, budget, signal }) {
+/**
+ * @param role     which part of the pipeline this is — `research.plan`,
+ *   `research.debate`, `web_extract`. It reaches the usage ledger, so the page
+ *   can say where the tokens went instead of showing a hole.
+ * @param effort   `high` suits the roles that reason; the ones that only
+ *   reformat somebody else's JSON do not need to think about it, and paying for
+ *   deep thinking on those is pure waste. Callers say which they are.
+ */
+export async function askModel({
+  userId,
+  entry,
+  system,
+  prompt,
+  stream = streamCompletion,
+  budget,
+  signal,
+  chatId = null,
+  role = 'research',
+  effort = 'high',
+}) {
   const messages = [{ id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, role: 'user', text: prompt }];
   let text = '';
+  let spent = null;
 
-  for await (const ev of stream({ userId, entry, system, messages, effort: 'high', signal })) {
+  for await (const ev of stream({ userId, entry, system, messages, effort, signal })) {
     if (ev.type === 'text') text += ev.delta ?? '';
-    else if (ev.type === 'done' && ev.usage && budget) {
-      const inTok = ev.usage.input || 0;
-      const outTok = ev.usage.output || 0;
-      budget.spent += inTok + outTok;
-      budget.tokensIn = (budget.tokensIn || 0) + inTok;
-      budget.tokensOut = (budget.tokensOut || 0) + outTok;
+    else if (ev.type === 'done' && ev.usage) {
+      spent = ev.usage;
+      if (budget) {
+        const inTok = ev.usage.input || 0;
+        const outTok = ev.usage.output || 0;
+        budget.spent += inTok + outTok;
+        budget.tokensIn = (budget.tokensIn || 0) + inTok;
+        budget.tokensOut = (budget.tokensOut || 0) + outTok;
+      }
     }
   }
+
+  /**
+   * Book it against the account.
+   *
+   * The run budget above is a *safety stop* for one research run — it stops a
+   * debate that will not settle from spending a fortune — and it was being
+   * mistaken for accounting. It is not: it lives for the length of one call and
+   * is written nowhere the quota can see it. A run capped at 250,000 tokens
+   * booked zero against a shared key's monthly limit, and `web_extract` passed
+   * no budget at all, so its reading was counted in neither place.
+   */
+  if (spent && userId) {
+    await recordUsage(userId, {
+      chatId,
+      model: entry?.id,
+      usage: spent,
+      costUsd: estimateCost(entry, spent) || 0,
+      role,
+    }).catch(() => {});
+  }
+
   return text.trim();
 }
 
