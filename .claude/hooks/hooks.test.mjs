@@ -190,6 +190,9 @@ check('verify-stop.js', stop('All tests pass now.'), BLOCK, 'the same claim in E
 check('verify-stop.js', stop('Here is how server/agent.js dispatches tools.'), ALLOW, 'an ordinary answer is never blocked', gateEnv);
 check('verify-stop.js', stop('Chưa xong — còn phải chạy test.'), ALLOW, 'an honest "not done yet" is not a claim', gateEnv);
 check('verify-stop.js', stop('Not done — the suite has not run.'), ALLOW, 'nor is it in English', gateEnv);
+check('verify-stop.js', stop('Done.'), BLOCK, 'a bare "Done." is a claim like any other', gateEnv);
+check('verify-stop.js', stop('Not done yet.'), ALLOW, 'but "not done yet" still is not', gateEnv);
+check('verify-stop.js', stop('When done, run the gate and tell me.'), ALLOW, 'nor is the word inside a sentence', gateEnv);
 check(
   'verify-stop.js',
   stop('Đã xong hết.', { stop_hook_active: true }),
@@ -219,6 +222,27 @@ check('verify-stop.js', stop('Hoàn thành, gate xanh.'), ALLOW, 'a current full
 
 writeLedger({ pending: [], lastGreen: { at: '2026-09-01T00:00:00Z', head: 'deadbeef', dirty: 'deadbeef', scope: 'full' } });
 check('verify-stop.js', stop('Hoàn thành.'), BLOCK, 'a stamp from another commit has expired', gateEnv);
+{
+  // Three situations, three sentences. The first version said "0 file(s)
+  // changed — the working tree" for the case below, which is neither the
+  // number nor the reason: nothing had changed, the stamp had merely stopped
+  // matching HEAD. A guard that misdescribes what it found is one people skim.
+  const run = check(
+    'verify-stop.js',
+    stop('Xong rồi.'),
+    BLOCK,
+    'an expired stamp says so, rather than inventing a changed file',
+    gateEnv,
+  );
+  is(/no longer matches this tree/.test(run.stderr || ''), '  and names the real reason', run.stderr);
+  is(!/0 file/.test(run.stderr || ''), '  without claiming zero files changed');
+}
+
+writeLedger(unproven);
+{
+  const run = check('verify-stop.js', stop('Done.'), BLOCK, 'a real pending file is named instead', gateEnv);
+  is(/server[\\/]agent\.js/.test(run.stderr || ''), '  by name', run.stderr);
+}
 
 /* ---------------------------------------------------------------------------
  * Context preservation.

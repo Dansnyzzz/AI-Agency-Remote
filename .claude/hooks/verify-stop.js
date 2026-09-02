@@ -38,6 +38,11 @@ const CLAIMS = [
   /\b(all|the)?\s*tests?\s+(now\s+)?(pass|passed|passing|are\s+green)\b/i,
   /\ball\s+green\b/i,
   /\b(it'?s|that'?s|this\s+is|work\s+is|now)\s+(done|complete|finished)\b/i,
+  // A line that is only "Done." — the commonest way of saying it in English,
+  // and the Vietnamese half of this list already caught the bare "xong".
+  // Anchored to a whole line so "not done yet" and "when done, run the gate"
+  // are left alone.
+  /(^|\n)\s*(all\s+)?done[.!]*\s*(\n|$)/i,
   /\b(implementation|change|feature|fix|task)\s+is\s+(done|complete|finished)\b/i,
   /\bready\s+to\s+(merge|ship|deploy|review)\b/i,
   /\bverified\b/i,
@@ -97,7 +102,26 @@ if (!unproven || state.verified) pass();
 const names = state.pending.map((p) => p.file);
 const shown = names.slice(0, 6).join(', ');
 const more = names.length > 6 ? ` and ${names.length - 6} more` : '';
-const changed = names.length ? `${shown}${more}` : 'the working tree';
+
+/**
+ * Say which of the three reasons this actually is.
+ *
+ * The first version said "0 file(s) changed with no green gate since — the
+ * working tree" after a commit, which is both confusing and untrue: nothing had
+ * changed, the stamp had simply stopped matching HEAD. A guard that describes
+ * the situation wrongly is one people learn to skim.
+ *
+ * A commit does invalidate the stamp, deliberately. The alternative is
+ * fingerprinting the bytes on disk independently of git, and every cheap way of
+ * doing that either touches the index or costs a full tree walk on every Stop.
+ * Re-proving after a commit is the conservative side to err on, so long as it
+ * says so plainly rather than inventing a changed file.
+ */
+const reason = names.length
+  ? `Unproven: ${shown}${more}`
+  : state.fastOnly
+    ? 'The last stamp was the fast gate — lint and hooks only, not the 24 suites.'
+    : 'The last green run no longer matches this tree — there has been a commit or an edit since.';
 
 if (claimsCompletion(payload.last_assistant_message)) {
   const who =
@@ -107,8 +131,8 @@ if (claimsCompletion(payload.last_assistant_message)) {
     `Blocked by .claude/hooks/verify-stop.js\n\n` +
       `${who} says the work is finished, but the gate has not run against what is ` +
       `on disk now.\n\n` +
-      `Unproven: ${changed}\n` +
-      (state.fastOnly
+      `${reason}\n` +
+      (names.length && state.fastOnly
         ? `The last stamp was the fast gate — lint and hooks only, not the 24 suites.\n`
         : '') +
       `\nRun \`npm run gate\` and let it finish, then say what it actually reported ` +
@@ -121,6 +145,5 @@ if (claimsCompletion(payload.last_assistant_message)) {
 // get out of the way.
 context(
   event,
-  `Ledger: ${names.length} file(s) changed with no green gate since — ${changed}. ` +
-    `Run \`npm run gate\` before describing this work as finished.`,
+  `Ledger: ${reason} Run \`npm run gate\` before describing this work as finished.`,
 );
