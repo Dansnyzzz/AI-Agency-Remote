@@ -295,6 +295,16 @@ export function buildSystemPrompt({ workerOnline, worker, policy, extra, skills,
 const newId = () => crypto.randomUUID();
 
 /**
+ * How long the provider may say nothing before the interface says so.
+ *
+ * Long enough that an ordinary fast reply never shows it — a model that answers
+ * in two seconds should not be narrated — and short enough to arrive well before
+ * somebody decides the app is broken and reloads the page, which is the thing
+ * this exists to prevent.
+ */
+const WAIT_NOTICE_MS = 6000;
+
+/**
  * Attach the resolved file parts to the messages that carry them.
  *
  * The provider adapters read `m.parts`; nothing else in the loop knows or cares.
@@ -779,6 +789,38 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     const assistant = { id: newId(), role: 'assistant', text: '', thinking: '', toolCalls: [] };
     let done = null;
 
+    /**
+     * Say when the provider has not started answering yet.
+     *
+     * "Thinking…" was shown from the moment the request left, and it stayed
+     * there whether the model was producing reasoning tokens or had not yet been
+     * given a slot. Those look identical to somebody watching and they need
+     * different reactions: one is working, the other is a queue you may not want
+     * to wait in.
+     *
+     * They are not rare, either. A free model on a busy aggregator can sit
+     * unanswered for a minute, and a rate limit puts this loop into a wait of up
+     * to another minute on top — with the interface saying the same reassuring
+     * word throughout. That is the difference between "it is slow" and "it is
+     * broken" and the app was refusing to tell anybody which.
+     *
+     * Once the first token of anything arrives this stops for good: a model that
+     * has started and then pauses mid-sentence is thinking, and interrupting
+     * that with a progress notice would be noise.
+     */
+    let started = false;
+    const waitedFrom = Date.now();
+    const waiting = setInterval(() => {
+      if (started) return;
+      emit('status', {
+        phase: 'waiting',
+        seconds: Math.round((Date.now() - waitedFrom) / 1000),
+        model: entry.label,
+        free: entry.price?.in === 0,
+      });
+    }, WAIT_NOTICE_MS);
+    waiting.unref?.();
+
     try {
       // Attachment bytes are fetched here rather than carried in the transcript:
       // a conversation is re-read on every step, and dragging megabytes of
@@ -812,6 +854,11 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
         effort: prefs.effort,
         signal,
       })) {
+        // Anything at all counts as having started — a reasoning token, a tool
+        // call, a notice that a key was refused. What is being timed is the
+        // silence before the provider says its first word, not the silence
+        // before it says something the interface happens to draw.
+        started = true;
         if (ev.type === 'text' || ev.type === 'retry') {
           applyStreamEvent(ev, assistant, emit);
         } else if (ev.type === 'thinking') {
@@ -834,6 +881,10 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
         return;
       }
       throw err;
+    } finally {
+      // In a `finally` rather than after the loop: a turn that throws, or one
+      // the user stops, must not leave a timer narrating a wait that ended.
+      clearInterval(waiting);
     }
 
     assistant.toolCalls = done?.toolCalls || [];
@@ -896,4 +947,10 @@ export function deriveTitle(text) {
 }
 
 /** Exposed for the suite that pins how a restart is folded into a turn. */
-export const __testing = { applyStreamEvent, mapWithLimit, MAX_PARALLEL_TOOLS };
+/**
+ * Any event from the provider ends the wait — see the timer in the step loop.
+ * Named so the suite can assert the rule rather than the timer.
+ */
+const countsAsStarted = (event) => !!event?.type;
+
+export const __testing = { applyStreamEvent, mapWithLimit, MAX_PARALLEL_TOOLS, WAIT_NOTICE_MS, countsAsStarted };

@@ -43,6 +43,15 @@ export const en = {
   'composer.stopped': 'Stopped.',
   // Shown in the tab that is watching rather than driving — see mirror.js.
   'mirror.watching': 'Running in another tab — watching…',
+  /* What the assistant is doing, in the line above the composer. */
+  'status.thinking': 'Thinking…',
+  'status.compacting': 'Summarising the earlier turns…',
+  'status.tool': 'Running {name}…',
+  // Not the same thing as thinking, and the difference is the point: the
+  // provider has not started answering. The count moves, because a number that
+  // moves is what separates waiting from wondering.
+  'status.waiting': 'Waiting for {model} to start — {n}s',
+  'status.waitingFree': 'Waiting for {model} — free models queue when busy ({n}s). Switch model if this drags.',
   // The checklist drawn inside a message by `update_plan`, and the count beside
   // the same steps in the progress rail.
   'chat.plan': 'Plan',

@@ -733,6 +733,44 @@ section('the model is told both when to plan and when not to');
   );
 }
 
+// ── a provider that has not answered says so ────────────────────────
+section('waiting is told apart from thinking');
+{
+  const { __testing: agentTesting } = await import('../server/agent.js');
+
+  /*
+   * "Thinking…" was shown from the moment the request left, and stayed there
+   * whether the model was producing reasoning tokens or had not been given a
+   * slot. Those look identical and need different reactions: one is working,
+   * the other is a queue you may not want to wait in. A free model on a busy
+   * aggregator sits unanswered for a minute often enough that the silence reads
+   * as a broken app.
+   */
+  check('there is a threshold before anything is said', agentTesting.WAIT_NOTICE_MS > 0);
+  check(
+    '  long enough that a fast reply is never narrated',
+    agentTesting.WAIT_NOTICE_MS >= 4000,
+    `${agentTesting.WAIT_NOTICE_MS}ms`,
+  );
+  check(
+    '  and short enough to arrive before somebody reloads the page',
+    agentTesting.WAIT_NOTICE_MS <= 10_000,
+    `${agentTesting.WAIT_NOTICE_MS}ms`,
+  );
+
+  /*
+   * The rule that decides when to stop counting. Anything from the provider
+   * counts as having started — a reasoning token, a tool call, even a notice
+   * that a key was refused. What is being timed is the silence before the
+   * provider's first word, not the silence before it says something the
+   * interface happens to draw.
+   */
+  const startsIt = (type) => agentTesting.countsAsStarted({ type });
+  for (const type of ['text', 'thinking', 'tool_call_start', 'notice', 'retry', 'done']) {
+    check(`a ${type} event ends the wait`, startsIt(type), type);
+  }
+}
+
 // ── tool calls do not all start at once ─────────────────────────────
 section('parallel tool calls have a ceiling');
 {

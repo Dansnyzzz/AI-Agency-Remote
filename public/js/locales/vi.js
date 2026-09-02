@@ -108,6 +108,15 @@ export const vi = {
   'composer.stop': 'Dừng',
   'composer.stopped': 'Đã dừng.',
   'mirror.watching': 'Đang chạy ở tab khác — đang theo dõi…',
+  /* Trợ lý đang làm gì, ở dòng ngay trên khung soạn. */
+  'status.thinking': 'Đang suy nghĩ…',
+  'status.compacting': 'Đang tóm tắt các lượt cũ…',
+  'status.tool': 'Đang chạy {name}…',
+  // Khác hẳn với suy nghĩ, và chính chỗ khác đó mới đáng nói: nhà cung cấp
+  // chưa bắt đầu trả lời. Số giây tăng dần, vì một con số biết nhúc nhích là
+  // thứ phân biệt 'đang chờ' với 'không biết chuyện gì'.
+  'status.waiting': 'Đang chờ {model} bắt đầu — {n}s',
+  'status.waitingFree': 'Đang chờ {model} — model miễn phí phải xếp hàng lúc đông ({n}s). Đổi model nếu lâu quá.',
   'empty.title': 'Hôm nay bạn muốn làm gì?',
   'empty.body':
     'Chọn model rồi hỏi bất cứ điều gì. Khi máy tính của bạn đã kết nối, trợ lý có thể đọc tệp, sửa code và chạy lệnh ngay trên máy đó.',

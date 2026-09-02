@@ -1739,10 +1739,29 @@ async function streamOnce(decision) {
       runId: state.runId,
       signal: state.abort.signal,
       handlers: {
-        status: ({ phase, name, message }) => {
-          if (phase === 'compacting') setStatus('Summarising the earlier turns…');
-          else if (phase === 'thinking') setStatus('Thinking…');
-          else if (phase === 'tool') setStatus(`Running ${name}…`);
+        status: ({ phase, name, message, seconds, model, free }) => {
+          if (phase === 'compacting') setStatus(t('status.compacting'));
+          else if (phase === 'thinking') setStatus(t('status.thinking'));
+          /**
+           * The provider has not answered yet, and that is worth saying.
+           *
+           * "Thinking…" was shown whether the model was producing reasoning
+           * tokens or had not been given a slot, and those need different
+           * reactions from the person watching: one is working, the other is a
+           * queue they may not want to wait in. A free model on a busy
+           * aggregator sits unanswered for a minute often enough that the
+           * silence reads as a broken app.
+           *
+           * The count goes up, which is the part that matters — a number that
+           * moves is the difference between waiting and wondering.
+           */
+          else if (phase === 'waiting') {
+            setStatus(
+              t(free ? 'status.waitingFree' : 'status.waiting')
+                .replace('{model}', model || '')
+                .replace('{n}', String(seconds ?? 0)),
+            );
+          } else if (phase === 'tool') setStatus(t('status.tool').replace('{name}', name));
           else if (message) toast(message);
         },
         thinking: ({ delta }) => {
