@@ -50,6 +50,45 @@ function splitStatements(sql) {
  * the tenancy boundary — it always comes from the verified session, never from
  * anything the client sent.
  */
+/**
+ * Bumped whenever schema.sql changes. A database already stamped with this
+ * value skips the DDL entirely.
+ *
+ * The statements are all idempotent, so running them was never *wrong* — but
+ * on a serverless deployment every cold start paid for thirty HTTP round-trips
+ * to discover there was nothing to do. One cheap SELECT answers the same
+ * question.
+ *
+ * **Adding anything to schema.sql without bumping this does nothing at all on
+ * a database that already exists**, and nothing catches it: every test starts
+ * from an empty folder, where the DDL runs regardless of the stamp. It is
+ * only the machine that has been running the app for a while — which is
+ * everybody's, eventually — that gets a missing column and a query that
+ * fails. `test/schema.test.mjs` exists to make that impossible to miss again.
+ *
+ *   7  projects, project_files, chats.project_id
+ *   8  doc_chunks — the indexed-document store behind search_docs
+ *   9  projects.pinned, projects.archived_at
+ *  10  attachment_versions — the history behind the version switcher
+ *  11  shared_models.max_output — the real output cap, so a request stops
+ *      asking every model for 32000 tokens it may not produce
+ *  12  mcp_servers — the Model Context Protocol servers an account plugs in,
+ *      which is what makes the tool list open rather than fixed
+ *  13  devices.browser_mode — added when the browser was choosable per
+ *      computer. The choice was removed again and nothing reads the column
+ *      now; it is left in place because dropping a column is a migration
+ *      that risks data for no gain
+ *  14  workflows and workflow_runs — a job with several steps that keeps its
+ *      position, so an invocation cut off at the 300s ceiling is resumed
+ *      rather than started again from the top
+ *  15  usage_events.cache_read_tokens and .role, so cached prompt tokens are
+ *      priced at the rate they were billed at and spend that never went
+ *      through the agent loop stops being invisible; and
+ *      doc_chunks_search_idx, which is the shape the vector search actually
+ *      asks for
+ */
+export const SCHEMA_VERSION = 15;
+
 export function createPgStore(connectionString) {
   // Accepts a driver object instead of a URL so the tenancy-isolation tests can
   // run the real SQL against an in-process Postgres.
@@ -70,39 +109,6 @@ export function createPgStore(connectionString) {
    */
   let vectorReady = null;
 
-  /**
-   * Bumped whenever schema.sql changes. A database already stamped with this
-   * value skips the DDL entirely.
-   *
-   * The statements are all idempotent, so running them was never *wrong* — but
-   * on a serverless deployment every cold start paid for thirty HTTP round-trips
-   * to discover there was nothing to do. One cheap SELECT answers the same
-   * question.
-   *
-   * **Adding anything to schema.sql without bumping this does nothing at all on
-   * a database that already exists**, and nothing catches it: every test starts
-   * from an empty folder, where the DDL runs regardless of the stamp. It is
-   * only the machine that has been running the app for a while — which is
-   * everybody's, eventually — that gets a missing column and a query that
-   * fails. `test/schema.test.mjs` exists to make that impossible to miss again.
-   *
-   *   7  projects, project_files, chats.project_id
-   *   8  doc_chunks — the indexed-document store behind search_docs
-   *   9  projects.pinned, projects.archived_at
-   *  10  attachment_versions — the history behind the version switcher
-   *  11  shared_models.max_output — the real output cap, so a request stops
-   *      asking every model for 32000 tokens it may not produce
-   *  12  mcp_servers — the Model Context Protocol servers an account plugs in,
-   *      which is what makes the tool list open rather than fixed
-   *  13  devices.browser_mode — added when the browser was choosable per
-   *      computer. The choice was removed again and nothing reads the column
-   *      now; it is left in place because dropping a column is a migration
-   *      that risks data for no gain
-   *  14  workflows and workflow_runs — a job with several steps that keeps its
-   *      position, so an invocation cut off at the 300s ceiling is resumed
-   *      rather than started again from the top
-   */
-  const SCHEMA_VERSION = 14;
 
   let schemaReady = null;
   async function ready() {

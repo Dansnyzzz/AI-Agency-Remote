@@ -15,6 +15,7 @@
  *
  *   node test/schema.test.mjs
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -120,6 +121,111 @@ section('a database from an earlier release is brought up to date');
   check('opening it adds the missing tables', await tableExists('projects'));
   check('and the missing column', await columnExists('chats', 'project_id'));
   check('and the document index', await tableExists('doc_chunks'));
+}
+
+section('the columns the usage ledger writes to actually arrive');
+{
+  /*
+   * The exact failure, reproduced. `recordUsage` writes nine columns, and two of
+   * them were added to schema.sql at a version that was never bumped — so a
+   * database in use skipped the ALTER and every call came back
+   * `column "cache_read_tokens" does not exist`. On a shared-key deployment that
+   * is not a cosmetic error: usage is what the monthly limit is enforced against,
+   * so the write failing means the quota stops counting.
+   *
+   * Checked by writing a real row rather than by looking the columns up, because
+   * the INSERT is what actually broke and a column list can be right while the
+   * statement is still wrong.
+   */
+  await driver.query('ALTER TABLE usage_events DROP COLUMN IF EXISTS cache_read_tokens');
+  await driver.query('ALTER TABLE usage_events DROP COLUMN IF EXISTS role');
+  await driver.query('DROP INDEX IF EXISTS doc_chunks_search_idx');
+  await driver.query("UPDATE settings SET value = '14' WHERE key = 'schema_version'");
+
+  check(
+    'they really are gone first',
+    !(await columnExists('usage_events', 'cache_read_tokens')),
+    'otherwise this proves nothing',
+  );
+
+  const store = createPgStore(driver);
+  await store.init();
+
+  check('the cached-token column arrives', await columnExists('usage_events', 'cache_read_tokens'));
+  check('and the role column', await columnExists('usage_events', 'role'));
+
+  await driver.query(
+    `INSERT INTO users (id, email, password_hash, role) VALUES ('u-ledger', 'l@x.test', 'x', 'user')
+     ON CONFLICT (id) DO NOTHING`,
+  );
+  let wrote = null;
+  try {
+    await store.recordUsage('u-ledger', {
+      id: 'usage-after-upgrade',
+      chatId: null,
+      model: 'test/model',
+      role: 'compaction',
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 90,
+      costUsd: 0.001,
+    });
+    wrote = 'ok';
+  } catch (err) {
+    wrote = String(err?.message || err);
+  }
+  check('and a real usage row can be written', wrote === 'ok', wrote);
+
+  const back = await driver.query("SELECT role, cache_read_tokens FROM usage_events WHERE id = 'usage-after-upgrade'");
+  check('with both new fields intact', back[0]?.role === 'compaction' && Number(back[0]?.cache_read_tokens) === 90, JSON.stringify(back[0]));
+}
+
+/*
+ * The guard the section below could not be.
+ *
+ * "The stamp is what decides" states the risk exactly, and it still could not
+ * catch the bug it describes — because it has no way of knowing what schema.sql
+ * has newly *gained*. Three statements were added for cached-token accounting
+ * and the version was left at 14, so every database already in use skipped them
+ * and `recordUsage` wrote to columns that did not exist. Every suite passed:
+ * they all start from an empty folder, where the DDL runs whatever the stamp
+ * says.
+ *
+ * So the invariant is asserted directly rather than by example. If schema.sql
+ * changes, its fingerprint changes, and this fails until the version is bumped
+ * and the pair below is updated. That is a deliberate two-line chore on every
+ * schema change, and it is a great deal cheaper than the alternative — which is
+ * an app that works on a fresh clone and is broken on every machine that has
+ * been running it.
+ */
+section('schema.sql and SCHEMA_VERSION move together');
+{
+  const { SCHEMA_VERSION } = await import('../server/store/pg.js');
+
+  // Line endings are normalised because this repo is edited on Windows and read
+  // by CI on Linux, and a hash that differs by platform is a hash nobody trusts.
+  const source = fs
+    .readFileSync(path.join(import.meta.dirname, '..', 'server', 'store', 'schema.sql'), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const fingerprint = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
+
+  /** Update BOTH of these, together, whenever schema.sql changes. */
+  const STAMPED = { version: 15, fingerprint: '4ba4df3dc2aa9292' };
+
+  check(
+    'the recorded version matches the code',
+    SCHEMA_VERSION === STAMPED.version,
+    `code says ${SCHEMA_VERSION}, this test expects ${STAMPED.version}`,
+  );
+  check(
+    'schema.sql has not changed without the version being bumped',
+    fingerprint === STAMPED.fingerprint,
+    fingerprint === STAMPED.fingerprint
+      ? fingerprint
+      : `schema.sql is now ${fingerprint}. Bump SCHEMA_VERSION in server/store/pg.js and set ` +
+        `STAMPED here to { version: ${SCHEMA_VERSION + 1}, fingerprint: '${fingerprint}' }. ` +
+        'Without the bump, every database already in use skips your change.',
+  );
 }
 
 section('and the stamp is what decides');
