@@ -40,7 +40,41 @@ function currentBranch(cwd) {
 
 const PROTECTED_BRANCH = /^(main|master)$/;
 
-/** Each rule is [pattern, why]. `why` is read by the model, so it must be actionable. */
+/**
+ * Does this `git push` write to the protected branch?
+ *
+ * The first version asked a regex whether the command ended in `main`, which
+ * caught `git push origin main` and let `git push origin HEAD:main` straight
+ * through — along with `agency-autonomy-spine:main` and `refs/heads/main`. Three
+ * ways to do the one thing the rule exists to prevent, and the rule looked fine
+ * the whole time. A guard has to be read the way git reads it, not the way the
+ * usual command happens to be written.
+ *
+ * So the refspecs are actually parsed. In `src:dst` it is `dst` that decides;
+ * a bare token is both. `:main` deletes the remote branch, which is the same
+ * question and a worse answer.
+ */
+function pushesToProtected(command) {
+  const after = /\bgit\s+push\b([^\n|;&]*)/.exec(command)?.[1];
+  if (after === undefined) return false;
+
+  return after
+    // A trailing comment is not a refspec. `git push origin dev # merge to main
+    // later` writes nothing to main, and blocking it is the kind of false
+    // positive that gets a guard switched off.
+    .split('#')[0]
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token && !token.startsWith('-'))
+    .some((token) => {
+      // `src:dst` — the destination is what gets written. A bare name is both.
+      const destination = token.includes(':') ? token.slice(token.lastIndexOf(':') + 1) : token;
+      const name = destination.replace(/^\+/, '').replace(/^refs\/heads\//, '');
+      return PROTECTED_BRANCH.test(name);
+    });
+}
+
+/** Each rule is [pattern-or-predicate, why]. `why` is read by the model, so it must be actionable. */
 const RULES = [
   [
     /\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*[rR])\b/,
@@ -76,10 +110,11 @@ const RULES = [
     '.env holds SESSION_SECRET and ENCRYPTION_KEY. Losing ENCRYPTION_KEY makes every stored provider key permanently undecryptable.',
   ],
   [
-    // Naming the protected branch explicitly reaches it from anywhere, so this
-    // one cannot be left to the current-branch rules below.
-    /\bgit\s+push\b[^\n|;&]*\s(\S+\s+)?(main|master)(:\S+)?\s*$/,
-    'This pushes the protected branch. Push the feature branch instead, and let the user decide what lands on main.',
+    // Naming the protected branch as a destination reaches it from any branch.
+    // Matched by parsing the refspecs rather than by pattern — see
+    // `pushesToProtected`, and the three commands that walked past the pattern.
+    (command) => pushesToProtected(command),
+    'This pushes to the protected branch. Push the feature branch instead, and let the user decide what lands on main.',
   ],
   [
     /\bnpm\s+publish\b/,
@@ -142,8 +177,11 @@ process.stdin.on('end', () => {
     process.exit(2);
   };
 
-  for (const [pattern, why] of RULES) {
-    if (pattern.test(command)) refuse(why);
+  // Most rules are a pattern; one needs to read the command the way git does,
+  // so a rule may also be a predicate.
+  for (const [rule, why] of RULES) {
+    const hit = typeof rule === 'function' ? rule(command) : rule.test(command);
+    if (hit) refuse(why);
   }
 
   // Only ask git which branch this is once something git-shaped has been typed —

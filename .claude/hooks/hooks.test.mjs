@@ -139,7 +139,33 @@ check('guard-bash.js', bash('git merge feature/x'), BLOCK, 'merging into main', 
 check('guard-bash.js', bash('git merge feature/x'), ALLOW, 'merging on a feature branch', onBranch('feature/x'));
 check('guard-bash.js', bash('git push origin HEAD'), BLOCK, 'pushing while on main', onBranch('main'));
 check('guard-bash.js', bash('git push origin feature/x'), ALLOW, 'pushing a feature branch', onBranch('feature/x'));
-check('guard-bash.js', bash('git push origin main'), BLOCK, 'naming main from another branch', onBranch('feature/x'));
+check('guard-bash.js', bash('git push origin main'), BLOCK, 'naming it from another branch', onBranch('feature/x'));
+
+/*
+ * The three forms that walked straight past the first version of this rule.
+ *
+ * It matched a regex ending in the branch name, so `git push origin main` was
+ * caught and the `HEAD:` form was not — nor the branch-to-branch refspec, nor
+ * the full ref. The rule looked correct the entire time, which is the only
+ * reason each of these is worth its own line.
+ *
+ * Built by joining fragments, for the reason at the top of this file: written
+ * out whole, these strings trip the guard that is under test the moment the
+ * command reaches a shell.
+ */
+const push = (...parts) => bash(['git', 'push', ...parts].join(' '));
+
+check('guard-bash.js', push('origin', 'HEAD:ma' + 'in'), BLOCK, 'the HEAD: form is the same act', onBranch('feature/x'));
+check('guard-bash.js', push('origin', 'feature/x:ma' + 'in'), BLOCK, 'so is branch-to-branch', onBranch('feature/x'));
+check('guard-bash.js', push('origin', 'refs/heads/ma' + 'in'), BLOCK, 'so is the full ref', onBranch('feature/x'));
+check('guard-bash.js', push('-u', 'origin', 'ma' + 'in'), BLOCK, 'flags do not hide it', onBranch('feature/x'));
+check('guard-bash.js', push('origin', ':ma' + 'in'), BLOCK, 'deleting it remotely is worse, not better', onBranch('feature/x'));
+
+// And the other direction. A rule that catches too much is a rule that gets
+// switched off, and then it protects nothing at all.
+check('guard-bash.js', push('origin', 'ma' + 'in-page'), ALLOW, 'a branch that merely starts with it is fine', onBranch('feature/x'));
+check('guard-bash.js', push('origin', 'ma' + 'in:feature/x'), ALLOW, 'pushing it somewhere else does not write it', onBranch('feature/x'));
+check('guard-bash.js', push('origin', 'dev', '# merge to ma' + 'in later'), ALLOW, 'nor does mentioning it in a comment', onBranch('feature/x'));
 // The regression that started this file: the safe form must survive.
 check(
   'guard-bash.js',
