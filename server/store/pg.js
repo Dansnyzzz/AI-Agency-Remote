@@ -150,6 +150,43 @@ export function createPgStore(connectionString) {
       await ready();
     },
 
+    /**
+     * Two narrow read-only questions, for diagnosing a database that disagrees
+     * with the code.
+     *
+     * There is deliberately no general "run this SQL" method on this store —
+     * every query is a named function with the account scoping written into it,
+     * which is most of what makes the tenancy boundary hold. These two are the
+     * exception and are shaped so they cannot become that door: one returns a
+     * number, the other a boolean, and neither takes anything that reaches a
+     * value clause.
+     *
+     * They exist because the failure they diagnose is genuinely hard to see from
+     * outside. `schema.sql` runs only when the stamp differs, so a column the
+     * code writes to can simply be absent — and `summary()` runs three queries
+     * in a `Promise.all`, so the same stale database blames a different column
+     * on each request. Two facts settle it: what the stamp says, and what the
+     * columns actually are.
+     */
+    async schemaStamp() {
+      try {
+        const rows = await sql.query('SELECT value FROM settings WHERE key = $1', ['schema_version']);
+        const value = Number(rows[0]?.value);
+        return Number.isFinite(value) ? value : null;
+      } catch {
+        // No settings table at all: a database that has never been initialised.
+        return null;
+      }
+    },
+
+    async columnExists(table, column) {
+      const rows = await sql.query(
+        'SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2',
+        [String(table), String(column)],
+      );
+      return rows.length > 0;
+    },
+
     // ── users ───────────────────────────────────────────────────────
     async countUsers() {
       const rows = await q('SELECT COUNT(*)::int AS n FROM users');
