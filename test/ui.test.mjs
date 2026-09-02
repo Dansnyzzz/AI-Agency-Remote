@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'ui-test-encryption-key';
 process.env.SESSION_SECRET ||= 'ui-test-session-secret';
@@ -19,7 +20,7 @@ process.env.WORKSPACE = path.join(os.tmpdir(), 'ai-remote-ui-workspace');
 fs.rmSync(process.env.WORKSPACE, { recursive: true, force: true });
 fs.mkdirSync(path.join(process.env.WORKSPACE, 'src'), { recursive: true });
 fs.writeFileSync(path.join(process.env.WORKSPACE, 'readme.md'), '# Ghi ch\u00fa\n\nM\u1ed9t d\u00f2ng.\n');
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 // Quiet the console-email fallback; a confirmation code per signup is noise here.
 const realLog = console.log;
@@ -3264,7 +3265,7 @@ section('a run of browser steps reads as one piece of work');
 
 await browser.close();
 server.close();
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 realLog(
   failures

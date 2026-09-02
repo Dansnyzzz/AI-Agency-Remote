@@ -17,9 +17,9 @@
  *
  *   node test/workflow.test.mjs
  */
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'workflow-test-encryption-key';
 process.env.SESSION_SECRET ||= 'workflow-test-session-secret';
@@ -27,7 +27,7 @@ process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-workflow-test-${process
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 delete process.env.VERCEL;
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 const { createApp } = await import('../server/app.js');
 const { initStore } = await import('../server/store/index.js');
@@ -474,7 +474,7 @@ section('deleting');
   check('and is then a 404', after.status === 404, `${after.status}`);
 }
 
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 console.log(
   failures ? `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n` : '\n\x1b[32mAll workflow checks passed.\x1b[0m\n',
 );

@@ -11,16 +11,16 @@
  *
  *   node test/autopick.test.mjs
  */
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'autopick-test-encryption-key';
 process.env.SESSION_SECRET ||= 'autopick-test-session-secret';
 process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-autopick-${process.pid}`);
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 let failures = 0;
 const section = (name) => console.log(`\n\x1b[1m${name}\x1b[0m`);
@@ -167,7 +167,7 @@ section('the library filters by provider, so a row limit cannot hide one');
 }
 
 await store.close?.();
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 console.log(
   failures === 0

@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'agent-test-encryption-key';
 process.env.SESSION_SECRET ||= 'agent-test-session-secret';
@@ -23,7 +24,7 @@ process.env.SESSION_SECRET ||= 'agent-test-session-secret';
 process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-agent-test-${process.pid}`);
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 const { initStore } = await import('../server/store/index.js');
 const store = await initStore();
@@ -760,7 +761,7 @@ section('parallel tool calls have a ceiling');
   check('an empty list is not a deadlock', (await mapWithLimit([], 4, async () => 1)).length === 0);
 }
 
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 console.log(
   failures === 0

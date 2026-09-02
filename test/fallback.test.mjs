@@ -13,9 +13,9 @@
  *
  *   node test/fallback.test.mjs
  */
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'fallback-test-encryption-key';
 process.env.SESSION_SECRET ||= 'fallback-test-session-secret';
@@ -24,7 +24,7 @@ process.env.SESSION_SECRET ||= 'fallback-test-session-secret';
 process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-fallback-test-${process.pid}`);
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 const { __testing } = await import('../server/providers/index.js');
 const { classify, waitFrom, headerOf } = __testing;
@@ -381,7 +381,7 @@ section('a restart clears the text the reader had already seen');
   check('the replacement stands alone', assistant.text === 'a whole answer', assistant.text);
 }
 
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 console.log(
   failures === 0

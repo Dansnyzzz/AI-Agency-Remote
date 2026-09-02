@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'rag-test-encryption-key';
 process.env.SESSION_SECRET ||= 'rag-test-session-secret';
@@ -24,7 +25,7 @@ process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-rag-test-${process.pid}
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 delete process.env.VERCEL;
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 let failures = 0;
 const section = (name) => console.log(`\n\x1b[1m${name}\x1b[0m`);
@@ -327,7 +328,7 @@ section('cost is not spent twice on the same text');
  * the race to land — on its own the suite always looked fine.
  */
 await store.close?.();
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 console.log(
   failures === 0
     ? '\n\x1b[32mAll document-index checks passed.\x1b[0m\n'

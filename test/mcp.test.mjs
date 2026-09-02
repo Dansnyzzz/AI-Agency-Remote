@@ -325,7 +325,29 @@ section('a server plugged in reaches the assistant');
   forgetMcp(mine.id);
   forgetMcp(theirs.id);
   await store.close?.();
-  fsp.rmSync(dir, { recursive: true, force: true });
+
+  /**
+   * Tidying up must not be able to fail the suite.
+   *
+   * On Windows a file cannot be unlinked while a handle is still open on it, and
+   * PGlite's WASM layer releases its handles a moment after `close()` resolves.
+   * `rmSync` in that window throws ENOTEMPTY, the suite exits non-zero, and the
+   * gate reports a failure in which every single check passed — which trains
+   * people to re-run a red gate rather than read it, and that is the habit the
+   * ledger exists to prevent.
+   *
+   * A few retries cover the gap. If the directory genuinely will not go, it is
+   * a temp directory named after this process id: the operating system clears
+   * it eventually, and nothing about it is worth a false red.
+   */
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fsp.rmSync(dir, { recursive: true, force: true });
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
 }
 
 console.log(

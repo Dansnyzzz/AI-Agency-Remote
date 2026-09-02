@@ -10,16 +10,16 @@
  *
  *   node test/research.test.mjs
  */
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'research-test-key';
 process.env.SESSION_SECRET ||= 'research-test-secret';
 process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-research-${process.pid}`);
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 let failures = 0;
 const section = (n) => console.log(`\n\x1b[1m${n}\x1b[0m`);
@@ -265,7 +265,7 @@ section('deep_research is a top-level tool, never handed to a sub-agent');
   check('nor run_parallel — a sub-agent does not spawn sub-agents', !forSub.includes('run_parallel'));
 }
 
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 console.log(
   failures === 0 ? '\n\x1b[32mAll research checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`,
 );

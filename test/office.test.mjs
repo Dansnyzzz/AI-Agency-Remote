@@ -13,9 +13,9 @@
  *
  *   node test/office.test.mjs
  */
-import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'office-test-encryption-key';
 process.env.SESSION_SECRET ||= 'office-test-session-secret';
@@ -23,7 +23,7 @@ process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-office-test-${process.p
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 delete process.env.VERCEL;
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 const { createApp } = await import('../server/app.js');
 const { initStore } = await import('../server/store/index.js');
@@ -990,7 +990,7 @@ section('a document that cannot be read says so');
 
 server.close();
 await new Promise((r) => server.once('close', r));
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 console.log(
   failures === 0

@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'http-test-encryption-key';
 process.env.SESSION_SECRET ||= 'http-test-session-secret';
@@ -21,7 +22,7 @@ process.env.DATA_DIR = path.join(os.tmpdir(), `ai-remote-http-test-${process.pid
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 delete process.env.VERCEL;
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 const { createApp } = await import('../server/app.js');
 const { initStore } = await import('../server/store/index.js');
@@ -690,7 +691,7 @@ section('signing out');
 
 server.close();
 await new Promise((r) => server.once('close', r));
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 
 console.log(
   failures === 0

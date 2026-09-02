@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 process.env.ENCRYPTION_KEY ||= 'workspace-test-encryption-key';
 process.env.SESSION_SECRET ||= 'workspace-test-session-secret';
@@ -27,7 +28,7 @@ delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 delete process.env.VERCEL;
 
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 fs.rmSync(process.env.WORKSPACE, { recursive: true, force: true });
 fs.mkdirSync(process.env.WORKSPACE, { recursive: true });
 fs.mkdirSync(path.join(process.env.WORKSPACE, 'src'), { recursive: true });
@@ -341,7 +342,7 @@ section('the model is not offered the interface\'s tools');
 
 server.close();
 await new Promise((r) => server.once('close', r));
-fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
+removeTemp(process.env.DATA_DIR);
 fs.rmSync(process.env.WORKSPACE, { recursive: true, force: true });
 fs.rmSync(OUTSIDE, { force: true });
 
