@@ -416,6 +416,39 @@ section('a conversation runs in one place at a time');
   await store.releaseChatRun(aliceId, chatId, runId);
   await new Promise((r) => setTimeout(r, 150));
 
+  /**
+   * Stopping, as a fact rather than as a hint.
+   *
+   * Aborting the browser's fetch closes the socket and the route notices — most
+   * of the time. Behind a proxy that buffers, or on a host that keeps the
+   * connection open after the client has gone, that close can arrive late or
+   * never, and the loop carries on spending the account's tokens on an answer
+   * nobody will read. So the lease is the signal: `/stop` takes it away, and the
+   * invocation doing the work learns it no longer holds it on the next
+   * heartbeat.
+   */
+  const stopId = '77777777-6666-5555-4444-333333333333';
+  await store.claimChatRun(aliceId, chatId, stopId);
+  check('a heartbeat from the holder reports the lease is still theirs', await store.touchChatRun(aliceId, chatId, stopId));
+
+  const stopped = await alice.call('POST', `/api/chats/${chatId}/stop`, {});
+  check('stop answers', stopped.status === 200, `got ${stopped.status}`);
+  check('and says it stopped something', stopped.json?.stopped === true, JSON.stringify(stopped.json));
+  check(
+    'after it, the running invocation learns the lease is gone',
+    (await store.touchChatRun(aliceId, chatId, stopId)) === false,
+    'this false is what aborts the agent loop — without it a stop is only a hope',
+  );
+
+  const stopAgain = await alice.call('POST', `/api/chats/${chatId}/stop`, {});
+  check('stopping twice is harmless', stopAgain.status === 200 && stopAgain.json?.stopped === false);
+
+  // Somebody else's conversation reads as missing rather than as stoppable —
+  // the same answer every other chat route gives, so stop cannot be used to
+  // discover which ids exist.
+  const foreign = await bob.call('POST', `/api/chats/${chatId}/stop`, {});
+  check("another account cannot stop Alice's run", foreign.status === 404, `got ${foreign.status}`);
+
   // A client-supplied id lands in the database, so it must be checked rather
   // than trusted.
   await alice.call('POST', `/api/chats/${chatId}/run`, { runId: "'; DROP TABLE chats; --" });

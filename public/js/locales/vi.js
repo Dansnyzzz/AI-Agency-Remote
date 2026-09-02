@@ -40,6 +40,10 @@ export const vi = {
   'topbar.computers': 'Máy tính',
   'topbar.panel': 'Tiến trình và màn hình',
   'composer.placeholder': 'Hỏi bất cứ điều gì…  (Enter để gửi, Shift+Enter để xuống dòng)',
+  // Khi một lượt đang chạy thì ô này làm việc khác, nên nó nói ra: gửi lúc này
+  // là xếp hàng đợi — tin nhắn chờ hiện rõ và vào ở ranh giới bước kế tiếp,
+  // chứ không mở một cuộc hội thoại thứ hai đè lên cái đang chạy.
+  'composer.placeholderRunning': 'Xếp thêm một tin nhắn…',
   // Danh sách việc do `update_plan` vẽ trong một tin nhắn, và số đếm cạnh cùng
   // các bước đó ở thanh tiến trình.
   'chat.plan': 'Kế hoạch',
@@ -100,7 +104,9 @@ export const vi = {
   'queue.remove': 'Xoá tin nhắn đang chờ này',
   'composer.attach': 'Gắn ảnh hoặc tệp',
   'composer.send': 'Gửi',
+  'composer.queue': 'Xếp hàng đợi — sẽ vào ở bước kế tiếp',
   'composer.stop': 'Dừng',
+  'composer.stopped': 'Đã dừng.',
   'empty.title': 'Hôm nay bạn muốn làm gì?',
   'empty.body':
     'Chọn model rồi hỏi bất cứ điều gì. Khi máy tính của bạn đã kết nối, trợ lý có thể đọc tệp, sửa code và chạy lệnh ngay trên máy đó.',

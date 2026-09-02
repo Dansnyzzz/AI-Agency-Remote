@@ -32,9 +32,15 @@ export const en = {
   'topbar.computers': 'Computers',
   'topbar.panel': 'Progress and screen',
   'composer.placeholder': 'Ask anything…  (Enter to send, Shift+Enter for a new line)',
+  // While a turn is running the box does something different, so it says so.
+  // Sending here queues: the message waits, visibly, and goes in at the next
+  // step boundary rather than starting a second conversation over the first.
+  'composer.placeholderRunning': 'Queue another message…',
   'composer.attach': 'Attach photos or files',
   'composer.send': 'Send',
+  'composer.queue': 'Queue this — it goes in at the next step',
   'composer.stop': 'Stop',
+  'composer.stopped': 'Stopped.',
   // The checklist drawn inside a message by `update_plan`, and the count beside
   // the same steps in the progress rail.
   'chat.plan': 'Plan',

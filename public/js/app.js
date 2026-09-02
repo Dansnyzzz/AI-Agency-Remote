@@ -1509,24 +1509,43 @@ async function deliver(item, { interrupting = false } = {}) {
 }
 
 /**
- * Hand the queue over, now that the turn is done.
+ * Hand the queue over, now that the turn is done — one message at a time.
  *
- * Every waiting message goes in the order it was typed, and then one run
- * answers all of them — which is what somebody who typed three lines in a row
- * meant, rather than three separate turns talking past each other.
+ * It used to deliver every waiting message at once and then start a single run
+ * to answer all of them. That reads well in a comment and badly in use: two
+ * questions typed a minute apart are two questions, and folding them into one
+ * turn produces one answer that half-addresses each. Worse, the second question
+ * was often written *because* of what the first answer would say, and it was
+ * asked before that answer existed.
+ *
+ * So each queued message gets its own turn, in the order it was typed, and the
+ * next one waits for the previous answer to finish. That is what a person doing
+ * this by hand would do, and it is what somebody watching the queue drain
+ * expects to see.
+ *
+ * The guard is not decoration. `stream()` calls this from its own `finally`, so
+ * without it the loop below would re-enter itself once per queued message; with
+ * it the nested call returns immediately and the outer loop stays flat.
  */
+let flushing = false;
 async function flushQueue() {
-  if (!state.queue.length || state.running || !state.chatId) return;
-
-  const waiting = state.queue.splice(0, state.queue.length);
-  renderQueue();
-
-  let sent = 0;
-  for (const item of waiting) if (await deliver(item)) sent += 1;
-
-  if (sent) {
-    await refreshChats();
-    await stream();
+  if (flushing || !state.queue.length || state.running || !state.chatId) return;
+  flushing = true;
+  try {
+    // Re-checked every pass rather than snapshotted: an answer can arrive while
+    // this is working, the user can delete a queued line, and a stop mid-drain
+    // must leave the rest of the queue alone rather than firing it anyway.
+    while (state.queue.length && !state.running && state.chatId) {
+      const [item] = state.queue.splice(0, 1);
+      renderQueue();
+      // A message that could not be sent has already told the user why. Carry on
+      // to the next rather than stranding the whole queue behind it.
+      if (!(await deliver(item))) continue;
+      await refreshChats();
+      await stream();
+    }
+  } finally {
+    flushing = false;
   }
 }
 
@@ -1551,12 +1570,25 @@ async function handOverMidRun() {
   if (handingOver || !state.queue.length || !state.running || !state.chatId) return;
   handingOver = true;
   try {
-    const waiting = state.queue.splice(0, state.queue.length);
+    /**
+     * One message per step boundary, not the whole queue.
+     *
+     * Emptying it here delivered three separate thoughts into the same step,
+     * where the model reads them as one instruction and answers the last. Handing
+     * over the oldest and leaving the rest keeps them apart: each gets its own
+     * boundary, in the order it was typed, and anything still waiting when the
+     * turn ends is drained by `flushQueue` — which now also goes one at a time.
+     *
+     * It also keeps the editing window open. A line queued behind another is
+     * still deletable right up until its own turn, which is the whole reason the
+     * queue is shown rather than sent.
+     */
+    const [item] = state.queue.splice(0, 1);
     renderQueue();
     // No `stream()` here, unlike `flushQueue`: a run is already going, and
     // starting a second one against the same conversation is what the 409 lock
     // exists to refuse.
-    for (const item of waiting) await deliver(item);
+    await deliver(item, { interrupting: true });
   } finally {
     handingOver = false;
   }
@@ -1738,9 +1770,23 @@ function nextBlock() {
   return state.turn;
 }
 
+/**
+ * Stop, and mean it.
+ *
+ * Aborting the fetch is the fast half — the page stops rendering immediately.
+ * It is not the whole job: closing the socket is only a *hint* to the server,
+ * and behind a buffering proxy that hint can arrive after the model has finished
+ * answering into a page nobody is watching. So the server is told outright, and
+ * it takes the run's lease away.
+ *
+ * Told after the abort rather than before it, so the button feels instant; and
+ * the failure is swallowed, because a stop that reports an error while having
+ * visibly stopped is worse than one that quietly did the belt-and-braces half.
+ */
 $('stop').addEventListener('click', () => {
   state.abort?.abort();
-  toast('Stopped.');
+  if (state.chatId) api.stopChat(state.chatId).catch(() => {});
+  toast(t('composer.stopped'));
 });
 
 /* ── approval ──────────────────────────────────────────────────── */
@@ -1851,11 +1897,12 @@ function renderUsage({ input, output, cost, priced }) {
 }
 
 function setRunning(running) {
-  // Both buttons stay available: send queues a follow-up into the running turn,
-  // stop cuts it short. Disabling the box would be the one thing that makes
+  // Which of send and stop is showing depends on both the run and what is in
+  // the box, so there is one function that decides it — see refreshSendState.
+  // The box itself is never disabled: that would be the one thing that makes
   // changing your mind impossible.
-  $('stop').hidden = !running;
   $('input').disabled = false;
+  refreshSendState();
 }
 
 async function refreshWorker() {
@@ -3960,10 +4007,36 @@ function autosize(node) {
  * Grey while there is nothing to send, and green the moment there is, makes the
  * control answer the question you were about to ask it.
  */
+/**
+ * One button at a time: send, or stop.
+ *
+ * Both used to sit there together while a turn ran, and the pair asked a
+ * question nobody wanted: two similar round buttons side by side, one of which
+ * ends the work. The composer already knows which one you mean. With something
+ * typed you mean send — queued into the running turn, which is why send stays
+ * live mid-run rather than being disabled. With the box empty during a run
+ * there is nothing to send, so the only thing that button could be for is stop.
+ *
+ * The placeholder carries the same fact in words, because a changed glyph is
+ * easy to miss: while a turn is running it says what sending will actually do,
+ * which is queue rather than send.
+ */
 function refreshSendState() {
   const ready = input.value.trim().length > 0 || staged.some((f) => f.id);
+  const running = !!state.running;
+
+  // Empty and working: the button in that corner is stop. Anything else: send.
+  const showStop = running && !ready;
+
+  $('send').hidden = showStop;
   $('send').classList.toggle('is-ready', ready);
   $('send').disabled = !ready;
+  // Say what pressing it does now, since mid-run it does not send but queue.
+  $('send').title = running ? t('composer.queue') : t('composer.send');
+
+  $('stop').hidden = !showStop;
+
+  input.placeholder = running ? t('composer.placeholderRunning') : t('composer.placeholder');
 }
 
 /**

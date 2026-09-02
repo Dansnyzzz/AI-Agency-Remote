@@ -2437,6 +2437,31 @@ export function createApp() {
   );
 
   // ── the agent stream ────────────────────────────────────────────────
+  /**
+   * Stop whatever is running in this conversation.
+   *
+   * The browser already aborts its own fetch, which closes the socket and ends
+   * the run through `res.on('close')`. This exists because that path is not
+   * guaranteed: a proxy that buffers, or a host that holds the connection open
+   * after the client has gone, can delay the close indefinitely — and a stop
+   * that only *usually* stops is not a stop. It is also the only way to end a
+   * run started by a tab that has since been closed.
+   *
+   * Clearing the lease is the signal. The invocation doing the work finds out on
+   * its next heartbeat (15s at the outside) and aborts; a second press is
+   * harmless, and so is pressing it when nothing is running.
+   */
+  api.post(
+    '/chats/:id/stop',
+    wrap(async (req, res) => {
+      const store = getStore();
+      if (!(await store.getChat(req.user.id, req.params.id))) {
+        return res.status(404).json({ error: 'Chat not found' });
+      }
+      res.json({ stopped: await store.stopChatRun(req.user.id, req.params.id) });
+    }),
+  );
+
   api.post(
     '/chats/:id/run',
     wrap(async (req, res) => {
@@ -2496,11 +2521,26 @@ export function createApp() {
         res.write(`event: ${event}\ndata: ${JSON.stringify(data ?? {})}\n\n`);
       };
 
-      // Idle SSE connections get culled by proxies. The same tick renews the run
-      // lease, so a genuinely long turn keeps its claim while a dead one lets go.
+      /**
+       * Idle SSE connections get culled by proxies. The same tick renews the run
+       * lease, so a genuinely long turn keeps its claim while a dead one lets go.
+       *
+       * It is also how a stop becomes certain rather than likely. Aborting the
+       * browser's fetch closes the socket, and `res.on('close')` above catches
+       * that — most of the time. Behind a buffering proxy, or on a host that
+       * keeps the connection open after the client has gone, it can arrive late
+       * or never, and the loop carries on spending money on an answer nobody
+       * will read. `/stop` takes the lease away instead; this notices within one
+       * tick and aborts for a fact.
+       */
       const ping = setInterval(() => {
         emit('ping', { t: Date.now() });
-        store.touchChatRun(req.user.id, chatId, runId).catch(() => {});
+        store
+          .touchChatRun(req.user.id, chatId, runId)
+          .then((held) => {
+            if (held === false) controller.abort();
+          })
+          .catch(() => {});
       }, 15_000);
 
       try {

@@ -309,8 +309,9 @@ export function createPgStore(connectionString) {
     // ── usage ───────────────────────────────────────────────────────
     async recordUsage(userId, event) {
       await q(
-        `INSERT INTO usage_events (id, user_id, chat_id, model, input_tokens, output_tokens, cost_usd)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO usage_events
+           (id, user_id, chat_id, model, input_tokens, output_tokens, cost_usd, cache_read_tokens, role)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           event.id,
           userId,
@@ -319,6 +320,8 @@ export function createPgStore(connectionString) {
           event.inputTokens || 0,
           event.outputTokens || 0,
           event.costUsd || 0,
+          event.cacheReadTokens || 0,
+          event.role || 'turn',
         ],
       );
     },
@@ -327,21 +330,46 @@ export function createPgStore(connectionString) {
       const rows = await q(
         `SELECT COALESCE(SUM(input_tokens + output_tokens), 0)::bigint AS tokens,
                 COALESCE(SUM(cost_usd), 0) AS cost,
+                COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read,
                 COUNT(*)::int AS calls
            FROM usage_events
           WHERE user_id = $1 AND created_at >= date_trunc('month', NOW())`,
         [userId],
       );
       const r = rows[0] || {};
-      return { tokens: Number(r.tokens || 0), cost: Number(r.cost || 0), calls: Number(r.calls || 0) };
+      return {
+        tokens: Number(r.tokens || 0),
+        cost: Number(r.cost || 0),
+        cacheRead: Number(r.cache_read || 0),
+        calls: Number(r.calls || 0),
+      };
     },
-    async usageByModel(userId, days = 30) {
+    /**
+     * What each part of the system spent, so the invisible halves stop being
+     * invisible. A compaction, a research debate and a page extraction all cost
+     * real tokens and none of them appeared anywhere before.
+     */
+    async usageByRole(userId, days = 30) {
       return q(
-        `SELECT model,
+        `SELECT role,
                 SUM(input_tokens)::bigint  AS input_tokens,
                 SUM(output_tokens)::bigint AS output_tokens,
                 SUM(cost_usd)              AS cost,
                 COUNT(*)::int              AS calls
+           FROM usage_events
+          WHERE user_id = $1 AND created_at >= NOW() - ($2 || ' days')::interval
+          GROUP BY role ORDER BY SUM(input_tokens + output_tokens) DESC`,
+        [userId, String(days)],
+      );
+    },
+    async usageByModel(userId, days = 30) {
+      return q(
+        `SELECT model,
+                SUM(input_tokens)::bigint       AS input_tokens,
+                SUM(output_tokens)::bigint      AS output_tokens,
+                SUM(cache_read_tokens)::bigint  AS cache_read_tokens,
+                SUM(cost_usd)                   AS cost,
+                COUNT(*)::int                   AS calls
            FROM usage_events
           WHERE user_id = $1 AND created_at >= NOW() - ($2 || ' days')::interval
           GROUP BY model ORDER BY SUM(input_tokens + output_tokens) DESC`,
@@ -507,12 +535,47 @@ export function createPgStore(connectionString) {
       );
       return rows.length > 0;
     },
-    /** Keep a long run's lease alive while it is genuinely still working. */
+    /**
+     * Keep a long run's lease alive while it is genuinely still working.
+     *
+     * @returns whether the lease is still ours. That answer is what makes
+     *   stopping reliable. A browser pressing stop aborts its fetch, and the
+     *   server usually notices because the socket closes — but "usually" is not
+     *   good enough for a loop that spends the user's money: behind a proxy that
+     *   buffers, or on a serverless host that holds the connection open, the
+     *   close can arrive late or not at all, and the model keeps answering into
+     *   a page nobody is reading.
+     *
+     *   So `stopChatRun` takes the lease away, and this reports the theft. The
+     *   run finds out on its next heartbeat and stops for a fact rather than by
+     *   inference.
+     */
     async touchChatRun(userId, chatId, runId) {
-      await q(
-        'UPDATE chats SET run_lock_at = NOW() WHERE id = $1 AND user_id = $2 AND run_lock_by = $3',
+      const rows = await q(
+        `UPDATE chats SET run_lock_at = NOW()
+          WHERE id = $1 AND user_id = $2 AND run_lock_by = $3
+      RETURNING id`,
         [chatId, userId, runId],
       );
+      return rows.length > 0;
+    },
+
+    /**
+     * The owner asks for whatever is running here to stop.
+     *
+     * Unlike `releaseChatRun` this does not name a holder, and that is the
+     * point: the person pressing stop is not the process holding the lease, and
+     * on a serverless deployment may not even be talking to the same instance.
+     * Clearing the lock is the message.
+     */
+    async stopChatRun(userId, chatId) {
+      const rows = await q(
+        `UPDATE chats SET run_lock_at = NULL, run_lock_by = NULL
+          WHERE id = $1 AND user_id = $2 AND run_lock_by IS NOT NULL
+      RETURNING id`,
+        [chatId, userId],
+      );
+      return rows.length > 0;
     },
     /** Only the holder may release, so a late finisher cannot free someone else's lock. */
     async releaseChatRun(userId, chatId, runId) {
@@ -640,6 +703,26 @@ export function createPgStore(connectionString) {
         [id, userId],
       );
       return rows[0] ?? null;
+    },
+    /**
+     * Several at once, for the transcript loader.
+     *
+     * It asked for them one at a time, inside the agent's per-step loop, so a
+     * ten-step turn carrying eight files spent eighty *sequential* round trips
+     * on rows it could have had in ten. Against Neon over HTTP that is seconds
+     * of latency per turn spent entirely on waiting.
+     *
+     * Scoped by `user_id` like the singular form, so a guessed id from another
+     * account simply is not in the result.
+     */
+    async getAttachments(userId, ids) {
+      if (!ids?.length) return [];
+      const params = ids.map((_, i) => `$${i + 2}`).join(', ');
+      return q(
+        `SELECT id, name, mime, kind, bytes, data, origin, source, chat_id, created_at
+           FROM attachments WHERE user_id = $1 AND id IN (${params})`,
+        [userId, ...ids],
+      );
     },
     /**
      * Everything the assistant made in one conversation, newest first.

@@ -3959,19 +3959,29 @@ details.block pre {
    thing, not a correction, and having it land mid-task derails work that was
    going fine. Visible, because a message that has silently gone nowhere is
    indistinguishable from one that was lost. */
-/* Glass, and tucked *under* the composer so the two read as one control: what
-   you have typed is not a separate widget hovering above the box, it is the top
-   of the box, still waiting to go in. The negative bottom margin slides the
-   composer's own opaque surface over the seam, which is what joins them. */
+/**
+ * Its own card, with a gap — not tucked under the composer.
+ *
+ * It used to overlap the box by 18px so the two would read as one control, and
+ * that trick broke the moment the box was focused. `.composer__box:focus-within`
+ * draws `0 0 0 3px` of glow around **every** edge including the top, and that
+ * ring landed on top of the queue: a bright line cutting horizontally through
+ * the middle of the waiting messages, with the panel's bottom edge clipped
+ * behind an opaque surface. Which is to say the join only looked like a join
+ * while nobody was typing, and typing is when the queue is on screen.
+ *
+ * A gap has no seam to hide, so there is nothing left to go wrong. It also says
+ * the truer thing: these messages have not been sent, and drawing them as the
+ * top of the box implied they were already in it.
+ */
 .queue {
   display: grid;
   gap: 6px;
   max-width: 780px;
-  margin: 0 auto -18px;
-  padding: 9px 10px 24px;
+  margin: 0 auto 8px;
+  padding: 9px 10px;
   border: 1px solid var(--glass-line);
-  border-bottom: 0;
-  border-radius: 20px 20px 0 0;
+  border-radius: 18px;
   background: var(--glass-solid);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);

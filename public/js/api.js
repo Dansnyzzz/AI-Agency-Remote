@@ -142,6 +142,16 @@ export const api = {
   deleteChat: (id) => request('DELETE', `/api/chats/${id}`),
   sendMessage: (id, text, attachments) =>
     request('POST', `/api/chats/${id}/messages`, { text, attachments }),
+  /**
+   * Tell the server to stop, as well as hanging up on it.
+   *
+   * Aborting the stream closes the socket, which is usually enough. Usually is
+   * not what somebody pressing stop is asking for: behind a proxy that buffers,
+   * the close can arrive long after the model has finished answering into a page
+   * nobody is watching. This takes the run's lease away, which the invocation
+   * doing the work notices on its next heartbeat.
+   */
+  stopChat: (id) => request('POST', `/api/chats/${id}/stop`),
   uploadAttachment: (file) => request('POST', '/api/attachments', file),
   /** A file as something the viewer can draw: a document, sheets, slides, text. */
   filePreview: (id) => request('GET', `/api/attachments/${id}/preview`),
