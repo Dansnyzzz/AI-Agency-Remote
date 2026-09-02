@@ -107,6 +107,7 @@ export const vi = {
   'composer.queue': 'Xếp hàng đợi — sẽ vào ở bước kế tiếp',
   'composer.stop': 'Dừng',
   'composer.stopped': 'Đã dừng.',
+  'mirror.watching': 'Đang chạy ở tab khác — đang theo dõi…',
   'empty.title': 'Hôm nay bạn muốn làm gì?',
   'empty.body':
     'Chọn model rồi hỏi bất cứ điều gì. Khi máy tính của bạn đã kết nối, trợ lý có thể đọc tệp, sửa code và chạy lệnh ngay trên máy đó.',

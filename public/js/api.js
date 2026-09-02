@@ -1,4 +1,5 @@
 /** Thin wrapper over the JSON API, plus the SSE reader for the agent stream. */
+import { narrate } from './mirror.js';
 
 async function request(method, path, body) {
   const res = await fetch(path, {
@@ -294,6 +295,20 @@ export async function runAgent({ chatId, model, decision, runId, signal, handler
       } catch {
         continue;
       }
+      /**
+       * Say it out loud as well as acting on it.
+       *
+       * One agent loop per conversation is not negotiable — two tabs appending
+       * to one transcript shuffles its turns together — so a second tab is
+       * refused with a 409. Correct, and from where the person is sitting also a
+       * bug: they opened their own conversation on the laptop while the phone
+       * was mid-answer and it sat there saying nothing.
+       *
+       * The tab holding the run narrates it here, at the one place every event
+       * already passes through, so nothing else in the loop has to know that
+       * anybody is listening.
+       */
+      narrate(chatId, event, payload);
       handlers[event]?.(payload);
     }
   }

@@ -46,6 +46,9 @@ const NODE_GLOBALS = {
 const BROWSER_GLOBALS = {
   document: 'readonly',
   window: 'readonly',
+  // Two tabs on one conversation talk to each other over this rather than over
+  // the network — same-origin, in-browser, no requests. See public/js/mirror.js.
+  BroadcastChannel: 'readonly',
   location: 'readonly',
   history: 'readonly',
   navigator: 'readonly',

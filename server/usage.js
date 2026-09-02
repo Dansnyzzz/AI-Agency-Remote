@@ -90,3 +90,5 @@ export async function summary(userId) {
   const cacheHitRate = month.tokens > 0 ? (month.cacheRead || 0) / month.tokens : 0;
   return { month: { ...month, cacheHitRate }, byModel, byRole };
 }
+
+

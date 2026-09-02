@@ -35,6 +35,41 @@
       hundred bytes and it is on the same connection as the page.
     -->
     <script src="/js/lang-boot.js"></script>
+
+    <!--
+      Tell the browser about the module graph before it discovers it.
+
+      There is no bundler here, on purpose, and the cost of that shows up as a
+      waterfall: the page loads `app.js`, which imports fifteen modules, several
+      of which import each other. The browser cannot know `markdown.js` exists
+      until it has parsed `render.js`, so on a phone over mobile data — the
+      device this app is actually built for — those round trips are serialised
+      and land squarely in LCP.
+
+      `modulepreload` collapses them into one parallel batch. It changes nothing
+      about how the code loads or in what order it runs; it only stops the
+      browser waiting to be told what it will obviously need.
+
+      Listed leaf-first, which is the order they are actually needed in, and kept
+      to the modules `app.js` reaches on every load — a page-specific module that
+      only some sessions open would be bandwidth spent on a maybe.
+    -->
+    <link rel="modulepreload" href="/js/i18n.js" />
+    <link rel="modulepreload" href="/js/mirror.js" />
+    <link rel="modulepreload" href="/js/api.js" />
+    <link rel="modulepreload" href="/js/markdown.js" />
+    <link rel="modulepreload" href="/js/menu.js" />
+    <link rel="modulepreload" href="/js/render.js" />
+    <link rel="modulepreload" href="/js/models.js" />
+    <link rel="modulepreload" href="/js/screen.js" />
+    <link rel="modulepreload" href="/js/viewer.js" />
+    <link rel="modulepreload" href="/js/autopreview.js" />
+    <link rel="modulepreload" href="/js/workspace.js" />
+    <link rel="modulepreload" href="/js/workflows.js" />
+    <link rel="modulepreload" href="/js/project-page.js" />
+    <link rel="modulepreload" href="/js/pages.js" />
+    <link rel="modulepreload" href="/js/onboarding.js" />
+    <link rel="modulepreload" href="/js/search.js" />
     <!--
       No web fonts.
 

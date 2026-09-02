@@ -1,4 +1,5 @@
 import { api, runAgent } from './api.js';
+import { follow } from './mirror.js';
 import { wireCopyButtons } from './markdown.js';
 import {
   assistantMessage,
@@ -1594,6 +1595,73 @@ async function handOverMidRun() {
   }
 }
 
+/**
+ * Watch a run that another tab is holding.
+ *
+ * The 409 is correct — one loop per conversation, or the transcript comes back
+ * with its turns shuffled together. What was wrong is what happened next: the
+ * tab said "already running somewhere else" and then showed nothing, so the
+ * person watching their laptop while their phone answered saw a conversation
+ * that appeared to have stopped.
+ *
+ * This draws the other tab's run as it happens, then reloads from the database
+ * when it ends. Nothing is sent, no lease is taken, and nothing is written to
+ * the transcript: the reload is what makes it correct, and the narration is what
+ * makes the wait bearable.
+ *
+ * It gives up on its own after a while. A tab left open on a conversation whose
+ * owner was closed mid-run would otherwise wait forever for a `done` that is
+ * never coming.
+ */
+const MIRROR_TIMEOUT_MS = 10 * 60_000;
+
+async function mirrorRun() {
+  const chatId = state.chatId;
+  if (!chatId) return;
+
+  setStatus(t('mirror.watching'));
+  state.turn = assistantMessage();
+  state.sealed = false;
+  $('messages').append(state.turn.node);
+  scrollToEnd();
+
+  // Resolves with a value rather than nothing, purely so the type of `resolve`
+  // is inferable — a bare `new Promise((resolve) => …)` needs a JSDoc hint that
+  // reads worse than this does.
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stop();
+      resolve(true);
+    };
+    const timer = setTimeout(finish, MIRROR_TIMEOUT_MS);
+
+    const stop = follow(chatId, (event, data) => {
+      // Only the events that draw. Approvals, plans and tool cards belong to the
+      // tab that can actually answer them, and half-drawing them here would
+      // offer buttons that do nothing.
+      if (event === 'text') {
+        const turn = nextBlock();
+        turn.finishThinking();
+        turn.appendText(data?.delta || '');
+        maybeScroll();
+      } else if (event === 'status' && data?.phase === 'thinking') {
+        setStatus(t('mirror.watching'));
+      } else if (event === 'done' || event === 'error') {
+        finish();
+      }
+    });
+  });
+
+  // The database is the truth again, and it has the turn the other tab wrote —
+  // properly, with its tool cards and its message ids.
+  setStatus(null);
+  if (state.chatId === chatId) await openChat(chatId);
+}
+
 /** Hosts cap how long one request may run; the agent loop is resumable. */
 const MAX_RESUMES = 25;
 
@@ -1634,7 +1702,10 @@ async function stream(decision) {
     // 409 means another tab holds this conversation. That is the lock doing its
     // job, not a failure — say which, so nobody goes looking for a bug.
     if (err.code === 'already_running') {
-      toast('This conversation is already running in another tab.');
+      // Refused because another tab holds the lease — which is the lock doing
+      // its job. Rather than sitting silent, watch that tab's run and redraw it
+      // here. See mirror.js and `mirrorRun`.
+      await mirrorRun();
     } else if (err.name !== 'AbortError') {
       toast(err.message || 'The stream failed.', 'error');
     }

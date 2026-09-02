@@ -41,6 +41,8 @@ export const en = {
   'composer.queue': 'Queue this — it goes in at the next step',
   'composer.stop': 'Stop',
   'composer.stopped': 'Stopped.',
+  // Shown in the tab that is watching rather than driving — see mirror.js.
+  'mirror.watching': 'Running in another tab — watching…',
   // The checklist drawn inside a message by `update_plan`, and the count beside
   // the same steps in the progress rail.
   'chat.plan': 'Plan',
