@@ -21,7 +21,26 @@ import { claim, publishFrame, release } from './screen.js';
  *
  * **Off unless you turn it on.** A browser sandbox is contained; this is not.
  * It types into whatever has focus and clicks whatever is under the pointer, so
- * it stays behind `DESKTOP_ACCESS=true` and every action needs approval.
+ * it stays behind `DESKTOP_ACCESS=true`.
+ *
+ * This used to end "and every action needs approval". That was not true, and it
+ * is the kind of untruth that matters: somebody reading it believes there is a
+ * second control catching whatever the flag lets through, and there is not.
+ *
+ * What `assessRisk` in server/tools/definitions.js actually grades, and what the
+ * default `guarded` policy does with it:
+ *
+ *   safe       desktop_look, desktop_windows            — never asks
+ *   ordinary   desktop_focus, click, scroll, type, key  — runs without asking
+ *   sensitive  desktop_key with a dangerous combination,
+ *              desktop_close, desktop_launch of a shell — stops and asks
+ *
+ * So typing into whatever holds focus is unprompted. That is a deliberate
+ * design rather than an oversight — the same file argues that asking about
+ * everything and asking about nothing fail the same way, because neither leaves
+ * any attention for the cases that matter — and `ask` mode exists for anyone who
+ * wants the stricter behaviour. It is written out here so the trade is visible
+ * at the point where somebody would otherwise assume it had been made for them.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
