@@ -479,6 +479,17 @@ try {
   // finished — including anything edited while it was running, which for a run
   // that takes minutes is a wide door.
   is(gate.stamp.length >= 1, 'stamp() takes the fingerprint that was tested');
+
+  // A file outside the project is not project source. `startsWith('..')` is the
+  // right test on one filesystem and silently the wrong one across two: on
+  // Windows path.relative cannot express a different drive as `..`, so it
+  // returns an absolute path instead and the escape check waved it through.
+  // Found live — a scratch file under the system temp directory turned up in
+  // the pending list and verify-stop then refused a completion claim over it.
+  is(!gate.isSource('C:\\Users\\someone\\Temp\\scratch.mjs'), 'an absolute Windows path is not project source');
+  is(!gate.isSource('/tmp/scratch.mjs'), 'nor an absolute POSIX one');
+  is(!gate.isSource('../elsewhere/x.js'), 'nor one above the root');
+  is(gate.isSource('server/agent.js'), 'but a real relative path still is');
 }
 
 /* ── the gate must cover what CI blocks a merge on ─────────────── */

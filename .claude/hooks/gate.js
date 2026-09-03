@@ -154,7 +154,25 @@ const NOT_SOURCE = [
 ];
 
 export function isSource(rel) {
-  if (!rel || rel.startsWith('..')) return false;
+  if (!rel) return false;
+
+  /**
+   * Outside the project is not project source — including on another drive.
+   *
+   * `startsWith('..')` is the right test on one filesystem, and silently the
+   * wrong one on Windows across two. `path.relative('D:\\AI remote', 'C:\\Users
+   * \\…\\scratch.mjs')` cannot express the hop as `..`, so it returns the
+   * absolute `C:\Users\…` instead — which does not start with `..`, so this
+   * said yes.
+   *
+   * The consequence was live in this repository: editing a scratch file under
+   * the system temp directory put it in the pending list, and `verify-stop`
+   * then refused a completion claim over an "unproven" file the suites could
+   * never prove, because it is not part of the project. A guard that cries wolf
+   * is the guard people switch off — the same argument NOT_SOURCE is built on.
+   */
+  if (path.isAbsolute(rel) || rel.startsWith('..')) return false;
+
   return !NOT_SOURCE.some((re) => re.test(rel));
 }
 
