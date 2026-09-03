@@ -48,8 +48,43 @@ preview="$(curl -fsSL -X POST "$server/api/pair/enrol" \
   -d "{\"token\":\"$AIR_TOKEN\"}")" \
   || fail "That setup link is not valid any more. Get a new one from the app."
 
-account="$(printf '%s' "$preview" | sed -n 's/.*"account":"\([^"]*\)".*/\1/p')"
+# Read one string field out of a JSON object, defensively.
+#
+# This was `sed -n 's/.*"key":"\([^"]*\)".*/\1/p'`, which is wrong in two ways
+# that matter here. `.*` is greedy, so with more than one occurrence of the key
+# it returns the *last* — and the value it extracts is whatever the surrounding
+# response happens to contain. And `[^"]*` accepts backslashes, so an escaped
+# quote inside a value walks straight through it.
+#
+# For `token` that is a corrupt token and a confusing failure. For `account` it
+# is worse: that value is the whole of the confirmation prompt below, the one
+# control standing between a person and handing their machine to somebody
+# else's account. A field an attacker can influence must not be able to write
+# what that prompt says.
+#
+# `grep -o` returns every match rather than the last, `head -n1` takes the
+# first, and `[^"\\]*` refuses any value containing a backslash rather than
+# trying to decode escapes in shell.
+json_string() {
+  printf '%s' "$2" \
+    | grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"\\\\]*\"" \
+    | head -n 1 \
+    | sed 's/^[^:]*:[[:space:]]*"//; s/"$//'
+}
+
+account="$(json_string account "$preview")"
 [ -n "$account" ] || fail "That setup link is not valid any more. Get a new one from the app."
+
+# Shown to a person as the basis of a yes/no decision, so it must not be able to
+# repaint the terminal around itself — an escape sequence here could erase the
+# warning it sits inside.
+#
+# Control characters only. An earlier version of this rejected everything
+# outside printable ASCII, which would have refused a perfectly ordinary
+# non-ASCII email address — and this app's users are largely not anglophone.
+case "$account" in
+  *[[:cntrl:]]*) fail "The server sent an account name this script will not display. Get a new link from the app." ;;
+esac
 
 printf '\n  \033[33mThis will give  %s  full access to this computer:\033[0m\n' "$account"
 printf '  \033[33mits files, a shell, and control of your screen.\033[0m\n\n'
@@ -93,7 +128,7 @@ paired="$(curl -fsSL -X POST "$server/api/pair/enrol" \
   -d "{\"token\":\"$AIR_TOKEN\",\"confirm\":true,\"name\":\"$host\",\"info\":{\"platform\":\"$platform\",\"hostname\":\"$host\"}}")" \
   || fail "Could not finish setup."
 
-device_token="$(printf '%s' "$paired" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+device_token="$(json_string token "$paired")"
 [ -n "$device_token" ] || fail "Could not finish setup: the server did not return a token."
 
 umask 077
