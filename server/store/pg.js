@@ -58,6 +58,23 @@ function splitStatements(sql) {
  * Neon/Postgres store. Uses the HTTP driver, which is what you want on Vercel:
  * no connection pool to leak across serverless invocations.
  *
+ * **A trap worth knowing before you touch a `bigint` column here.** The two
+ * drivers this file runs on disagree about `int8`. PGlite parses it to a JS
+ * **number** (falling back to BigInt only outside the safe range); Neon inherits
+ * `pg-types`, whose int8 parser is `String`. So `input_tokens`, `output_tokens`,
+ * `messages.seq`, `doc_chunks.mtime`, `shared_models.context` and every
+ * `COUNT(*)::bigint` come back as numbers on a laptop and as strings on Vercel.
+ *
+ * Every read of those today goes through `Number(...)` — deliberately, and it is
+ * why this has never bitten. But nothing *enforces* it: the next person to write
+ * `row.input_tokens + row.output_tokens` gets 30 locally and "1020" in
+ * production, and every test passes, because the suites run on PGlite.
+ *
+ * There is no honest test for this from here: asserting the coercion on PGlite
+ * proves nothing about the driver that behaves differently. So it is written
+ * down instead. The rule is simply: coerce at the boundary, always, and keep
+ * comparisons on these columns in SQL rather than in JS.
+ *
  * Every user-owned query takes `userId` and filters on it. That parameter is
  * the tenancy boundary — it always comes from the verified session, never from
  * anything the client sent.
@@ -640,19 +657,31 @@ export function createPgStore(connectionString) {
      * query as everything else: a search must never reach across accounts.
      */
     async searchChats(userId, query, limit = 40) {
-      const like = `%${String(query).trim()}%`;
+      /**
+       * The user's own wildcards are searched for, not obeyed.
+       *
+       * `%` and `_` are LIKE metacharacters, so typing a single `%` matched
+       * *every* message this account has ever written — the most expensive
+       * query in the file, run from a search box, on one keystroke. `\` has to
+       * go first or it would escape the escapes.
+       *
+       * The `ESCAPE` clause is named explicitly in the SQL below because the default
+       * is not guaranteed across configurations.
+       */
+      const escaped = String(query).trim().replace(/[\\%_]/g, (ch) => `\\${ch}`);
+      const like = `%${escaped}%`;
       return q(
         `SELECT c.id, c.title, c.updated_at, c.pinned,
                 (SELECT COUNT(*)::int FROM messages m WHERE m.chat_id = c.id) AS message_count,
                 (SELECT LEFT(m.content::text, 300)
                    FROM messages m
-                  WHERE m.chat_id = c.id AND m.content::text ILIKE $2
+                  WHERE m.chat_id = c.id AND m.content::text ILIKE $2 ESCAPE '\\'
                   ORDER BY m.seq LIMIT 1) AS snippet
            FROM chats c
           WHERE c.user_id = $1
-            AND (c.title ILIKE $2
+            AND (c.title ILIKE $2 ESCAPE '\\'
                  OR EXISTS (SELECT 1 FROM messages m
-                             WHERE m.chat_id = c.id AND m.content::text ILIKE $2))
+                             WHERE m.chat_id = c.id AND m.content::text ILIKE $2 ESCAPE '\\'))
           ORDER BY c.updated_at DESC
           LIMIT $3`,
         [userId, like, limit],

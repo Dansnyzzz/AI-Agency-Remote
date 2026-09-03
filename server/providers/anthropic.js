@@ -139,6 +139,19 @@ export async function* streamAnthropic({
             name: t.name,
             description: t.description,
             input_schema: t.parameters,
+            /**
+             * Make the provider enforce the schema we already wrote.
+             *
+             * "Guarantees schema validation on tool names and inputs", in the
+             * SDK's own words. Without it a malformed `input` — a missing
+             * required field, a string where a number belongs, a tool name that
+             * does not exist — arrives at `executeTool`, which then has to fail
+             * it and spend a step telling the model so. This app hands those
+             * inputs to a shell and a filesystem on somebody's real machine, so
+             * the argument for validating at the edge rather than at the far end
+             * is stronger here than in most places.
+             */
+            strict: true,
           })),
         }
       : {}),

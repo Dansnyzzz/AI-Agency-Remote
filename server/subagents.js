@@ -92,7 +92,20 @@ async function runOne({ userId, user, entry, prefs, tools, task, signal, stream 
         system: SYSTEM,
         messages,
         tools,
-        effort: prefs.effort,
+        /**
+         * `low`, not the conversation's setting.
+         *
+         * A sub-agent gets one short, read-only, self-contained question — find
+         * this, read that, report back — and `runParallel` fans out six of them
+         * at once on the account's main model. Running all six at the effort the
+         * *conversation* is set to means paying flagship deep-thinking rates six
+         * times over for what is mostly retrieval, and Anthropic's own guidance
+         * for sub-agents is low effort for exactly this shape of task.
+         *
+         * The main loop keeps `prefs.effort` untouched: that is where the
+         * reasoning the user is paying for actually happens.
+         */
+        effort: 'low',
         signal,
       })) {
         if (ev.type === 'text') assistant.text += ev.delta ?? '';
