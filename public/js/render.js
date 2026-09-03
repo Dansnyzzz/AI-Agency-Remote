@@ -265,7 +265,7 @@ function attachmentStrip(files) {
         const open = el('button', 'bubble__thumb');
         open.type = 'button';
         open.dataset.file = file.id;
-        open.title = `Open ${file.name || 'this image'}`;
+        open.title = t('chat.openNamed').replace('{name}', file.name || '');
         open.append(img);
         strip.append(open);
       } else {
@@ -323,11 +323,11 @@ export function widgetFrame(widget) {
 
   const caption = document.createElement('figcaption');
   caption.className = 'widget__caption';
-  caption.textContent = widget.title || 'Diagram';
+  caption.textContent = widget.title || t('chat.diagram');
 
   const frame = document.createElement('iframe');
   frame.className = 'widget__frame';
-  frame.title = widget.title || 'Diagram';
+  frame.title = widget.title || t('chat.diagram');
   /**
    * No `allow-scripts`: a widget is a finished picture. Anything that needs to
    * run is a `create_file` artifact, which has its own frame and its own warning.
@@ -398,14 +398,14 @@ export function fileCard(file) {
   const open = el('button', 'btn btn--ghost filecard__btn');
   open.type = 'button';
   open.dataset.file = file.id;
-  open.textContent = 'Open';
+  open.textContent = t('chat.open');
 
   const download = el('a', 'btn btn--ghost filecard__btn');
   // The version marker only changes when the file is rewritten; without it a
   // browser holding the immutable first version would download that forever.
   download.href = `/api/attachments/${file.id}?download=1${file.version ? `&v=${file.version}` : ''}`;
   download.setAttribute('download', file.name);
-  download.textContent = 'Download';
+  download.textContent = t('chat.download');
 
   card.append(icon, body, open, download);
   return card;
@@ -436,11 +436,11 @@ export function userMessage(text, files = [], id = null) {
    */
   const actions = el('div', 'msg__actions');
   actions.innerHTML =
-    '<button class="msg__action" type="button" data-act="copy" title="Copy" aria-label="Copy message">' +
+    `<button class="msg__action" type="button" data-act="copy" title="${escapeHtml(t('chat.copy'))}" aria-label="${escapeHtml(t('chat.copy'))}">` +
     '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6">' +
     '<rect x="7" y="7" width="9.5" height="9.5" rx="2" /><path d="M13 4.5H5.5A1.5 1.5 0 0 0 4 6v7.5" />' +
     '</svg></button>' +
-    '<button class="msg__action" type="button" data-act="edit" title="Edit and ask again" aria-label="Edit message">' +
+    `<button class="msg__action" type="button" data-act="edit" title="${escapeHtml(t('chat.edit'))}" aria-label="${escapeHtml(t('chat.edit'))}">` +
     '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M13.5 2.9a1.9 1.9 0 0 1 2.7 2.7L7.8 14 4 15l1-3.8Z" />' +
     '</svg></button>';
@@ -567,7 +567,7 @@ export function assistantMessage() {
         out.open = !!result.isError;
         out.append(el('summary', null, escapeHtml(t('step.output'))));
         const pre = el('pre');
-        pre.textContent = result.content || '(no output)';
+        pre.textContent = result.content || t('chat.noOutput');
         out.append(pre);
         item.append(out);
 
@@ -612,7 +612,9 @@ export function assistantMessage() {
     appendThinking(delta) {
       if (!thinkingBlock) {
         thinkingBlock = el('details', 'block');
-        thinkingBlock.append(el('summary', null, '<span class="spinner"></span> Reasoning'));
+        thinkingBlock.append(
+          el('summary', null, `<span class="spinner"></span> ${escapeHtml(t('chat.reasoning'))}`),
+        );
         thinkingBody = el('div', 'block__body');
         thinkingBody.append(el('pre'));
         thinkingBlock.append(thinkingBody);
@@ -623,7 +625,7 @@ export function assistantMessage() {
 
     finishThinking() {
       if (thinkingBlock) {
-        thinkingBlock.querySelector('summary').innerHTML = 'Reasoning';
+        thinkingBlock.querySelector('summary').innerHTML = escapeHtml(t('chat.reasoning'));
       }
     },
 
@@ -765,7 +767,7 @@ export function assistantMessage() {
             `<span class="tool__name">${escapeHtml(call.name)}</span>` +
             `<span class="tool__arg">${escapeHtml(summariseToolInput(call.name, call.input))}</span>` +
             (result.ms != null ? `<span class="tool__time">${ms(result.ms)}</span>` : '');
-          inner.querySelector('pre').textContent = result.content || '(no output)';
+          inner.querySelector('pre').textContent = result.content || t('chat.noOutput');
 
           /**
            * A document came out of this call.
@@ -807,7 +809,7 @@ export function assistantMessage() {
         if (call.name === 'update_plan') api.setPlan(call.input?.steps);
         const handle = api.startTool(call);
         const result = resultsByCallId?.get(call.id);
-        handle.complete(result || { content: '(no result recorded)', isError: false });
+        handle.complete(result || { content: t('chat.noResult'), isError: false });
       }
       if (message.text) api.appendText(message.text);
       api.finish();
@@ -844,12 +846,15 @@ export function assistantMessage() {
 export function summaryDivider(replaced, text) {
   const wrap = el('div', 'compacted');
   const line = el('div', 'compacted__line');
-  line.textContent = `${replaced} earlier message${replaced === 1 ? '' : 's'} summarised to free up room`;
+  // Two keys rather than a plural rule: this dictionary has no plural machinery
+  // on purpose, and Vietnamese does not inflect the noun anyway.
+  line.textContent =
+    replaced === 1 ? t('chat.compactedOne') : t('chat.compacted').replace('{n}', String(replaced));
   wrap.append(line);
 
   if (text) {
     const fold = el('details', 'block compacted__fold');
-    fold.append(el('summary', null, 'Read the summary'));
+    fold.append(el('summary', null, escapeHtml(t('chat.summaryFold'))));
     const body = el('div', 'block__body');
     const pre = el('pre');
     pre.textContent = text;

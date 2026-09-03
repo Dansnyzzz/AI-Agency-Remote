@@ -145,24 +145,17 @@ const state = {
  */
 const POLICIES = ['guarded', 'auto', 'ask', 'plan', 'readonly'];
 
-const POLICY_LABEL = {
-  guarded: 'Guarded',
-  ask: 'Ask first',
-  auto: 'Auto-run',
-  plan: 'Plan',
-  readonly: 'Read-only',
-};
-
-const POLICY_HINT = {
-  guarded:
-    'Reading, editing inside your workspace, driving the browser and everyday commands all run straight away. ' +
-    'Deleting, writing outside the workspace, touching Windows system paths and closing unsaved windows stop and ask. ' +
-    'That check is a list of known-dangerous patterns, not a sandbox — something destructive it does not recognise will run.',
-  auto: 'Nothing is gated, including destructive actions. Fastest, and the one that can lose work.',
-  ask: 'Every change waits for you. Safest, and the most interrupting — expect to be asked a lot.',
-  plan: 'Explores and reads, then hands back a plan instead of doing the work. Nothing on your machine changes.',
-  readonly: 'The assistant can look at things but the tools that change anything are never even offered to it.',
-};
+/**
+ * Looked up when drawn, not built at import.
+ *
+ * These were plain objects of English, which meant two things: the mode chip
+ * sitting beside Send was untranslated on a Vietnamese account, and — had they
+ * simply been wrapped in `t()` where they stand — they would have been resolved
+ * at module load, before `bootstrap` reports the account's language, and then
+ * never updated when it did. Functions, so every read is current.
+ */
+const POLICY_LABEL = (policy) => t(`policy.${policy}.label`);
+const POLICY_HINT = (policy) => t(`policy.${policy}.hint`);
 
 /**
  * A picture for each mode, on the chip and beside its row in the menu.
@@ -201,13 +194,9 @@ const POLICY_ICON = {
  * thought it puts into doing it. Reaching one and not the other meant opening a
  * settings sheet to change a number you were already thinking about.
  */
-const EFFORTS = [
-  ['low', 'Low'],
-  ['medium', 'Medium'],
-  ['high', 'High'],
-  ['xhigh', 'Extra high'],
-  ['max', 'Max'],
-];
+const EFFORT_IDS = ['low', 'medium', 'high', 'xhigh', 'max'];
+/** `[id, label]` pairs, translated on every read — see POLICY_LABEL above. */
+const efforts = () => EFFORT_IDS.map((id) => [id, t(`effort.${id}`)]);
 
 const SUGGESTIONS = [
   'Show me what is in my workspace and summarise the project.',
@@ -1554,7 +1543,7 @@ async function deliver(item, { interrupting = false } = {}) {
     // Stamped after the fact: the id only exists once the server has it, and
     // without it the bubble has nothing to edit.
     if (message?.id) node.dataset.messageId = message.id;
-    if (interrupting) toast('Sent — it will pick this up at the next step.');
+    if (interrupting) toast(t('status.queued'));
     return true;
   } catch (err) {
     node.remove();
@@ -1751,7 +1740,7 @@ async function stream(decision) {
   state.turn = assistantMessage();
   state.sealed = false;
   $('messages').append(state.turn.node);
-  setStatus('Thinking…');
+  setStatus(t('status.thinking'));
   scrollToEnd();
 
   try {
@@ -1762,12 +1751,12 @@ async function stream(decision) {
       if (outcome !== 'cut') break;
 
       if (resume === MAX_RESUMES) {
-        toast('Paused after many resumes. Send a message to keep going.');
+        toast(t('status.paused'));
         break;
       }
       // The host closed the connection mid-run. Every step is already saved,
       // so reconnecting continues from exactly where it stopped.
-      setStatus('Reconnecting…');
+      setStatus(t('status.reconnecting'));
     }
   } catch (err) {
     // 409 means another tab holds this conversation. That is the lock doing its
@@ -1778,7 +1767,7 @@ async function stream(decision) {
       // here. See mirror.js and `mirrorRun`.
       await mirrorRun();
     } else if (err.name !== 'AbortError') {
-      toast(err.message || 'The stream failed.', 'error');
+      toast(err.message || t('status.streamFailed'), 'error');
     }
   } finally {
     state.running = false;
@@ -1862,7 +1851,7 @@ async function streamOnce(decision) {
         retry: ({ reason }) => {
           nextBlock().resetText();
           if (reason) toast(reason);
-          setStatus('Starting that reply again…');
+          setStatus(t('status.restarting'));
           maybeScroll();
         },
         plan: ({ steps }) => {
@@ -1874,7 +1863,7 @@ async function streamOnce(decision) {
           // asked for it, even though that turn is already persisted.
           state.turn.finishThinking();
           state.toolHandles.set(call.id, state.turn.startTool(call));
-          setStatus(`Running ${call.name}…`);
+          setStatus(t('status.tool').replace('{name}', call.name));
           // Show the screen the moment the assistant touches the browser or the
           // desktop, rather than making the user go looking for it.
           if (call.name.startsWith('browser_') || call.name.startsWith('desktop_')) {
@@ -1900,14 +1889,14 @@ async function streamOnce(decision) {
         },
         steer: ({ text }) => {
           setStatus(null);
-          toast(`Picked up: "${text.slice(0, 60)}${text.length > 60 ? '…' : ''}"`);
+          toast(t('status.pickedUp').replace('{text}', `${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`));
         },
         usage: (totals) => renderUsage(totals),
         context: (info) => renderContext(info),
         compacted: ({ replaced, text }) => {
           // Said out loud, because the transcript the model sees has just
           // changed and that is not something to do silently.
-          toast(`Folded ${replaced} earlier messages into a summary to free up room.`);
+          toast(t('status.folded').replace('{n}', String(replaced)));
           // `text` too: `summaryDivider` renders a "Read the summary"
           // disclosure when it is given one, and `openChat` already passes it.
           // Dropping it here made the summary visible after a reload and
@@ -2102,8 +2091,8 @@ function setEmpty(visible) {
  */
 function renderPolicy() {
   const policy = state.boot.prefs.toolPolicy;
-  $('policy-label').textContent = POLICY_LABEL[policy];
-  $('policy-chip').title = POLICY_HINT[policy] || '';
+  $('policy-label').textContent = POLICY_LABEL(policy);
+  $('policy-chip').title = POLICY_HINT(policy) || '';
   // The glyph changes with the mode. A chip that always showed the same bolt
   // was decoration; one that changes is the fastest way to see where you are.
   $('policy-icon').innerHTML = POLICY_ICON[policy] || '';
@@ -2127,16 +2116,19 @@ function renderUsage({ input, output, cost, priced, estimated, cacheRead }) {
     $('composer-meta').textContent = '';
     return;
   }
-  const tokens = `${(input + output).toLocaleString()} tokens`;
+  const tokens = t('usage.tokens').replace('{n}', (input + output).toLocaleString());
   // "~$" only when the figure is our own arithmetic. When the provider invoiced
   // the turn — OpenRouter and OrcaRouter both do — the number is exact and the
   // tilde would be understating what we actually know.
-  const money = priced ? ` · ${estimated ? '~' : ''}$${cost.toFixed(4)} this turn` : ' this turn';
+  const money = priced
+    ? ` · ${estimated ? '~' : ''}$${cost.toFixed(4)} ${t('usage.thisTurn')}`
+    : ` ${t('usage.thisTurn')}`;
   // A cache hit is the single biggest lever on an agentic conversation's cost,
   // and it was invisible. Shown only when it was substantial enough to matter.
-  const cached = cacheRead && input && cacheRead / input >= 0.2
-    ? ` · ${Math.round((cacheRead / input) * 100)}% cached`
-    : '';
+  const cached =
+    cacheRead && input && cacheRead / input >= 0.2
+      ? ` · ${t('usage.cached').replace('{n}', String(Math.round((cacheRead / input) * 100)))}`
+      : '';
   $('composer-meta').textContent = `${tokens}${money}${cached}`;
 }
 
@@ -2579,15 +2571,15 @@ $('policy-chip').addEventListener('click', () => {
     [
       { static: true, label: 'Modes' },
       ...POLICIES.map((policy) => ({
-        label: POLICY_LABEL[policy],
-        hint: POLICY_HINT[policy],
+        label: POLICY_LABEL(policy),
+        hint: POLICY_HINT(policy),
         icon: POLICY_ICON[policy],
         active: policy === current,
         async run() {
           if (policy === current) return;
           state.boot.prefs = await api.savePrefs({ toolPolicy: policy });
           renderPolicy();
-          toast(`${POLICY_LABEL[policy]}.`);
+          toast(`${POLICY_LABEL(policy)}.`);
         },
       })),
       { node: effortRow() },
@@ -2616,7 +2608,7 @@ function effortRow() {
 
   const paint = () => {
     const current = state.boot.prefs.effort;
-    const index = EFFORTS.findIndex(([value]) => value === current);
+    const index = EFFORT_IDS.indexOf(current);
     name.textContent = `Effort (${effortLabel(current)})`;
     for (const [i, dot] of [...dots.children].entries()) {
       dot.classList.toggle('is-on', i === index);
@@ -2625,7 +2617,7 @@ function effortRow() {
     }
   };
 
-  for (const [value, label] of EFFORTS) {
+  for (const [value, label] of efforts()) {
     const dot = document.createElement('button');
     dot.type = 'button';
     dot.className = 'effort-dot';
@@ -2652,7 +2644,7 @@ function effortRow() {
 }
 
 /** Falls back to High, which is what an account with no answer stored gets. */
-const effortLabel = (value) => (EFFORTS.find(([v]) => v === value) || EFFORTS[2])[1];
+const effortLabel = (value) => (efforts().find(([v]) => v === value) || efforts()[2])[1];
 
 /**
  * The chip opens the picker, and only the picker.

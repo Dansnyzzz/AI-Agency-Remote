@@ -138,6 +138,63 @@ export const vi = {
   'approval.title': 'Duyệt các hành động này?',
   'composer.label': 'Tin nhắn',
 
+  /* ── chính khung hội thoại ───────────────────────────────────────
+   *
+   * Những chuỗi này người dùng gặp ở *mọi* lượt — phần suy luận gập lại, kết
+   * quả của một tool, các nút trên một tài liệu — mà trước đây đều là tiếng
+   * Anh cứng, trong khi nút đổi ngôn ngữ trong Cài đặt lại nói ngược lại.
+   */
+  'chat.reasoning': 'Suy luận',
+  'chat.noOutput': '(không có kết quả)',
+  'chat.noResult': '(không ghi nhận được kết quả)',
+  'chat.diagram': 'Sơ đồ',
+  'chat.open': 'Mở',
+  'chat.download': 'Tải về',
+  'chat.openNamed': 'Mở {name}',
+  'chat.copy': 'Sao chép',
+  'chat.edit': 'Sửa',
+  'chat.summaryFold': 'Đọc bản tóm tắt',
+  'chat.compacted': 'Đã tóm tắt {n} tin nhắn cũ để lấy thêm chỗ',
+  'chat.compactedOne': 'Đã tóm tắt 1 tin nhắn cũ để lấy thêm chỗ',
+
+  /* ── những gì hiện ra trong lúc một lượt đang chạy ───────────── */
+  'status.reconnecting': 'Đang kết nối lại…',
+  'status.restarting': 'Đang viết lại câu trả lời đó…',
+  'status.paused': 'Đã tạm dừng sau nhiều lần nối lại. Gửi một tin nhắn để chạy tiếp.',
+  'status.streamFailed': 'Luồng dữ liệu bị lỗi.',
+  'status.queued': 'Đã gửi — trợ lý sẽ đọc ở bước kế tiếp.',
+  'status.pickedUp': 'Đã tiếp nhận: "{text}"',
+  'status.folded': 'Đã gộp {n} tin nhắn cũ thành một bản tóm tắt để lấy thêm chỗ.',
+  'usage.tokens': '{n} token',
+  'usage.thisTurn': 'lượt này',
+  'usage.cached': '{n}% từ cache',
+  /* ── chip chế độ, ngay cạnh nút Gửi ──────────────────────────────
+   *
+   * Năm chế độ và câu giải thích cho từng cái. Nó nằm ngay cạnh nút gửi — thứ
+   * được nhìn nhiều nhất trong app — mà trước đây luôn là tiếng Anh.
+   */
+  'policy.guarded.label': 'Có kiểm soát',
+  'policy.ask.label': 'Hỏi trước',
+  'policy.auto.label': 'Tự chạy',
+  'policy.plan.label': 'Lập kế hoạch',
+  'policy.readonly.label': 'Chỉ đọc',
+  'policy.guarded.hint':
+    'Đọc, sửa file trong workspace, điều khiển trình duyệt và các lệnh thường ngày đều chạy thẳng. ' +
+    'Xoá, ghi ra ngoài workspace, đụng vào đường dẫn hệ thống Windows và đóng cửa sổ chưa lưu thì dừng lại hỏi. ' +
+    'Phép kiểm tra đó là một danh sách các mẫu nguy hiểm đã biết, không phải sandbox — thứ phá hoại mà nó chưa biết vẫn sẽ chạy.',
+  'policy.auto.hint': 'Không chặn gì cả, kể cả hành động phá huỷ. Nhanh nhất, và cũng là cái có thể làm mất việc.',
+  'policy.ask.hint': 'Mọi thay đổi đều chờ bạn duyệt. An toàn nhất, và cũng làm phiền nhất — bạn sẽ bị hỏi rất nhiều.',
+  'policy.plan.hint': 'Tìm hiểu và đọc, rồi trả về một kế hoạch thay vì tự làm. Không có gì trên máy bạn bị thay đổi.',
+  'policy.readonly.hint': 'Trợ lý được xem, nhưng các tool có thể thay đổi bất cứ thứ gì thì không bao giờ được đưa cho nó.',
+
+  /* Model được yêu cầu nghĩ kỹ tới mức nào, năm nấc từ rẻ tới cẩn thận. */
+  'effort.low': 'Thấp',
+  'effort.medium': 'Vừa',
+  'effort.high': 'Cao',
+  'effort.xhigh': 'Rất cao',
+  'effort.max': 'Tối đa',
+
+
   'empty.title': 'Hôm nay bạn muốn làm gì?',
   'empty.body':
     'Chọn model rồi hỏi bất cứ điều gì. Khi máy tính của bạn đã kết nối, trợ lý có thể đọc tệp, sửa code và chạy lệnh ngay trên máy đó.',

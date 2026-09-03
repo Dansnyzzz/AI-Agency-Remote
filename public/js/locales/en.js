@@ -77,6 +77,65 @@ export const en = {
   // The accessible name of the main composer. Not a placeholder — see index.html.
   'composer.label': 'Message',
 
+  /* ── the transcript itself ───────────────────────────────────────
+   *
+   * These are on the path a user walks every single turn — the reasoning fold,
+   * a tool card's output, the buttons on a document — and every one of them was
+   * hard-coded English while the language switch sat in Settings claiming
+   * otherwise.
+   */
+  'chat.reasoning': 'Reasoning',
+  'chat.noOutput': '(no output)',
+  'chat.noResult': '(no result recorded)',
+  'chat.diagram': 'Diagram',
+  'chat.open': 'Open',
+  'chat.download': 'Download',
+  'chat.openNamed': 'Open {name}',
+  'chat.copy': 'Copy',
+  'chat.edit': 'Edit',
+  'chat.summaryFold': 'Read the summary',
+  'chat.compacted': '{n} earlier messages summarised to free up room',
+  'chat.compactedOne': '1 earlier message summarised to free up room',
+
+  /* ── things said while a turn runs ───────────────────────────── */
+  'status.reconnecting': 'Reconnecting…',
+  'status.restarting': 'Starting that reply again…',
+  'status.paused': 'Paused after many resumes. Send a message to carry on.',
+  'status.streamFailed': 'The stream failed.',
+  'status.queued': 'Sent — it will pick this up at the next step.',
+  'status.pickedUp': 'Picked up: "{text}"',
+  'status.folded': 'Folded {n} earlier messages into a summary to free up room.',
+  'usage.tokens': '{n} tokens',
+  'usage.thisTurn': 'this turn',
+  'usage.cached': '{n}% cached',
+  /* ── the mode chip, beside Send ──────────────────────────────────
+   *
+   * Five modes and the sentence explaining each. This sits next to the send
+   * button — the most-looked-at control in the app — and was English on every
+   * account whatever language they had chosen.
+   */
+  'policy.guarded.label': 'Guarded',
+  'policy.ask.label': 'Ask first',
+  'policy.auto.label': 'Auto-run',
+  'policy.plan.label': 'Plan',
+  'policy.readonly.label': 'Read-only',
+  'policy.guarded.hint':
+    'Reading, editing inside your workspace, driving the browser and everyday commands all run straight away. ' +
+    'Deleting, writing outside the workspace, touching Windows system paths and closing unsaved windows stop and ask. ' +
+    'That check is a list of known-dangerous patterns, not a sandbox — something destructive it does not recognise will run.',
+  'policy.auto.hint': 'Nothing is gated, including destructive actions. Fastest, and the one that can lose work.',
+  'policy.ask.hint': 'Every change waits for you. Safest, and the most interrupting — expect to be asked a lot.',
+  'policy.plan.hint': 'Explores and reads, then hands back a plan instead of doing the work. Nothing on your machine changes.',
+  'policy.readonly.hint': 'The assistant can look at things but the tools that change anything are never even offered to it.',
+
+  /* How hard the model is asked to think, five steps from cheap to careful. */
+  'effort.low': 'Low',
+  'effort.medium': 'Medium',
+  'effort.high': 'High',
+  'effort.xhigh': 'Extra high',
+  'effort.max': 'Max',
+
+
   // The checklist drawn inside a message by `update_plan`, and the count beside
   // the same steps in the progress rail.
   'chat.plan': 'Plan',
