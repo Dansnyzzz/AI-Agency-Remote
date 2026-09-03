@@ -13,45 +13,102 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * fresh database. Quote state is tracked so a ';' or '--' inside a string
  * literal is left alone.
  *
- * **It does not understand dollar-quoting or block comments.** Single quotes and
- * `--` are handled; `$$ … $$` and `/* … *\/` are not. So the natural way to
- * write a conditional backfill —
+ * It understands single-quoted strings with `''` escapes, `--` line comments,
+ * nested `/* … *\/` block comments, and dollar-quoting — both `$$ … $$` and the
+ * tagged `$body$ … $body$`, matched exactly as Postgres matches them.
+ *
+ * Dollar-quoting is the one that matters, and it used to be missing. It is how
+ * every conditional backfill is written —
  *
  *     DO $$ BEGIN IF NOT EXISTS (…) THEN UPDATE …; END IF; END $$;
  *
- * — would be shredded at the inner semicolon and fail as several broken
- * fragments. Every statement in schema.sql today is a plain CREATE or ALTER, so
- * this has never mattered; it is written down because the next non-trivial
- * migration is exactly when somebody reaches for a DO block, and the failure
- * would look like a syntax error in perfectly good SQL.
+ * — and without it the semicolons inside the block split it into fragments that
+ * each fail as a syntax error in SQL that is perfectly good. Every statement in
+ * schema.sql today is still a plain CREATE or ALTER, so nothing has depended on
+ * it yet; it is handled now so that the next non-trivial migration is a
+ * migration rather than an afternoon.
  */
-function splitStatements(sql) {
-  let stripped = '';
+export function splitStatements(sql) {
+  const statements = [];
+  let current = '';
   let inString = false;
+
   for (let i = 0; i < sql.length; i += 1) {
     const char = sql[i];
+
     if (inString) {
-      stripped += char;
+      current += char;
       // '' is an escaped quote inside a Postgres string literal.
-      if (char === "'") inString = sql[i + 1] === "'" ? (stripped += sql[++i], true) : false;
+      if (char === "'") inString = sql[i + 1] === "'" ? (current += sql[++i], true) : false;
       continue;
     }
+
     if (char === "'") {
       inString = true;
-      stripped += char;
+      current += char;
       continue;
     }
+
+    /**
+     * Dollar-quoting: `$$ … $$` and the tagged `$body$ … $body$`.
+     *
+     * This is the form every non-trivial migration reaches for, because it is
+     * the only way to write a conditional backfill:
+     *
+     *     DO $$ BEGIN IF NOT EXISTS (…) THEN UPDATE …; END IF; END $$;
+     *
+     * Without this the semicolons *inside* the block split it into fragments,
+     * each of which fails as a syntax error in SQL that is perfectly good. The
+     * header comment used to warn about this and leave it unhandled, on the
+     * grounds that schema.sql had no such block yet — which made the failure
+     * something the next person to write one would discover the hard way.
+     *
+     * The tag is copied verbatim and matched exactly, which is what Postgres
+     * does: `$a$ … $a$` and `$$ … $$` do not terminate each other.
+     */
+    const dollar = char === '$' ? /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(sql.slice(i)) : null;
+    if (dollar) {
+      const tag = dollar[0];
+      const end = sql.indexOf(tag, i + tag.length);
+      // Unterminated: take the rest verbatim rather than silently splitting it.
+      const stop = end === -1 ? sql.length : end + tag.length;
+      current += sql.slice(i, stop);
+      i = stop - 1;
+      continue;
+    }
+
+    // A line comment runs to the newline.
     if (char === '-' && sql[i + 1] === '-') {
       while (i < sql.length && sql[i] !== '\n') i += 1;
-      stripped += '\n';
+      current += '\n';
       continue;
     }
-    stripped += char;
+
+    // A block comment. Postgres nests these; so does this.
+    if (char === '/' && sql[i + 1] === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === '/' && sql[i + 1] === '*') (depth += 1, i += 2);
+        else if (sql[i] === '*' && sql[i + 1] === '/') (depth -= 1, i += 2);
+        else i += 1;
+      }
+      i -= 1;
+      current += ' ';
+      continue;
+    }
+
+    if (char === ';') {
+      statements.push(current);
+      current = '';
+      continue;
+    }
+
+    current += char;
   }
-  return stripped
-    .split(';')
-    .map((s) => s.trim())
-    .filter(Boolean);
+
+  statements.push(current);
+  return statements.map((s) => s.trim()).filter(Boolean);
 }
 
 /**

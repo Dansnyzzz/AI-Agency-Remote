@@ -289,6 +289,45 @@ section('two processes cannot open the same database');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ── the statement splitter ────────────────────────────────────────────
+{
+  const { splitStatements } = await import('../server/store/pg.js');
+
+  // Dollar-quoting is the one that matters. It is how every conditional
+  // backfill is written, and without it the semicolons *inside* the block split
+  // it into fragments that each fail as a syntax error in perfectly good SQL.
+  // The splitter's own header used to warn about this and leave it unhandled,
+  // which made it something the next person to write a migration would discover
+  // the hard way.
+  const cases = [
+    ['two plain statements', 'CREATE TABLE a (id int); CREATE TABLE b (id int);', 2],
+    ['a trailing semicolon is optional', 'SELECT 1', 1],
+    ['a line comment cannot split', 'SELECT 1; -- a; b; c\nSELECT 2;', 2],
+    ['a semicolon inside a string cannot split', "INSERT INTO t VALUES ('a;b');", 1],
+    ['nor one after an escaped quote', "INSERT INTO t VALUES ('it''s; fine');", 1],
+    ['a DO block stays whole', 'DO $$ BEGIN IF TRUE THEN UPDATE t SET x=1; END IF; END $$;', 1],
+    ['a tagged block stays whole', 'DO $body$ BEGIN a; b; END $body$; SELECT 1;', 2],
+    ['a different tag does not terminate it', 'DO $a$ SELECT $$x;y$$; $a$;', 1],
+    ['a block comment cannot split', 'SELECT 1; /* a; b; c */ SELECT 2;', 2],
+    ['nor a nested one', 'SELECT 1; /* a /* b; */ c; */ SELECT 2;', 2],
+  ];
+  for (const [what, sql, want] of cases) {
+    const got = splitStatements(sql);
+    check(what, got.length === want, `want ${want}, got ${got.length}: ${JSON.stringify(got).slice(0, 90)}`);
+  }
+
+  // The real file must still come apart the way it always did.
+  const schemaPath = new URL('../server/store/schema.sql', import.meta.url);
+  const real = splitStatements(fs.readFileSync(schemaPath, 'utf8'));
+  check('schema.sql parses into statements', real.length > 50, String(real.length));
+  check(
+    'and every one of them starts with a keyword',
+    real.every((s) => /^(CREATE|ALTER|INSERT|UPDATE|DROP|DO|COMMENT|SET|GRANT|WITH|SELECT)/i.test(s)),
+    real.find((s) => !/^(CREATE|ALTER|INSERT|UPDATE|DROP|DO|COMMENT|SET|GRANT|WITH|SELECT)/i.test(s))?.slice(0, 60),
+  );
+  check('with no comment marker left in any of them', !real.some((s) => s.includes('--') || s.includes('/*')));
+}
+
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
 console.log(
   failures ? `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n` : '\n\x1b[32mAll schema checks passed.\x1b[0m\n',
