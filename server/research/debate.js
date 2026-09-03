@@ -44,11 +44,43 @@ const ARBITER = [
   'Reply with JSON only: {"claims": [{"text": "... [S#]", "conflicting": false}]}',
 ].join('\n');
 
-/** The findings and ledger, as the model reads them. */
+/**
+ * How much evidence the model is shown.
+ *
+ * This block is rebuilt and resent on **every** call of the debate — proposer,
+ * critic, revise, arbiter, six in a default run — so its size is multiplied by
+ * six in the bill. It had no cap at all: six queries returning eight results
+ * each is 48 findings, and once pages are read as well it would be far more.
+ */
+const EVIDENCE_CHARS = 24_000;
+const FINDING_CHARS = 300;
+
+/**
+ * The findings and ledger, as the model reads them.
+ *
+ * A source that was opened contributes what the page said; one that was not
+ * contributes the search engine's blurb, marked as such, so the model can tell
+ * the difference between evidence and advertising. A source that failed to load
+ * says so rather than silently looking like one that had nothing to offer.
+ */
 function evidenceBlock(question, findings, ledger) {
-  const sources = [...ledger.entries()].map(([id, s]) => `${id}: ${s.title || s.url} (${s.rank}) — ${s.snippet || ''}`);
-  const notes = findings.map((f) => `- [${f.id || '—'}] ${f.snippet}`);
-  return `Question: ${question}\n\nSources:\n${sources.join('\n')}\n\nFindings:\n${notes.join('\n')}`;
+  const sources = [...ledger.entries()].map(([id, s]) => {
+    const head = `${id}: ${s.title || s.url} (${s.rank})`;
+    if (s.body) return `${head} — read from the page:\n${s.body}`;
+    if (s.readError) return `${head} — could not be read (${s.readError}); search summary only: ${s.snippet || ''}`;
+    return `${head} — search summary only: ${s.snippet || ''}`;
+  });
+
+  const notes = findings.map((f) => `- [${f.id || '—'}] ${String(f.snippet || '').slice(0, FINDING_CHARS)}`);
+
+  let block = `Question: ${question}\n\nSources:\n${sources.join('\n\n')}\n\nFindings:\n${notes.join('\n')}`;
+  if (block.length > EVIDENCE_CHARS) {
+    // Trimmed at the end, where the weakest sources and the tail of the findings
+    // are, and said out loud — a model shown a hard cut with no marker reads
+    // straight across it and treats the fragment as the whole record.
+    block = `${block.slice(0, EVIDENCE_CHARS)}\n\n[evidence truncated to fit the budget]`;
+  }
+  return block;
 }
 
 /** Claims out of the arbiter's JSON; a prose reply becomes one claim, not nothing. */

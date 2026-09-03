@@ -1,5 +1,5 @@
 {
-  "total": 424,
+  "total": 419,
   "files": {
     "public/js/api.js": 4,
     "public/js/app.js": 182,
@@ -32,7 +32,6 @@
     "server/ratelimit.js": 1,
     "server/research/debate.js": 2,
     "server/research/gather.js": 2,
-    "server/research/index.js": 5,
     "server/scheduler.js": 1,
     "server/settings.js": 1,
     "server/store/index.js": 1,

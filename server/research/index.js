@@ -36,6 +36,15 @@ const ledgerToArray = (ledger) =>
  * `deps` injects `search`, `stream`, `entry`, `store` and `cap` for tests; in
  * production only the defaults run.
  */
+/**
+ * @param {{
+ *   question: string, userId?: string, user?: any, chatId?: string|null, signal?: AbortSignal,
+ *   deps?: {
+ *     store?: any, stream?: any, search?: any, entry?: any, cap?: number,
+ *     readPage?: (url: string) => Promise<string>,
+ *   },
+ * }} args
+ */
 export async function runDeepResearch({ question, userId, user, chatId, signal, deps = {} }) {
   const store = deps.store || getStore();
   const stream = deps.stream;
@@ -49,7 +58,19 @@ export async function runDeepResearch({ question, userId, user, chatId, signal, 
   const overBudget = () => budget.spent >= budget.cap;
 
   const queries = await planQuestions(question, { userId, entry, stream, budget, signal, chatId });
-  const { ledger, findings } = await gatherEvidence(queries, search ? { search } : {});
+
+  /**
+   * The page reader is injected rather than imported.
+   *
+   * `web_fetch` lives in tools/cloud.js, and cloud.js is what calls this
+   * function — importing it back would close a cycle. The caller passes it, and
+   * a caller that does not (the suite, mostly) gets the old snippet-only
+   * behaviour, which the confidence grader then correctly refuses to call HIGH.
+   */
+  const { ledger, findings } = await gatherEvidence(queries, {
+    ...(search ? { search } : {}),
+    ...(deps.readPage ? { readPage: deps.readPage } : {}),
+  });
 
   let claims = [];
   let transcript = [];

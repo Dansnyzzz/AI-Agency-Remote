@@ -680,7 +680,19 @@ async function runParallelTool({ tasks }, { user, chatId, signal }) {
 async function deepResearchTool({ question }, { userId, user, chatId, signal }) {
   const q = String(question || '').trim();
   if (!q) throw new Error('Give a question to research.');
-  const { content } = await runDeepResearch({ question: q, userId, user, chatId, signal });
+  const { content } = await runDeepResearch({
+    question: q,
+    userId,
+    user,
+    chatId,
+    signal,
+    // The research pass reads its best few sources rather than trusting the
+    // search engine's blurb. Passed in from here because web_fetch lives in
+    // this file and importing it the other way would close a cycle. It is the
+    // same guarded reader the model gets: safeFetch, so a page cannot redirect
+    // the run at the local network or the cloud metadata service.
+    deps: { readPage: (target) => webFetch({ url: target, max_chars: 12_000 }) },
+  });
   return content;
 }
 

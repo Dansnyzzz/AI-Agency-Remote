@@ -1,5 +1,5 @@
 import { search as defaultSearch } from '../search.js';
-import { registrableDomain } from './confidence.js';
+import { registrableDomain, RANK_ORDER } from './confidence.js';
 
 const REPUTABLE = new Set([
   'reuters.com', 'apnews.com', 'bbc.co.uk', 'bbc.com', 'nytimes.com', 'wsj.com',
@@ -45,7 +45,57 @@ export function rankSource(url) {
  * @param search injectable; defaults to the real four-engine chain.
  * @returns { ledger: Map<id,{url,rank,title,published,snippet}>, findings: [{id,query,snippet}] }
  */
-export async function gatherEvidence(queries, { search = defaultSearch } = {}) {
+/**
+ * How many of the gathered sources are actually opened and read.
+ *
+ * Reading costs a fetch each and a great deal of prompt, so this is not "all of
+ * them". Three is enough to corroborate a claim across independent domains,
+ * which is what the confidence grader is looking for, and small enough that a
+ * run does not turn into a crawl.
+ */
+const READ_LIMIT = 3;
+
+/** How much of each page travels into the debate. Whole articles do not. */
+const BODY_CHARS = 4000;
+
+/**
+ * Open the best few sources and keep what they actually say.
+ *
+ * Everything here used to be the search engine's own blurb. The report cited a
+ * URL for every claim and no page behind any of those URLs was ever opened, so
+ * "two independent reputable sources" meant two snippets from two domains — and
+ * a snippet is written to make you click, not to be accurate.
+ *
+ * Failures are recorded on the source rather than dropped, because "the page
+ * would not load" and "the page does not say" are different answers and the
+ * grader has to be able to tell them apart.
+ */
+async function readSources(ledger, readPage) {
+  if (typeof readPage !== 'function') return;
+
+  const best = [...ledger.entries()]
+    .sort(([, a], [, b]) => (RANK_ORDER[b.rank] ?? 0) - (RANK_ORDER[a.rank] ?? 0))
+    .slice(0, READ_LIMIT);
+
+  await Promise.all(
+    best.map(async ([, source]) => {
+      try {
+        const text = await readPage(source.url);
+        const body = String(text || '').trim();
+        if (body) {
+          source.body = body.slice(0, BODY_CHARS);
+          source.read = true;
+        } else {
+          source.readError = 'the page returned nothing';
+        }
+      } catch (err) {
+        source.readError = err?.message || 'the page could not be read';
+      }
+    }),
+  );
+}
+
+export async function gatherEvidence(queries, { search = defaultSearch, readPage } = {}) {
   const ledger = new Map();
   const byUrl = new Map();
   const findings = [];
@@ -75,6 +125,8 @@ export async function gatherEvidence(queries, { search = defaultSearch } = {}) {
       findings.push({ id, query, snippet: r.snippet });
     }
   }
+
+  await readSources(ledger, readPage);
 
   return { ledger, findings };
 }

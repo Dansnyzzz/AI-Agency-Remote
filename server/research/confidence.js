@@ -13,7 +13,9 @@
  * that label through, which keeps this function pure and testable.
  */
 
-const RANK_ORDER = { primary: 3, reputable: 2, blog: 1, social: 0 };
+// Exported so `gather` can pick the best few sources to actually open without
+// keeping a second copy of this ordering that would drift from this one.
+export const RANK_ORDER = { primary: 3, reputable: 2, blog: 1, social: 0 };
 
 /**
  * The domain two sources count as independent by — roughly the last two labels.
@@ -46,10 +48,25 @@ export function grade(sourceIds, ledger) {
 
   const domains = new Set(rows.map((r) => registrableDomain(r.url)));
   const strong = rows.filter((r) => (RANK_ORDER[r.rank] ?? 0) >= RANK_ORDER.reputable);
-  const strongDomains = new Set(strong.map((r) => registrableDomain(r.url)));
 
-  // Two independent sources of real standing agreeing is the bar for HIGH.
-  if (strongDomains.size >= 2) return 'HIGH';
+  /**
+   * HIGH means two independent sources of standing that were **opened**.
+   *
+   * It used to mean two that were *listed*. Nothing in this pipeline read a
+   * page: every snippet came from the search engine, and a snippet is written
+   * to make you click rather than to be accurate. So the strongest label the
+   * system could award rested on two blurbs from two hostnames, and it awarded
+   * it confidently.
+   *
+   * Sources that were fetched carry `read`. Requiring it here is what makes the
+   * label mean what a reader takes it to mean; where the fetch failed, or where
+   * no reader was supplied at all, the claim can still reach MEDIUM on standing
+   * and independence, which is what standing and independence are worth.
+   */
+  const readStrongDomains = new Set(
+    strong.filter((r) => r.read).map((r) => registrableDomain(r.url)),
+  );
+  if (readStrongDomains.size >= 2) return 'HIGH';
   // One solid source, or several weak ones from different places, is MEDIUM.
   if (strong.length >= 1 || domains.size >= 2) return 'MEDIUM';
   return 'LOW';

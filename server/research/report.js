@@ -39,8 +39,27 @@ export function buildReport({ question, claims, ledger, status }) {
     lines.push('_No sources were found. Treat every conclusion above as unverified._');
   } else {
     for (const [id, s] of ledger) {
-      lines.push(`- **${id}** ${s.title || s.url} — ${s.url}${s.published ? ` (${s.published})` : ''}`);
+      /**
+       * Say whether the page was opened.
+       *
+       * A citation that looks identical whether the page was read or merely
+       * listed in a search result invites the reader to assume the first. The
+       * few that were actually opened are the ones a HIGH confidence rests on,
+       * and the reader is entitled to know which those are.
+       */
+      const how = s.body ? 'read' : s.readError ? `not read — ${s.readError}` : 'search result only';
+      lines.push(
+        `- **${id}** ${s.title || s.url} — ${s.url}${s.published ? ` (${s.published})` : ''} _(${how})_`,
+      );
     }
+
+    const readCount = [...ledger.values()].filter((s) => s.body).length;
+    lines.push(
+      '',
+      `_${readCount} of ${ledger.size} source${ledger.size === 1 ? '' : 's'} ${readCount === 1 ? 'was' : 'were'} opened and read. ` +
+        'Confidence is HIGH only where two independent sources of standing were read and agreed; ' +
+        'a source listed but not opened can support MEDIUM at best._',
+    );
   }
   return lines.join('\n');
 }

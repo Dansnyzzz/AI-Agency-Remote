@@ -70,7 +70,35 @@ section('confidence is counted, not guessed');
     ['S3', { url: 'https://sub.reuters.com/z', rank: 'reputable' }],
     ['S4', { url: 'https://someblog.wordpress.com/p', rank: 'blog' }],
   ]);
-  check('two independent reputable sources are HIGH', grade(['S1', 'S2'], ledger) === 'HIGH');
+  // Deliberately changed: this used to assert HIGH. Nothing in the pipeline
+  // opened a page — every snippet came from the search engine — so the highest
+  // label the system could award rested on two blurbs from two hostnames, and a
+  // blurb is written to make you click rather than to be accurate. Standing and
+  // independence without a page read are worth MEDIUM, which is what they are.
+  check(
+    'two reputable sources that were never opened are only MEDIUM',
+    grade(['S1', 'S2'], ledger) === 'MEDIUM',
+    grade(['S1', 'S2'], ledger),
+  );
+
+  const read = new Map([
+    ['S1', { url: 'https://www.reuters.com/x', rank: 'reputable', read: true }],
+    ['S2', { url: 'https://apnews.com/y', rank: 'reputable', read: true }],
+    ['S3', { url: 'https://sub.reuters.com/z', rank: 'reputable', read: true }],
+    ['S5', { url: 'https://apnews.com/z', rank: 'reputable', readError: 'HTTP 403' }],
+  ]);
+  check('two independent reputable sources that were read are HIGH', grade(['S1', 'S2'], read) === 'HIGH');
+  check(
+    'reading the same registrable domain twice is still not independent',
+    grade(['S1', 'S3'], read) === 'MEDIUM',
+    grade(['S1', 'S3'], read),
+  );
+  check(
+    'a source that failed to load does not count as read',
+    grade(['S1', 'S5'], read) === 'MEDIUM',
+    grade(['S1', 'S5'], read),
+  );
+
   check('same registrable domain is not independent', grade(['S1', 'S3'], ledger) === 'MEDIUM', grade(['S1', 'S3'], ledger));
   check('one reputable source is MEDIUM', grade(['S1'], ledger) === 'MEDIUM');
   check('a lone blog is LOW', grade(['S4'], ledger) === 'LOW');
@@ -131,6 +159,38 @@ section('gathering builds a deduped, ranked source ledger');
   const { ledger: empty, findings: notes } = await gatherEvidence(['q'], { search: boom });
   check('a failed search yields no sources', empty.size === 0);
   check('and records why', notes.some((f) => /down/.test(f.snippet)));
+
+  // The best few sources are opened. Before this, nothing in the pipeline ever
+  // fetched a page: every citation in the finished report pointed at a URL that
+  // had only ever been a search result.
+  const read = [];
+  const reader = async (url) => {
+    read.push(url);
+    if (url.includes('wordpress')) throw new Error('HTTP 403');
+    return 'The page itself says the deposit is twenty per cent.';
+  };
+  const { ledger: opened } = await gatherEvidence(['bitcoin price', 'bitcoin history'], {
+    search: fake,
+    readPage: reader,
+  });
+  check('sources are actually opened', read.length > 0, `${read.length}`);
+  check(
+    'the page text replaces the search blurb',
+    /twenty per cent/.test(opened.get('S1')?.body || ''),
+    opened.get('S1')?.body,
+  );
+  check('and is marked as read', opened.get('S1')?.read === true);
+  check(
+    'a page that will not load records why rather than vanishing',
+    /403/.test(opened.get('S2')?.readError || ''),
+    opened.get('S2')?.readError,
+  );
+  check('a source that failed is not marked read', !opened.get('S2')?.read);
+
+  // No reader supplied — the old behaviour — must still work, and must not
+  // claim anything was read.
+  const { ledger: unread } = await gatherEvidence(['bitcoin price'], { search: fake });
+  check('without a reader nothing claims to be read', ![...unread.values()].some((s) => s.read));
 }
 
 section('planning turns a question into search queries');
