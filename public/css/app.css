@@ -1533,6 +1533,12 @@ textarea {
 }
 .topbar__menu { display: none; }
 .topbar__title {
+  /* An h1, so the chat view has a heading — it had none, and this is the thing
+     that names the page. The two resets are what let it be one without looking
+     like one: a bare h1 would arrive at 2em with 0.67em of margin and push the
+     topbar apart. */
+  margin: 0;
+  font-size: inherit;
   flex: 1;
   min-width: 0;
   font-weight: 600;

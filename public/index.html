@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#0B0E11" media="(prefers-color-scheme: dark)" />
@@ -293,7 +293,7 @@
       <main class="main" id="main">
         <header class="topbar">
           <button class="icon-btn topbar__menu" id="sidebar-open" aria-label="Open menu">☰</button>
-          <div class="topbar__title" id="chat-title">New chat</div>
+          <h1 class="topbar__title" id="chat-title">New chat</h1>
           <div class="topbar__right">
             <!-- Ahead of the policy and model chips, because connecting a
                  computer is the thing somebody does once and cannot find. -->
@@ -433,8 +433,11 @@
                assertive: it is the only moment in the app where nothing further
                happens until somebody answers. Announcing it politely would
                queue it behind the streaming transcript above. -->
-          <div class="approval" id="approval" role="alertdialog" aria-labelledby="approval-title"
-               aria-live="assertive" hidden>
+          <!-- No aria-live here. role="alertdialog" is already announced
+               assertively when it appears, and the two together made a screen
+               reader read the approval prompt twice — the one message in the
+               app where being read twice is most confusing. -->
+          <div class="approval" id="approval" role="alertdialog" aria-labelledby="approval-title" hidden>
             <div class="approval__body">
               <strong id="approval-title" data-i18n="approval.title">Approve these actions?</strong>
               <div class="approval__list" id="approval-list"></div>
