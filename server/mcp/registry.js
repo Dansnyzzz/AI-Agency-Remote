@@ -137,7 +137,15 @@ export async function mcpTools(userId) {
   const enabled = rows.filter((row) => row.enabled !== false);
   if (!enabled.length) return { tools: [], servers: [] };
 
-  if (!live.has(userId)) live.set(userId, new Map());
+  // Re-inserted on every use so the Map's insertion order is the LRU order.
+  if (live.has(userId)) {
+    const existing = live.get(userId);
+    live.delete(userId);
+    live.set(userId, existing);
+  } else {
+    live.set(userId, new Map());
+  }
+  evictIfCrowded(userId);
   const mine = live.get(userId);
 
   const tools = [];
@@ -243,6 +251,30 @@ export async function probeMcpServer(config) {
 export async function mcpStatus(userId) {
   const { servers } = await mcpTools(userId);
   return { servers };
+}
+
+/**
+ * How many accounts may hold live MCP connections at once.
+ *
+ * `live` is a process-global Map keyed by user, and nothing ever removed an
+ * entry except an explicit `forgetMcp`. On a long-lived local server that grows
+ * with every account that has ever used an MCP server and never shrinks —
+ * holding child processes and sockets for people who signed out days ago. An
+ * error entry is worse: it is remembered, retried after a minute, and then kept
+ * for ever whether or not anyone asks again.
+ *
+ * Least-recently-used, evicted properly rather than dropped: the entry's
+ * connections are closed on the way out, or eviction would leak the very
+ * processes it is meant to reclaim.
+ */
+const MAX_LIVE_ACCOUNTS = 24;
+
+function evictIfCrowded(keep) {
+  while (live.size > MAX_LIVE_ACCOUNTS) {
+    const oldest = live.keys().next().value;
+    if (oldest === undefined || oldest === keep) return;
+    forgetMcp(oldest);
+  }
 }
 
 /** Drop cached connections for an account, so the next turn reconnects. */
