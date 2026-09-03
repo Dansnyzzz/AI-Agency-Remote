@@ -52,24 +52,50 @@ export const slugify = (name) =>
     .replace(/^_+|_+$/g, '')
     .slice(0, 32) || 'server';
 
+/**
+ * A stored config, with its secrets brought back.
+ *
+ * Both catches used to swallow the failure and carry on with `{}`. That is the
+ * worst available answer: rotate ENCRYPTION_KEY, or restore a database next to a
+ * different .env, and the server would connect anyway — with no Authorization
+ * header, or with a child process missing the API key it needs. What comes back
+ * is then a 401 from somewhere else, or a server that starts and does nothing,
+ * and the actual cause is two layers away with nothing pointing at it.
+ *
+ * A credential that cannot be read is a broken server, and the caller already
+ * knows how to display one: `listMcpServers` catches per row and shows the
+ * message beside the server's name, and the agent's system prompt names broken
+ * servers so the model says "your Figma server is misconfigured" rather than
+ * "I cannot do that".
+ */
 function stored(row) {
   const config = { ...(row.config || {}) };
+
+  const decrypt = (cipher, what) => {
+    let plain;
+    try {
+      plain = decryptSecret(cipher);
+    } catch (err) {
+      throw new Error(
+        `Its stored ${what} could not be decrypted (${err?.message || 'unknown error'}). ` +
+          'That usually means ENCRYPTION_KEY has changed since the server was added — remove it and add it again.',
+      );
+    }
+    try {
+      return JSON.parse(plain || '{}');
+    } catch {
+      throw new Error(`Its stored ${what} could not be read back — remove the server and add it again.`);
+    }
+  };
+
   // Headers may carry a bearer token, so they are encrypted at rest like every
   // other credential in this app and decrypted only here.
   if (config.headersCipher) {
-    try {
-      config.headers = JSON.parse(decryptSecret(config.headersCipher) || '{}');
-    } catch {
-      config.headers = {};
-    }
+    config.headers = decrypt(config.headersCipher, 'headers');
     delete config.headersCipher;
   }
   if (config.envCipher) {
-    try {
-      config.env = JSON.parse(decryptSecret(config.envCipher) || '{}');
-    } catch {
-      config.env = {};
-    }
+    config.env = decrypt(config.envCipher, 'environment');
     delete config.envCipher;
   }
   return config;
