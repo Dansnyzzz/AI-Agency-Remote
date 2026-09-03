@@ -1410,6 +1410,43 @@ section('spend that never went through the agent loop is still counted');
   check('the usage page can say which part of the system spent it', named.has('compaction') && named.has('research.propose'), [...named].join(', '));
 }
 
+section('concurrent writes to one setting compose instead of racing');
+{
+  // Artifact storage was read-all, mutate, setUserSetting — the read-modify-write
+  // that mergeUserSetting exists to prevent, and whose own doc comment describes
+  // this bug being fixed for memory_append: two writes in one step both read the
+  // same object, the second erased the first, and *both* reported success.
+  //
+  // The agent runs up to four tool calls at once, so a page storing two values
+  // is the ordinary case rather than an unlucky one.
+  const racer = await store.createUser({
+    id: 'u-race', email: 'race@example.com', passwordHash: 'x', name: 'Race', role: 'user',
+  });
+
+  // Two artifacts writing at the same moment must not collide at all.
+  await Promise.all([
+    store.mergeUserSettingIn(racer.id, 'artifactStorage', 'art-one', { alpha: '"1"' }),
+    store.mergeUserSettingIn(racer.id, 'artifactStorage', 'art-two', { beta: '"2"' }),
+  ]);
+  const both = await store.getUserSetting(racer.id, 'artifactStorage');
+  check('two artifacts both survive', !!both?.['art-one']?.alpha && !!both?.['art-two']?.beta, JSON.stringify(both));
+
+  // Two different keys inside one artifact must also both survive — this is the
+  // case a top-level merge would still have lost.
+  await Promise.all([
+    store.mergeUserSettingIn(racer.id, 'artifactStorage', 'art-one', { gamma: '"3"' }),
+    store.mergeUserSettingIn(racer.id, 'artifactStorage', 'art-one', { delta: '"4"' }),
+  ]);
+  const inner = await store.getUserSetting(racer.id, 'artifactStorage');
+  check(
+    'and two keys inside one artifact do too',
+    inner?.['art-one']?.gamma === '"3"' && inner?.['art-one']?.delta === '"4"',
+    JSON.stringify(inner?.['art-one']),
+  );
+  check('without losing what was already there', inner?.['art-one']?.alpha === '"1"', JSON.stringify(inner?.['art-one']));
+  check('or the other artifact', inner?.['art-two']?.beta === '"2"', JSON.stringify(inner?.['art-two']));
+}
+
 console.log(
   failures === 0
     ? '\n\u001b[32mAll isolation checks passed.\u001b[0m\n'

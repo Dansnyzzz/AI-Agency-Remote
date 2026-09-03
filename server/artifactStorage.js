@@ -30,7 +30,16 @@ const KEY = 'artifactStorage';
 /** Per artifact, not per account: a calculator's state is not a document's. */
 const MAX_KEYS = 100;
 const MAX_VALUE_BYTES = 64 * 1024;
-const MAX_TOTAL_BYTES = 512 * 1024;
+/**
+ * The real ceiling, written as the number it is.
+ *
+ * This was `512 * 1024` and then compared as `MAX_TOTAL_BYTES * 4`, so the
+ * effective limit was four times what the constant said. The behaviour is kept
+ * — lowering a live limit would start refusing writes that used to succeed —
+ * and the constant is corrected to match it, because a name that lies is worse
+ * than a generous ceiling.
+ */
+const MAX_TOTAL_BYTES = 2 * 1024 * 1024;
 
 async function readAll(userId) {
   return (await getStore().getUserSetting(userId, KEY)) || {};
@@ -67,13 +76,29 @@ export async function setArtifactValue(userId, artifactId, key, value) {
   bucket[name] = encoded;
 
   // Checked across the whole account, so one runaway artifact cannot fill the
-  // row that every other artifact shares.
+  // row that every other artifact shares. Advisory rather than exact: it is read
+  // before the write below, so two writers can each see room and both proceed.
+  // Being a few kilobytes over a soft ceiling is not worth a lock.
   const next = { ...all, [artifactId]: bucket };
-  if (JSON.stringify(next).length > MAX_TOTAL_BYTES * 4) {
+  if (JSON.stringify(next).length > MAX_TOTAL_BYTES) {
     throw new Error('Artifact storage for this account is full. Clear some values first.');
   }
 
-  await store.setUserSetting(userId, KEY, next);
+  /**
+   * A nested merge, not a whole-value overwrite.
+   *
+   * This was read-all, mutate, `setUserSetting` — the read-modify-write that
+   * `mergeUserSetting` exists in the store to prevent, and whose doc comment
+   * describes the identical bug being fixed for `memory_append`: two writes in
+   * one step both read the same object, the second erased the first, and both
+   * reported success. The agent runs up to four tool calls at once, and a page
+   * saving two values is the ordinary case rather than an unlucky one.
+   *
+   * `mergeUserSettingIn` composes at the artifact level, so two artifacts
+   * writing at once no longer collide at all, and two writes to one artifact
+   * collide only when they touch the same key — where one of them has to win.
+   */
+  await store.mergeUserSettingIn(userId, KEY, artifactId, { [name]: encoded });
   return Object.keys(bucket).length;
 }
 

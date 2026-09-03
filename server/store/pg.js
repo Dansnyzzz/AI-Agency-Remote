@@ -582,6 +582,33 @@ export function createPgStore(connectionString) {
       return rows[0]?.value ?? patch;
     },
     /**
+     * Merge into a setting one level down, without reading it first.
+     *
+     * `mergeUserSetting` composes at the top level, which is enough when two
+     * writers touch different keys. Artifact storage is shaped
+     * `{ artifactId: { name: value } }`, so a top-level merge would still let
+     * two writes to the *same* artifact overwrite one another — the second
+     * replaces the whole bucket, including the key the first had just added.
+     *
+     * `jsonb_set` with the bucket concatenated onto itself narrows the race to
+     * the same artifact *and* the same key, where last-write-wins is the only
+     * meaningful answer anyway.
+     */
+    async mergeUserSettingIn(userId, key, entry, patch) {
+      const rows = await q(
+        `INSERT INTO user_settings (user_id, key, value)
+              VALUES ($1, $2, jsonb_build_object($3::text, $4::jsonb))
+         ON CONFLICT (user_id, key) DO UPDATE SET value = jsonb_set(
+                COALESCE(user_settings.value, '{}'::jsonb),
+                ARRAY[$3::text],
+                COALESCE(user_settings.value -> $3::text, '{}'::jsonb) || $4::jsonb,
+                true)
+      RETURNING value`,
+        [userId, key, String(entry), JSON.stringify(patch ?? {})],
+      );
+      return rows[0]?.value ?? null;
+    },
+    /**
      * Remove one top-level entry from a setting, leaving the rest alone.
      *
      * The counterpart to `mergeUserSetting`, and needed for the same reason: a
