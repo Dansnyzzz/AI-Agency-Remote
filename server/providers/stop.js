@@ -130,18 +130,24 @@ const SENTENCE = {
  *
  * @param raw     whatever the provider called it, or null when it said nothing
  * @param detail  extra wording from the provider (Anthropic's `stop_details`)
- * @returns {{kind: string, raw: string|null, message: string|null}}
+ * @returns {{kind: string, raw: string|null, message: string|null, detail: string|null}}
  *   `message` is null exactly when the reply is complete — so a caller can use
  *   its presence as "is there anything to say here?" without a second check.
+ *   `detail` is the provider's own words, kept apart from `message` because the
+ *   browser translates from `kind` and would otherwise discard them; it is null
+ *   whenever the provider added nothing.
  */
 export function normaliseStop(raw, detail = null) {
   // Said nothing at all. Treated as a clean finish rather than as a mystery:
   // several OpenAI-compatible servers omit `finish_reason` on the final chunk,
   // and narrating that to everybody using one of them would be noise.
-  if (raw == null || raw === '') return { kind: 'end_turn', raw: null, message: null };
+  // `detail` is carried on every branch, including the ones that never have
+  // one. A field that is sometimes absent and sometimes null is two shapes for
+  // the consumer to handle, and the browser reads this straight off the wire.
+  if (raw == null || raw === '') return { kind: 'end_turn', raw: null, message: null, detail: null };
 
   const kind = KNOWN.get(String(raw).toLowerCase()) || 'unknown';
-  if (isComplete(kind)) return { kind, raw: String(raw), message: null };
+  if (isComplete(kind)) return { kind, raw: String(raw), message: null, detail: null };
 
   const extra = String(detail || '').trim();
   const base = SENTENCE[kind] || SENTENCE.unknown;

@@ -276,9 +276,11 @@ function rememberEmail(email) {
  * than one switch for the form: revealing the box you are typing in should not
  * also uncover a different one.
  */
-for (const button of document.querySelectorAll('[data-reveal]')) {
+for (const button of /** @type {NodeListOf<HTMLElement>} */ (
+  document.querySelectorAll('[data-reveal]')
+)) {
   button.addEventListener('click', () => {
-    const input = $(button.dataset.reveal);
+    const input = /** @type {HTMLInputElement} */ ($(button.dataset.reveal));
     setRevealed(input, input.type === 'password');
     input.focus();
     // Put the caret back at the end; switching type sends it to the front in
@@ -288,8 +290,12 @@ for (const button of document.querySelectorAll('[data-reveal]')) {
   });
 }
 
+/**
+ * @param {HTMLInputElement} input  the password box this eye belongs to
+ * @param {boolean} revealed
+ */
 function setRevealed(input, revealed) {
-  const button = document.querySelector(`[data-reveal="${input.id}"]`);
+  const button = /** @type {HTMLElement} */ (document.querySelector(`[data-reveal="${input.id}"]`));
   input.type = revealed ? 'text' : 'password';
   button.setAttribute('aria-pressed', String(revealed));
   button.setAttribute('aria-label', revealed ? 'Hide password' : 'Show password');

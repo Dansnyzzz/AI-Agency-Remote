@@ -28,6 +28,12 @@ import { BACKGROUND_IMPLEMENTATIONS } from './background.js';
  * Control characters are refused outright: nothing legitimate carries them, and
  * a newline is the one thing that could still confuse an argv boundary.
  */
+/**
+ * @param {string} target
+ * @returns {[string, string[]]} the program and its argv, as a tuple rather than
+ *   a mixed array — spawn() takes them as separate arguments and a plain array
+ *   types both slots as string|string[].
+ */
 function openCommand(target) {
   // A newline is the one character that could still confuse an argv boundary,
   // and nothing legitimate carries control characters. Checked by code point
