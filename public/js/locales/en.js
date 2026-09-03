@@ -134,6 +134,88 @@ export const en = {
   'effort.high': 'High',
   'effort.xhigh': 'Extra high',
   'effort.max': 'Max',
+  /* ── the shelves: Projects, Artifacts, Scheduled ─────────────────
+   *
+   * Four whole screens that called t() zero times. The dictionaries were in
+   * sync the entire time, which is exactly why test:i18n never noticed.
+   */
+  'pages.projects.title': 'Projects',
+  'pages.projects.new': 'New project',
+  'pages.sortBy': 'Sort by',
+  'pages.filterBy': 'Filter by',
+  'pages.order.updated': 'Last updated',
+  'pages.order.created': 'Date created',
+  'pages.order.name': 'Name',
+  'pages.order.archived': 'Archived',
+  'pages.projects.noneMatch': 'No project matches that.',
+  'pages.projects.none': 'No projects yet.',
+  'pages.projects.noneHint':
+    'A project keeps its instructions and its documents in one place, and every conversation started inside it answers from those documents.',
+  'pages.projects.archivedNoneMatch': 'No archived project matches that.',
+  'pages.projects.archivedNone': 'Nothing archived.',
+  'pages.pinned': 'Pinned',
+  'pages.optionsFor': 'Options for {name}',
+
+  'pages.artifacts.title': 'Artifacts',
+  'pages.artifacts.new': 'New artifact',
+  'pages.artifacts.none': 'No artifacts yet.',
+  'pages.artifacts.noneMatch': 'Nothing here matches.',
+  'pages.artifacts.newHint': 'Ask for what you want made — a report, a spreadsheet, a small page.',
+  'pages.kind.all': 'All',
+  'pages.kind.page': 'Pages',
+  'pages.kind.code': 'Code',
+  'pages.kind.document': 'Documents',
+  'pages.kind.sheet': 'Spreadsheets',
+  'pages.kind.deck': 'Decks',
+
+  'pages.tasks.title': 'Scheduled tasks',
+  'pages.tasks.new': 'New task',
+  'pages.tasks.none': 'No scheduled tasks yet.',
+  'pages.order.next': 'Next run',
+  'pages.tasks.describe': 'Describe it to the assistant',
+  'pages.tasks.describeHint': 'Tell it what to run and when — "every weekday at 8, search for…"',
+  'pages.tasks.manual': 'Set up manually',
+  'pages.tasks.scheduled': 'Scheduled.',
+  'pages.tasks.openResult': 'Open result',
+  'pages.tasks.pause': 'Pause',
+  'pages.tasks.resume': 'Resume',
+  'pages.tasks.remove': 'Remove',
+  'pages.tasks.removeConfirm': 'Remove?',
+  'pages.tasks.every': 'every {cron}',
+  'pages.tasks.once': 'once',
+  'pages.tasks.next': 'next {when}',
+  'pages.tasks.paused': 'paused',
+  'pages.tasks.last': 'last {status}',
+
+  /* The four starting points offered on an empty Scheduled shelf. */
+  'pages.idea.briefing.name': 'Morning briefing',
+  'pages.idea.briefing.what': 'What changed overnight in the things you follow, searched and summarised.',
+  'pages.idea.briefing.when': 'Weekdays at 08:00',
+  'pages.idea.watch.name': 'Watch a topic',
+  'pages.idea.watch.what': 'Check for news about something, and only speak up when there is any.',
+  'pages.idea.watch.when': 'Daily at 09:00',
+  'pages.idea.report.name': 'Weekly report',
+  'pages.idea.report.what': 'A Word document summarising the week, made and left in the conversation.',
+  'pages.idea.report.when': 'Fridays at 16:00',
+  'pages.idea.tests.name': 'Check the workspace',
+  'pages.idea.tests.what': 'Run the tests on your machine and report what failed.',
+  'pages.idea.tests.when': 'Weekdays at 09:00',
+  /* Relative time, and the two counts on a project card. Vietnamese does not
+     inflect the noun, so these are whole phrases rather than a stem plus an
+     's' — which is also why `plural()` could not simply be translated. */
+  'when.justNow': 'just now',
+  'when.minutes': '{n} minutes ago',
+  'when.hours': '{n} hours ago',
+  'when.yesterday': 'yesterday',
+  'when.days': '{n} days ago',
+  'count.sources': '{n} sources',
+  'count.sourcesOne': '1 source',
+  'count.conversations': '{n} conversations',
+  'count.conversationsOne': '1 conversation',
+  'pages.tasks.localOnly':
+    'Scheduled tasks run while this app is running. On a deployment they run without it.',
+
+
 
 
   // The checklist drawn inside a message by `update_plan`, and the count beside

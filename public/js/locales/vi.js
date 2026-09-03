@@ -193,6 +193,88 @@ export const vi = {
   'effort.high': 'Cao',
   'effort.xhigh': 'Rất cao',
   'effort.max': 'Tối đa',
+  /* ── các kệ: Dự án, Tệp đã tạo, Chạy theo giờ ────────────────────
+   *
+   * Bốn màn hình gọi t() đúng 0 lần. Hai từ điển vẫn khớp nhau suốt thời gian
+   * đó — chính vì vậy test:i18n không hề phát hiện ra.
+   */
+  'pages.projects.title': 'Dự án',
+  'pages.projects.new': 'Dự án mới',
+  'pages.sortBy': 'Sắp xếp theo',
+  'pages.filterBy': 'Lọc theo',
+  'pages.order.updated': 'Sửa gần nhất',
+  'pages.order.created': 'Ngày tạo',
+  'pages.order.name': 'Tên',
+  'pages.order.archived': 'Đã lưu trữ',
+  'pages.projects.noneMatch': 'Không có dự án nào khớp.',
+  'pages.projects.none': 'Chưa có dự án nào.',
+  'pages.projects.noneHint':
+    'Một dự án gom hướng dẫn và tài liệu của nó vào một chỗ, và mọi hội thoại mở trong đó đều trả lời dựa trên các tài liệu ấy.',
+  'pages.projects.archivedNoneMatch': 'Không có dự án lưu trữ nào khớp.',
+  'pages.projects.archivedNone': 'Chưa lưu trữ gì.',
+  'pages.pinned': 'Đã ghim',
+  'pages.optionsFor': 'Tuỳ chọn cho {name}',
+
+  'pages.artifacts.title': 'Tệp đã tạo',
+  'pages.artifacts.new': 'Tệp mới',
+  'pages.artifacts.none': 'Chưa có tệp nào.',
+  'pages.artifacts.noneMatch': 'Không có gì khớp.',
+  'pages.artifacts.newHint': 'Cứ nói bạn muốn tạo gì — một báo cáo, một bảng tính, một trang nhỏ.',
+  'pages.kind.all': 'Tất cả',
+  'pages.kind.page': 'Trang',
+  'pages.kind.code': 'Mã nguồn',
+  'pages.kind.document': 'Văn bản',
+  'pages.kind.sheet': 'Bảng tính',
+  'pages.kind.deck': 'Slide',
+
+  'pages.tasks.title': 'Việc chạy theo giờ',
+  'pages.tasks.new': 'Việc mới',
+  'pages.tasks.none': 'Chưa đặt việc nào.',
+  'pages.order.next': 'Lần chạy tới',
+  'pages.tasks.describe': 'Mô tả cho trợ lý',
+  'pages.tasks.describeHint': 'Nói nó chạy gì và khi nào — "8 giờ sáng mỗi ngày trong tuần, tìm…"',
+  'pages.tasks.manual': 'Tự thiết lập',
+  'pages.tasks.scheduled': 'Đã đặt lịch.',
+  'pages.tasks.openResult': 'Mở kết quả',
+  'pages.tasks.pause': 'Tạm dừng',
+  'pages.tasks.resume': 'Chạy lại',
+  'pages.tasks.remove': 'Xoá',
+  'pages.tasks.removeConfirm': 'Xoá nhé?',
+  'pages.tasks.every': 'mỗi {cron}',
+  'pages.tasks.once': 'một lần',
+  'pages.tasks.next': 'lần tới {when}',
+  'pages.tasks.paused': 'đang tạm dừng',
+  'pages.tasks.last': 'lần trước {status}',
+
+  /* Bốn gợi ý mở đầu hiện ra khi kệ Chạy theo giờ còn trống. */
+  'pages.idea.briefing.name': 'Tóm tắt buổi sáng',
+  'pages.idea.briefing.what': 'Đêm qua có gì thay đổi trong những thứ bạn theo dõi, đã tìm và tóm tắt sẵn.',
+  'pages.idea.briefing.when': 'Các ngày trong tuần lúc 08:00',
+  'pages.idea.watch.name': 'Theo dõi một chủ đề',
+  'pages.idea.watch.what': 'Kiểm tra tin tức về một chủ đề, và chỉ lên tiếng khi thật sự có gì mới.',
+  'pages.idea.watch.when': 'Hằng ngày lúc 09:00',
+  'pages.idea.report.name': 'Báo cáo tuần',
+  'pages.idea.report.what': 'Một file Word tóm tắt cả tuần, tạo sẵn và để lại trong hội thoại.',
+  'pages.idea.report.when': 'Thứ sáu lúc 16:00',
+  'pages.idea.tests.name': 'Kiểm tra thư mục làm việc',
+  'pages.idea.tests.what': 'Chạy test trên máy bạn và báo lại cái nào hỏng.',
+  'pages.idea.tests.when': 'Các ngày trong tuần lúc 09:00',
+  /* Thời gian tương đối, và hai con số trên thẻ dự án. Tiếng Việt không biến
+     đổi danh từ theo số nhiều, nên đây là cả cụm chứ không phải gốc từ cộng
+     's' — cũng chính vì thế mà `plural()` không dịch thẳng được. */
+  'when.justNow': 'vừa xong',
+  'when.minutes': '{n} phút trước',
+  'when.hours': '{n} giờ trước',
+  'when.yesterday': 'hôm qua',
+  'when.days': '{n} ngày trước',
+  'count.sources': '{n} nguồn',
+  'count.sourcesOne': '1 nguồn',
+  'count.conversations': '{n} hội thoại',
+  'count.conversationsOne': '1 hội thoại',
+  'pages.tasks.localOnly':
+    'Việc theo giờ chỉ chạy khi app này đang mở. Khi triển khai lên server thì chúng chạy mà không cần app.',
+
+
 
 
   'empty.title': 'Hôm nay bạn muốn làm gì?',

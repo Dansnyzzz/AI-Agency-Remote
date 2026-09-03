@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { t } from './i18n.js';
 import { escapeHtml } from './markdown.js';
 import { openMenu } from './menu.js';
 import { editProjectDetails, projectMenuItems } from './project-page.js';
@@ -27,19 +28,32 @@ const ago = (value) => {
   if (!value) return '';
   const then = new Date(value).getTime();
   if (!Number.isFinite(then)) return '';
+  const n = (key, count) => t(key).replace('{n}', String(count));
   const seconds = Math.round((Date.now() - then) / 1000);
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.round(seconds / 60)} minutes ago`;
-  if (seconds < 172800) return seconds < 86400 ? `${Math.round(seconds / 3600)} hours ago` : 'yesterday';
-  if (seconds < 2592000) return `${Math.round(seconds / 86400)} days ago`;
-  // Past a month the date is more use than the distance to it.
+  if (seconds < 60) return t('when.justNow');
+  if (seconds < 3600) return n('when.minutes', Math.round(seconds / 60));
+  if (seconds < 172800) {
+    return seconds < 86400 ? n('when.hours', Math.round(seconds / 3600)) : t('when.yesterday');
+  }
+  if (seconds < 2592000) return n('when.days', Math.round(seconds / 86400));
+  // Past a month the date is more use than the distance to it. `undefined` as
+  // the locale means the browser's, which is the right answer for a date.
   return new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
 const humanSize = (bytes) =>
   bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
-const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/**
+ * A count and its noun, as a whole phrase.
+ *
+ * This was `${n} ${n === 1 ? one : one + 's'}` — an English pluralisation rule
+ * baked into the formatter, which is why it could not simply be wrapped in
+ * `t()`. Vietnamese does not inflect the noun at all, so the translation has to
+ * own the entire phrase; the caller names which pair of keys it wants.
+ */
+const counted = (n, key) =>
+  (n === 1 ? t(`${key}One`) : t(key)).replace('{n}', String(n));
 
 /** Two presses to delete, and the second one deliberate. */
 function armed(button, warning, run) {
@@ -241,18 +255,35 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
   /* ── projects ─────────────────────────────────────────────────── */
 
   views.projects = {
-    title: 'Projects',
-    newLabel: 'New project',
-    orderLabel: 'Sort by',
-    orders: [
-      { id: 'updated', label: 'Last updated' },
-      { id: 'created', label: 'Date created' },
-      { id: 'name', label: 'Name' },
+    // Getters throughout this file, deliberately. These objects are built once
+    // when `createPages` runs, so a bare `t()` would freeze the language that
+    // was current at boot and never follow a switch — and a shelf is exactly
+    // the sort of screen somebody changes language while looking at.
+    get title() {
+      return t('pages.projects.title');
+    },
+    get newLabel() {
+      return t('pages.projects.new');
+    },
+    get orderLabel() {
+      return t('pages.sortBy');
+    },
+    get orders() {
+      return [
+        { id: 'updated', label: t('pages.order.updated') },
+        { id: 'created', label: t('pages.order.created') },
+        { id: 'name', label: t('pages.order.name') },
       // Archived projects are a separate shelf, fetched separately — they are
       // never mixed into the list above, which is the entire point of archiving
       // one. Hence a reload rather than a client-side re-sort.
-      { id: 'archived', label: 'Archived', pill: 'Archived', reload: true },
-    ],
+        {
+          id: 'archived',
+          label: t('pages.order.archived'),
+          pill: t('pages.order.archived'),
+          reload: true,
+        },
+      ];
+    },
     load: async () => (await api.projects({ archived: order === 'archived' })).projects,
     matches: (project, q) =>
       `${project.name} ${project.instructions || ''}`.toLowerCase().includes(q),
@@ -270,28 +301,32 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
     render: (list) => {
       if (!list.length) {
         if (order === 'archived') {
-          return blank(folderMark, query ? 'No archived project matches that.' : 'Nothing archived.', '');
+          return blank(
+            folderMark,
+            query ? t('pages.projects.archivedNoneMatch') : t('pages.projects.archivedNone'),
+            '',
+          );
         }
         return blank(
           folderMark,
-          query ? 'No project matches that.' : 'No projects yet.',
-          query ? '' : 'A project keeps its instructions and its documents in one place, and every conversation started inside it answers from those documents.',
+          query ? t('pages.projects.noneMatch') : t('pages.projects.none'),
+          query ? '' : t('pages.projects.noneHint'),
         );
       }
       return `<div class="cards cards--wide">${list
         .map(
           (project) => `
         <div class="card" data-project="${escapeHtml(project.id)}" role="button" tabindex="0">
-          ${project.pinned ? '<span class="card__pin" aria-label="Pinned">📌</span>' : ''}
+          ${project.pinned ? `<span class="card__pin" aria-label="${escapeHtml(t('pages.pinned'))}">📌</span>` : ''}
           <button class="card__more" type="button" aria-haspopup="menu"
                   data-more="${escapeHtml(project.id)}"
-                  aria-label="Options for ${escapeHtml(project.name)}">⋮</button>
+                  aria-label="${escapeHtml(t('pages.optionsFor').replace('{name}', project.name))}">⋮</button>
           <span class="card__name">${escapeHtml(project.name)}</span>
           ${project.instructions ? `<span class="card__note">${escapeHtml(project.instructions)}</span>` : ''}
           <span class="card__facts">
-            <span>${escapeHtml(plural(project.file_count, 'source'))}</span>
+            <span>${escapeHtml(counted(project.file_count, 'count.sources'))}</span>
             <span>·</span>
-            <span>${escapeHtml(plural(project.chat_count, 'conversation'))}</span>
+            <span>${escapeHtml(counted(project.chat_count, 'count.conversations'))}</span>
           </span>
           <span class="card__when">${escapeHtml(ago(project.updated_at))}</span>
         </div>`,
@@ -350,17 +385,25 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
   };
 
   views.artifacts = {
-    title: 'Artifacts',
-    newLabel: 'New artifact',
-    orderLabel: 'Filter by',
-    orders: [
-      { id: 'all', label: 'All' },
-      { id: 'page', label: 'Pages' },
-      { id: 'code', label: 'Code' },
-      { id: 'document', label: 'Documents' },
-      { id: 'sheet', label: 'Spreadsheets' },
-      { id: 'deck', label: 'Decks' },
-    ],
+    get title() {
+      return t('pages.artifacts.title');
+    },
+    get newLabel() {
+      return t('pages.artifacts.new');
+    },
+    get orderLabel() {
+      return t('pages.filterBy');
+    },
+    get orders() {
+      return [
+        { id: 'all', label: t('pages.kind.all') },
+        { id: 'page', label: t('pages.kind.page') },
+        { id: 'code', label: t('pages.kind.code') },
+        { id: 'document', label: t('pages.kind.document') },
+        { id: 'sheet', label: t('pages.kind.sheet') },
+        { id: 'deck', label: t('pages.kind.deck') },
+      ];
+    },
     load: async () => (await api.files()).files,
     matches: (file, q) => `${file.name} ${file.chat_title || ''}`.toLowerCase().includes(q),
     sort: (list, by) => (by === 'all' ? list : list.filter((file) => kindOf(file) === by)),
@@ -368,7 +411,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
       if (!list.length) {
         return blank(
           artifactMark,
-          query || order !== 'all' ? 'Nothing here matches.' : 'No artifacts yet.',
+          query || order !== 'all' ? t('pages.artifacts.noneMatch') : t('pages.artifacts.none'),
           query || order !== 'all'
             ? ''
             : 'Ask for a report, a quotation, a spreadsheet or a small page and it appears here — and stays, whichever conversation it came from.',
@@ -400,7 +443,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
     },
     onNew: () => {
       onLeave();
-      toast('Ask for what you want made — a report, a spreadsheet, a small page.');
+      toast(t('pages.artifacts.newHint'));
     },
   };
 
@@ -416,36 +459,36 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
    */
   const IDEAS = [
     {
-      name: 'Morning briefing',
-      what: 'What changed overnight in the things you follow, searched and summarised.',
-      when: 'Weekdays at 08:00',
+      get name() { return t('pages.idea.briefing.name'); },
+      get what() { return t('pages.idea.briefing.what'); },
+      get when() { return t('pages.idea.briefing.when'); },
       cron: '08:00',
       prompt:
         'Search the web for what changed in the last 24 hours on the topics I follow, and write me a short briefing. Lead with anything that actually matters; say plainly if nothing did.',
       mark: '☀',
     },
     {
-      name: 'Watch a topic',
-      what: 'Check for news about something, and only speak up when there is any.',
-      when: 'Daily at 09:00',
+      get name() { return t('pages.idea.watch.name'); },
+      get what() { return t('pages.idea.watch.what'); },
+      get when() { return t('pages.idea.watch.when'); },
       cron: '09:00',
       prompt:
         'Search for news about [topic] since yesterday. If nothing material has happened, say so in one line and stop — do not pad it out.',
       mark: '◎',
     },
     {
-      name: 'Weekly report',
-      what: 'A Word document summarising the week, made and left in the conversation.',
-      when: 'Fridays at 16:00',
+      get name() { return t('pages.idea.report.name'); },
+      get what() { return t('pages.idea.report.what'); },
+      get when() { return t('pages.idea.report.when'); },
       cron: 'fri 16:00',
       prompt:
         'Summarise what we worked on this week and make it a .docx with create_file: what was done, what is outstanding, and what needs a decision.',
       mark: '▤',
     },
     {
-      name: 'Check the workspace',
-      what: 'Run the tests on your machine and report what failed.',
-      when: 'Weekdays at 09:00',
+      get name() { return t('pages.idea.tests.name'); },
+      get what() { return t('pages.idea.tests.what'); },
+      get when() { return t('pages.idea.tests.when'); },
       cron: '09:00',
       prompt:
         'In my workspace, run the test suite and report the result. If anything failed, show the relevant output and say what you think is wrong.',
@@ -454,13 +497,19 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
   ];
 
   views.scheduled = {
-    title: 'Scheduled tasks',
-    newLabel: 'New task',
-    orderLabel: 'Sort by',
+    get title() {
+      return t('pages.tasks.title');
+    },
+    get newLabel() {
+      return t('pages.tasks.new');
+    },
+    get orderLabel() {
+      return t('pages.sortBy');
+    },
     lede:
       'Work that runs on a clock, or whenever you press it. Each run lands in its own conversation, ready to read later.',
     orders: [
-      { id: 'next', label: 'Next run' },
+      { id: 'next', label: t('pages.order.next') },
       { id: 'name', label: 'Name' },
     ],
     load: async () => (await api.tasks()).tasks,
@@ -471,28 +520,26 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
       ),
     newMenu: () => [
       {
-        label: 'Describe it to the assistant',
+        label: t('pages.tasks.describe'),
         icon: '💬',
         run: () => {
           onLeave();
-          toast('Tell it what to run and when — "every weekday at 8, search for…"');
+          toast(t('pages.tasks.describeHint'));
         },
       },
-      { label: 'Set up manually', icon: '⚙', run: () => openTaskForm() },
+      { label: t('pages.tasks.manual'), icon: '⚙', run: () => openTaskForm() },
     ],
     render: (list) => {
       const local = state.localOnly
         ? `<div class="notice">
-             <span class="notice__say">
-               Scheduled tasks run while this app is running. On a deployment they run without it.
-             </span>
+             <span class="notice__say">${escapeHtml(t('pages.tasks.localOnly'))}</span>
            </div>`
         : '';
 
       if (!list.length) {
         return (
           local +
-          blank(clockMark, 'No scheduled tasks yet.', '') +
+          blank(clockMark, t('pages.tasks.none'), '') +
           '<div class="blank__rule"></div>' +
           `<div class="ideas">${IDEAS.map(
             (idea, i) => `
@@ -519,16 +566,32 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
             <div class="task__name">${escapeHtml(task.title)}</div>
             <div class="task__what">${escapeHtml(task.prompt || '')}</div>
             <div class="task__when">
-              ${escapeHtml(task.cron ? `every ${task.cron}` : 'once')}
-              · ${task.enabled ? `next ${escapeHtml(ago(task.next_run_at))}` : 'paused'}
-              ${task.last_status ? `· last ${escapeHtml(String(task.last_status).slice(0, 40))}` : ''}
+              ${escapeHtml(task.cron ? t('pages.tasks.every').replace('{cron}', task.cron) : t('pages.tasks.once'))}
+              · ${
+                task.enabled
+                  ? escapeHtml(t('pages.tasks.next').replace('{when}', ago(task.next_run_at)))
+                  : escapeHtml(t('pages.tasks.paused'))
+              }
+              ${
+                task.last_status
+                  ? `· ${escapeHtml(
+                      t('pages.tasks.last').replace('{status}', String(task.last_status).slice(0, 40)),
+                    )}`
+                  : ''
+              }
             </div>
           </div>
-          ${task.last_chat ? `<button class="task__act" data-open="${escapeHtml(task.last_chat)}">Open result</button>` : ''}
-          <button class="task__act" data-toggle="${escapeHtml(task.id)}" data-on="${!!task.enabled}">${
-            task.enabled ? 'Pause' : 'Resume'
-          }</button>
-          <button class="task__act" data-drop="${escapeHtml(task.id)}">Remove</button>
+          ${
+            task.last_chat
+              ? `<button class="task__act" data-open="${escapeHtml(task.last_chat)}">${escapeHtml(
+                  t('pages.tasks.openResult'),
+                )}</button>`
+              : ''
+          }
+          <button class="task__act" data-toggle="${escapeHtml(task.id)}" data-on="${!!task.enabled}">${escapeHtml(
+            task.enabled ? t('pages.tasks.pause') : t('pages.tasks.resume'),
+          )}</button>
+          <button class="task__act" data-drop="${escapeHtml(task.id)}">${escapeHtml(t('pages.tasks.remove'))}</button>
         </div>`,
           )
           .join('')
@@ -551,7 +614,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
         });
       }
       for (const button of body.querySelectorAll('[data-drop]')) {
-        armed(button, 'Remove?', async () => {
+        armed(button, t('pages.tasks.removeConfirm'), async () => {
           await api.deleteTask(button.dataset.drop);
           load();
         });
@@ -605,7 +668,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
         repeat: $('task-form-repeat').value === 'repeat',
       });
       $('task-form').close();
-      toast('Scheduled.');
+      toast(t('pages.tasks.scheduled'));
       if (showing === 'scheduled') load();
     } catch (err) {
       error.textContent = err.message;
