@@ -894,12 +894,19 @@ export function statusLine(text) {
 }
 
 export function toast(message, kind = 'info') {
-  const host = document.getElementById('toasts');
+  // An error goes to the assertive region: it is why the thing the user just
+  // asked for did not happen, and a polite announcement queues behind whatever
+  // is being read — which for a streaming reply is a long time.
+  const host = document.getElementById(kind === 'error' ? 'toasts-alert' : 'toasts');
 
   // Repeating the same message stacks noise without adding information — the
   // second click of a failing button should not double the wall of red.
-  for (const existing of host.children) {
-    if (existing.dataset.message === message) return;
+  // Checked across both regions, so a message cannot appear once in each.
+  for (const region of ['toasts', 'toasts-alert']) {
+    const node = document.getElementById(region);
+    for (const existing of node ? node.children : []) {
+      if (existing.dataset.message === message) return;
+    }
   }
 
   const node = el('div', `toast${kind === 'error' ? ' toast--error' : ''}`);

@@ -2594,6 +2594,12 @@ details.block pre {
   transform: translateX(-50%);
   pointer-events: none;
 }
+/* The assertive region sits directly under the polite one so the two read as a
+   single stack. Separate elements only because a live region's urgency is a
+   property of the container, and an error must not queue behind a notice. */
+.toasts--alert {
+  top: 58px;
+}
 .toast {
   max-width: 100%;
   padding: 10px 16px;
@@ -3097,10 +3103,12 @@ details.block pre {
 }
 .attachment--failed .attachment__meta { color: var(--danger); }
 
+/* 26px, not 22. WCAG 2.5.8 asks for 24 as a floor and this is a phone-first
+   app; the glyph stays small, the hit area does not. */
 .attachment__remove {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -4145,10 +4153,12 @@ details.block pre {
 }
 .queue__now:hover { border-color: var(--accent-dim); color: var(--accent); }
 
+/* 26px, not 22. WCAG 2.5.8 asks for 24 as a floor and this is a phone-first
+   app; the glyph stays small, the hit area does not. */
 .queue__drop {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -5093,8 +5103,8 @@ details.block pre {
 }
 .find__clear {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -5371,8 +5381,8 @@ details.block pre {
 .source__size { flex: none; color: var(--text-faint); font-size: 11.5px; }
 .source__drop {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;

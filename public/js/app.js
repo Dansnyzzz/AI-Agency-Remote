@@ -1018,6 +1018,32 @@ function renderFilesChip() {
 }
 
 /** Remember a file the run just produced, replacing an earlier version of it. */
+/**
+ * Hand the sent bubble over to the server's copy, and let the blobs go.
+ *
+ * The optimistic bubble is drawn from local `blob:` previews, because the
+ * server copy is not fetchable until the message exists — that part is
+ * deliberate and stays. What was missing is the other half: once the send
+ * succeeds those previews are never needed again, and nothing revoked them.
+ * `clearStaged`, `clearQueue` and the queue-drop handler all revoke correctly;
+ * the *sent* bubble simply kept its URLs, and `openChat` then dropped the nodes
+ * with `innerHTML = ''` without touching them. A pasted screenshot is several
+ * megabytes pinned for the lifetime of the tab, per message.
+ *
+ * The images are repointed rather than left blank, so the bubble keeps showing
+ * the picture — it is now reading the same bytes back from the server.
+ */
+function settleAttachments(node, previews, ids) {
+  const images = node.querySelectorAll('img.bubble__image');
+  previews.forEach((file, i) => {
+    if (!file?.preview) return;
+    const img = images[i];
+    if (img && ids[i]) img.src = `/api/attachments/${ids[i]}`;
+    URL.revokeObjectURL(file.preview);
+    file.preview = null;
+  });
+}
+
 function noteFile(file) {
   if (!file?.id) return;
   state.files = [file, ...(state.files || []).filter((other) => other.id !== file.id)];
@@ -1435,6 +1461,7 @@ $('composer').addEventListener('submit', async (event) => {
 
     const { message } = await api.sendMessage(state.chatId, text, ids);
     if (message?.id) node.dataset.messageId = message.id;
+    settleAttachments(node, sending, ids);
     await refreshChats();
     $('chat-title').textContent = state.chats.find((c) => c.id === state.chatId)?.title || 'Chat';
 
@@ -1543,6 +1570,7 @@ async function deliver(item, { interrupting = false } = {}) {
     // Stamped after the fact: the id only exists once the server has it, and
     // without it the bubble has nothing to edit.
     if (message?.id) node.dataset.messageId = message.id;
+    settleAttachments(node, item.files || [], item.ids || []);
     if (interrupting) toast(t('status.queued'));
     return true;
   } catch (err) {

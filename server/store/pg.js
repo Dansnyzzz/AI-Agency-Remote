@@ -980,14 +980,33 @@ export function createPgStore(connectionString) {
      * Scoped by `user_id` like the singular form, so a guessed id from another
      * account simply is not in the result.
      */
+    /**
+     * The files themselves, bytes included, a couple at a time.
+     *
+     * This is the right shape — it replaced a genuine N+1 — and it needed a
+     * ceiling. Uploads are capped at 5MB with six per message, so one call could
+     * legitimately ask for ~40MB of base64 in a single result set: the query in
+     * this file most likely to hit the Neon HTTP endpoint's response limit or a
+     * serverless function's memory.
+     *
+     * Two ids per statement keeps any one response to about 13MB while still
+     * being a handful of round trips rather than one per file. `ANY($2::text[])`
+     * rather than an expanded `IN (...)`, so the query string is the same
+     * whatever the batch holds and Postgres can reuse the plan.
+     */
     async getAttachments(userId, ids) {
       if (!ids?.length) return [];
-      const params = ids.map((_, i) => `$${i + 2}`).join(', ');
-      return q(
-        `SELECT id, name, mime, kind, bytes, data, origin, source, chat_id, created_at
-           FROM attachments WHERE user_id = $1 AND id IN (${params})`,
-        [userId, ...ids],
-      );
+      const BATCH = 2;
+      const out = [];
+      for (let i = 0; i < ids.length; i += BATCH) {
+        const rows = await q(
+          `SELECT id, name, mime, kind, bytes, data, origin, source, chat_id, created_at
+             FROM attachments WHERE user_id = $1 AND id = ANY($2::text[])`,
+          [userId, ids.slice(i, i + BATCH)],
+        );
+        out.push(...rows);
+      }
+      return out;
     },
     /**
      * Everything the assistant made in one conversation, newest first.
@@ -1449,12 +1468,27 @@ export function createPgStore(connectionString) {
       );
     },
     /** With the text, for the turn that is about to be grounded in it. */
-    async readProjectFiles(userId, projectId) {
+    /**
+     * Every source's full text, bounded.
+     *
+     * Called on every turn of a project conversation, and each file's `text` is
+     * capped at 400,000 characters — but nothing caps the number of *files*, and
+     * `selectSources` ranks and trims only after the whole shelf is in memory.
+     * Twenty sources is 8MB read and re-ranked per turn, and it grows with the
+     * project rather than with the question.
+     *
+     * A hundred is far beyond any shelf that could be usefully ranked against
+     * one question, and oldest-first so the bound is stable: the same hundred
+     * files answer every turn, rather than the set shifting as files are added
+     * and an answer quietly changing because a source fell off the end.
+     */
+    async readProjectFiles(userId, projectId, limit = 100) {
       return q(
         `SELECT id, name, mime, pages, chars, text
            FROM project_files WHERE user_id = $1 AND project_id = $2
-          ORDER BY created_at`,
-        [userId, projectId],
+          ORDER BY created_at
+          LIMIT $3`,
+        [userId, projectId, Math.max(1, Math.min(Number(limit) || 100, 500))],
       );
     },
     async addProjectFile(userId, projectId, file) {

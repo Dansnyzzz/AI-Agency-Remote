@@ -1400,7 +1400,13 @@
       </div>
     </dialog>
 
+    <!-- Two regions, because the two kinds are not equally urgent. A notice
+         can wait for a gap in what is being read; a failure is the reason the
+         thing the user just asked for did not happen, and announcing it politely
+         means queueing it behind a streaming reply. Both live in one visual
+         stack — see the .toasts rule. -->
     <div class="toasts" id="toasts" aria-live="polite"></div>
+    <div class="toasts toasts--alert" id="toasts-alert" role="alert" aria-live="assertive"></div>
 
     <script type="module" src="/js/app.js"></script>
   </body>
