@@ -108,9 +108,36 @@ export const branch = () => git(['rev-parse', '--abbrev-ref', 'HEAD']);
  * more honest than hashing file contents: it moves the moment anything in the
  * tree does, which is precisely when a stamp stops meaning anything.
  */
+/**
+ * A fingerprint of the *source* that is uncommitted, ignoring everything a test
+ * run does not depend on.
+ *
+ * This used to hash the whole of `git status --porcelain`, which quietly
+ * contradicted `isSource` twenty lines below — and `isSource` exists precisely
+ * to say that a README is not worth twenty-four suites. So `note()` honoured the
+ * exemption and this did not: writing one line of documentation expired the
+ * stamp and demanded a full re-run, which is the exact behaviour the comment on
+ * NOT_SOURCE warns turns a gate into something people switch off.
+ *
+ * The path is taken from each porcelain line after the two status characters,
+ * with the rename arrow handled — `R  old -> new` is a change to `new`.
+ */
 export function dirtyHash() {
-  const porcelain = git(['status', '--porcelain']);
-  return crypto.createHash('sha256').update(porcelain).digest('hex').slice(0, 16);
+  const relevant = git(['status', '--porcelain'])
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const entry = line.slice(2).trim();
+      const target = entry.includes(' -> ') ? entry.split(' -> ').pop() : entry;
+      // Quoted when the name has spaces or non-ASCII; the quotes are not part
+      // of the path and would defeat the extension test.
+      return isSource(target.replace(/^"(.*)"$/, '$1'));
+    })
+    .sort()
+    .join('\n');
+
+  return crypto.createHash('sha256').update(relevant).digest('hex').slice(0, 16);
 }
 
 /**
@@ -152,10 +179,22 @@ export function note(file) {
   return rel;
 }
 
-/** Write the green stamp. Only ever called after a real, successful run. */
-export function stamp(scope) {
+/**
+ * Write the green stamp. Only ever called after a real, successful run.
+ *
+ * `tested` is the fingerprint taken **before** the suites started, and passing it
+ * is what makes the stamp honest. This used to call `dirtyHash()` here, at the
+ * end — so a file edited while the suites were running was recorded as covered
+ * by a run that never saw it. The window is however long the gate takes, which
+ * is minutes, and an agent working alongside it will happily fill that.
+ *
+ * Recording what was tested rather than what is on disk now means `status()`
+ * compares the two and reports "no longer matches this tree", which is exactly
+ * right: the run was real, it just does not describe the tree any more.
+ */
+export function stamp(scope, tested = dirtyHash()) {
   const ledger = readLedger();
-  ledger.lastGreen = { at: new Date().toISOString(), head: head(), dirty: dirtyHash(), scope };
+  ledger.lastGreen = { at: new Date().toISOString(), head: head(), dirty: tested, scope };
   ledger.pending = [];
   writeLedger(ledger);
   return ledger.lastGreen;
@@ -229,6 +268,11 @@ function runGate(fast) {
   const scope = fast ? 'fast' : 'full';
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
+  // What is about to be tested, captured before a single suite runs. See
+  // `stamp`: recording this at the end instead would certify whatever happened
+  // to be on disk when the run finished, edits included.
+  const tested = dirtyHash();
+
   for (const args of STEPS[scope]) {
     process.stdout.write(`\n[1m› npm ${args.join(' ')}[0m\n`);
     const run = spawnSync(npm, args, {
@@ -248,7 +292,7 @@ function runGate(fast) {
     }
   }
 
-  const green = stamp(scope);
+  const green = stamp(scope, tested);
   process.stdout.write(
     `\n[32mGate green (${scope}).[0m Stamped at ${green.at} on ${green.head.slice(0, 7) || 'no commit'}.\n` +
       (fast

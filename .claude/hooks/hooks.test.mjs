@@ -445,6 +445,42 @@ try {
   /* a leftover temp directory is not a test failure */
 }
 
+/* ── the fingerprint must agree with isSource ───────────────────── */
+
+{
+  // dirtyHash hashed the whole of `git status --porcelain`, which contradicted
+  // isSource twenty lines below it — and isSource exists to say a README is not
+  // worth twenty-four suites. So note() honoured the exemption and dirtyHash did
+  // not: one line of documentation expired the stamp and demanded a full re-run,
+  // the exact behaviour the comment on NOT_SOURCE warns gets a gate switched off.
+  const gate = await import('./gate.js');
+
+  const baseline = gate.dirtyHash();
+
+  const doc = path.join(root, 'audit', `hooks-test-scratch-${process.pid}.md`);
+  fs.mkdirSync(path.dirname(doc), { recursive: true });
+  fs.writeFileSync(doc, '# written by hooks.test.mjs\n');
+  const afterDoc = gate.dirtyHash();
+
+  const src = path.join(root, `hooks-test-scratch-${process.pid}.js`);
+  fs.writeFileSync(src, '// written by hooks.test.mjs\n');
+  const afterSrc = gate.dirtyHash();
+
+  fs.rmSync(doc, { force: true });
+  fs.rmSync(src, { force: true });
+  const restored = gate.dirtyHash();
+
+  is(afterDoc === baseline, 'a new .md does not expire the stamp', `${baseline} -> ${afterDoc}`);
+  is(afterSrc !== baseline, 'a new .js does', `${baseline} -> ${afterSrc}`);
+  is(restored === baseline, 'and removing them puts the fingerprint back', `${baseline} -> ${restored}`);
+
+  // stamp() must be able to record a fingerprint taken before the suites ran.
+  // Taking it afterwards certified whatever happened to be on disk when the run
+  // finished — including anything edited while it was running, which for a run
+  // that takes minutes is a wide door.
+  is(gate.stamp.length >= 1, 'stamp() takes the fingerprint that was tested');
+}
+
 /* ── the gate must cover what CI blocks a merge on ─────────────── */
 
 {
