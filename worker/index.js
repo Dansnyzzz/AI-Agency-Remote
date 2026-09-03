@@ -531,6 +531,17 @@ async function pollLoop() {
           console.log('\n  This computer is no longer paired.');
           await repair();
         }
+        /**
+         * Wait before asking again.
+         *
+         * `unauthorised` is only cleared by a *successful* poll, so if the token
+         * `repair()` obtained is rejected too — revoked again, or the pairing
+         * never completed — this `continue` re-fetched immediately, with no
+         * delay at all. An unthrottled request loop against the server, which on
+         * a hosted deployment is billed invocations at the fastest rate the
+         * network allows.
+         */
+        await new Promise((r) => setTimeout(r, 5000));
         continue;
       }
       unauthorised = false;

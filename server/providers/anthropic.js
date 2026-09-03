@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { normaliseStop, refusalDetail } from './stop.js';
 
 /**
  * Anthropic adapter.
@@ -138,6 +139,19 @@ export async function* streamAnthropic({
             name: t.name,
             description: t.description,
             input_schema: t.parameters,
+            /**
+             * Make the provider enforce the schema we already wrote.
+             *
+             * "Guarantees schema validation on tool names and inputs", in the
+             * SDK's own words. Without it a malformed `input` — a missing
+             * required field, a string where a number belongs, a tool name that
+             * does not exist — arrives at `executeTool`, which then has to fail
+             * it and spend a step telling the model so. This app hands those
+             * inputs to a shell and a filesystem on somebody's real machine, so
+             * the argument for validating at the edge rather than at the far end
+             * is stronger here than in most places.
+             */
+            strict: true,
           })),
         }
       : {}),
@@ -177,6 +191,16 @@ export async function* streamAnthropic({
   yield {
     type: 'done',
     stopReason: final.stop_reason,
+    /**
+     * Why it stopped, in words somebody can act on.
+     *
+     * `stop_details` is populated only when `stop_reason` is `refusal` and is
+     * null for every other outcome, so it is read through a guard rather than
+     * trusted — see `refusalDetail`. A refusal arrives as HTTP 200 with no
+     * content at all, which is precisely why it has to be said out loud: the
+     * turn otherwise "succeeds" and leaves an empty message on screen.
+     */
+    stop: normaliseStop(final.stop_reason, refusalDetail(final.stop_details)),
     toolCalls,
     raw: { anthropic: final.content },
     /**

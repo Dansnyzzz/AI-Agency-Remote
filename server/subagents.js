@@ -5,7 +5,8 @@ import { availableTools, assessRisk } from './tools/definitions.js';
 import { getPrefs } from './settings.js';
 import { record as recordUsage } from './usage.js';
 import { workerStatus } from './localTools.js';
-import { estimateCost } from './providers/catalog.js';
+import { priceTurn } from './providers/catalog.js';
+import { mapWithLimit, MAX_PARALLEL_TOOLS } from './util/parallel.js';
 
 /**
  * Sub-agents — several independent investigations at once.
@@ -64,7 +65,17 @@ const SYSTEM = [
 async function runOne({ userId, user, entry, prefs, tools, task, signal, stream }) {
   const messages = [{ id: `sub-${Date.now()}`, role: 'user', text: String(task) }];
   let answer = '';
-  const usage = { input: 0, output: 0 };
+  /**
+   * Cached reads and the provider's own invoice ride along with the totals.
+   *
+   * Summing only input and output charged every sub-agent's cached prompt at
+   * the full input rate — and a fan-out is the *most* cacheable shape in the
+   * app, since six sub-agents share one system prompt and one tool catalogue.
+   * Dropping the provider's stated cost had the same effect in the other
+   * direction: on OpenRouter the real figure was there and was replaced by an
+   * estimate, or by nothing at all for a model with no price on file.
+   */
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 };
 
   for (let step = 0; step < MAX_STEPS; step += 1) {
     if (signal?.aborted) break;
@@ -81,7 +92,20 @@ async function runOne({ userId, user, entry, prefs, tools, task, signal, stream 
         system: SYSTEM,
         messages,
         tools,
-        effort: prefs.effort,
+        /**
+         * `low`, not the conversation's setting.
+         *
+         * A sub-agent gets one short, read-only, self-contained question — find
+         * this, read that, report back — and `runParallel` fans out six of them
+         * at once on the account's main model. Running all six at the effort the
+         * *conversation* is set to means paying flagship deep-thinking rates six
+         * times over for what is mostly retrieval, and Anthropic's own guidance
+         * for sub-agents is low effort for exactly this shape of task.
+         *
+         * The main loop keeps `prefs.effort` untouched: that is where the
+         * reasoning the user is paying for actually happens.
+         */
+        effort: 'low',
         signal,
       })) {
         if (ev.type === 'text') assistant.text += ev.delta ?? '';
@@ -96,14 +120,28 @@ async function runOne({ userId, user, entry, prefs, tools, task, signal, stream 
     if (done?.usage) {
       usage.input += done.usage.input || 0;
       usage.output += done.usage.output || 0;
+      usage.cacheRead += done.usage.cacheRead || 0;
+      usage.cacheWrite += done.usage.cacheWrite || 0;
+      usage.costUsd += done.usage.costUsd || 0;
     }
     answer = assistant.text.trim() || answer;
     messages.push(assistant);
 
     if (!assistant.toolCalls.length) break;
 
-    const results = await Promise.all(
-      assistant.toolCalls.map(async (call) => {
+    /**
+     * The same ceiling the main loop has, for the same reason.
+     *
+     * This was a bare `Promise.all` over every call the model made, and
+     * `run_parallel` runs six sub-agents at once — so six sub-agents × however
+     * many calls each all landed on one worker's job queue at the same instant,
+     * with no backpressure anywhere in the chain. The main loop caps this at
+     * four and says why; a fan-out is where the cap matters most.
+     */
+    const results = await mapWithLimit(
+      assistant.toolCalls,
+      MAX_PARALLEL_TOOLS,
+      async (call) => {
         // Belt and braces: the tool list is already read-only, so anything else
         // arriving here means the model invented a name.
         if (assessRisk(call.name, call.input) !== 'safe') {
@@ -116,7 +154,7 @@ async function runOne({ userId, user, entry, prefs, tools, task, signal, stream 
         }
         const out = await executeTool({ user, name: call.name, input: call.input, chatId: null, signal });
         return { toolCallId: call.id, name: call.name, content: out.content, isError: out.isError };
-      }),
+      },
     );
     messages.push({ id: `sub-t-${step}`, role: 'tool', results });
   }
@@ -176,9 +214,26 @@ export async function runParallel({
   );
 
   const usage = results.reduce(
-    (total, r) => ({ input: total.input + r.usage.input, output: total.output + r.usage.output }),
-    { input: 0, output: 0 },
+    (total, r) => ({
+      input: total.input + r.usage.input,
+      output: total.output + r.usage.output,
+      cacheRead: total.cacheRead + (r.usage.cacheRead || 0),
+      cacheWrite: total.cacheWrite + (r.usage.cacheWrite || 0),
+      costUsd: total.costUsd + (r.usage.costUsd || 0),
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 },
   );
+  /**
+   * A zero here means "no provider told us", not "this was free".
+   *
+   * `priceTurn` reads any finite `costUsd` as the provider's own invoice and
+   * stops estimating — correct when a provider really did bill zero, and badly
+   * wrong as a default, which would make every fan-out on a provider that
+   * reports no cost show up as costing nothing at all. So the field is dropped
+   * unless something actually stated it.
+   */
+  if (!usage.costUsd) delete usage.costUsd;
+
   if (usage.input || usage.output) {
     // Six sub-agents on a flagship model is real money. Booking it at zero made
     // fan-out look free on the usage page, which is the one place it should not.
@@ -186,7 +241,7 @@ export async function runParallel({
       chatId,
       model: entry.id,
       usage,
-      costUsd: estimateCost(entry, usage) || 0,
+      costUsd: priceTurn(entry, usage)?.usd || 0,
       role: 'subagent',
     });
   }

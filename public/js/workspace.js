@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { t } from './i18n.js';
 import { escapeHtml } from './markdown.js';
 import { toast } from './render.js';
 
@@ -52,7 +53,7 @@ function armDelete(button, run) {
     event.stopPropagation();
     if (!ready) {
       ready = true;
-      button.textContent = 'Delete?';
+      button.textContent = t('ws.deleteConfirm');
       button.classList.add('is-armed');
       setTimeout(reset, 5000);
       return;
@@ -129,9 +130,9 @@ export function createWorkspace() {
             <span class="entry__when">${escapeHtml(ago(entry.modified))}</span>
           </button>
           <button class="entry__act" type="button" data-rename="${escapeHtml(path)}"
-                  title="Rename or move" aria-label="Rename ${escapeHtml(entry.name)}">↳</button>
+                  title="${escapeHtml(t('ws.renameTitle'))}" aria-label="${escapeHtml(t('ws.renameAria').replace('{name}', entry.name))}">↳</button>
           <button class="entry__drop" type="button" data-delete="${escapeHtml(path)}"
-                  data-dir="${entry.dir ? '1' : ''}" aria-label="Delete ${escapeHtml(entry.name)}">✕</button>
+                  data-dir="${entry.dir ? '1' : ''}" aria-label="${escapeHtml(t('ws.deleteAria').replace('{name}', entry.name))}">✕</button>
         </div>`);
     }
 
@@ -156,11 +157,11 @@ export function createWorkspace() {
       button.addEventListener('click', async (event) => {
         event.stopPropagation();
         const from = button.dataset.rename;
-        const to = window.prompt('Rename or move — edit the path:', from);
+        const to = window.prompt(t('ws.renamePrompt'), from);
         if (!to || to === from) return;
         try {
           const { message } = await api.moveWorkspaceFile(from, to);
-          toast(message || 'Moved.');
+          toast(message || t('ws.moved'));
           await open(at);
         } catch (err) {
           toast(err.message, 'error');
@@ -172,7 +173,7 @@ export function createWorkspace() {
       armDelete(button, async () => {
         try {
           const { message } = await api.deleteWorkspaceFile(button.dataset.delete, !!button.dataset.dir);
-          toast(message || 'Deleted.');
+          toast(message || t('ws.deleted'));
           await open(at);
         } catch (err) {
           toast(err.message, 'error');
@@ -233,7 +234,7 @@ export function createWorkspace() {
     });
 
     $('workspace-back').addEventListener('click', () => {
-      if (box.value !== editing.content && !window.confirm('Leave without saving?')) return;
+      if (box.value !== editing.content && !window.confirm(t('ws.leaveUnsaved'))) return;
       editing = null;
       open(at);
     });
@@ -247,13 +248,13 @@ export function createWorkspace() {
     if (!box || !editing) return;
 
     button.disabled = true;
-    button.textContent = 'Saving…';
+    button.textContent = t('ws.saving');
     try {
       const { message } = await api.saveWorkspaceFile(editing.path, box.value);
       editing.content = box.value;
       editing.bytes = new Blob([box.value]).size;
       $('workspace-editor-hint').textContent = `${editing.path} · ${humanSize(editing.bytes)}`;
-      toast(message || 'Saved.');
+      toast(message || t('ws.saved'));
     } catch (err) {
       toast(err.message, 'error');
     } finally {
@@ -378,7 +379,7 @@ export function createWorkspace() {
   });
 
   $('workspace-new').addEventListener('click', async () => {
-    const name = window.prompt('New file — name it, with a path if you want a folder:', 'notes.md');
+    const name = window.prompt(t('ws.newFilePrompt'), 'notes.md');
     if (!name) return;
     const path = name.includes('/') ? name : (at === '.' ? name : `${at}/${name}`);
     try {

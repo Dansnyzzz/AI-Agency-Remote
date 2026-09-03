@@ -35,6 +35,7 @@
  */
 import crypto from 'node:crypto';
 import { getStore } from './store/index.js';
+import { untrusted } from './tools/untrusted.js';
 import { getApiKey, baseUrlFor } from './settings.js';
 
 /**
@@ -374,7 +375,12 @@ const SCAN_CEILING = 60_000;
  * base64 per chunk, so ten thousand chunks was ~82MB held per search and fifty
  * thousand was past what a serverless function survives.
  */
-async function nearest(store, userId, model, needle, shortlist) {
+/**
+ * @param source  when the caller asked for one folder, the scan is narrowed to
+ *   it in SQL. Filtering afterwards filters a shortlist that was already chosen
+ *   from the whole corpus — see the call site in `searchDocs`.
+ */
+async function nearest(store, userId, model, needle, shortlist, source = null) {
   if (typeof store.vectorSearchReady === 'function' && (await store.vectorSearchReady())) {
     const rows = await store.docVectorNearest?.(userId, model, needle, shortlist);
     // `null` means the extension is there but this table is not ready for it —
@@ -396,7 +402,7 @@ async function nearest(store, userId, model, needle, shortlist) {
   let after = null;
 
   for (;;) {
-    const page = await store.docVectorPage(userId, model, { after, limit: SCAN_PAGE });
+    const page = await store.docVectorPage(userId, model, { after, limit: SCAN_PAGE, source });
     if (!page.length) break;
 
     for (const row of page) {
@@ -434,7 +440,7 @@ export async function searchDocs(userId, { query, limit = 6, source = null }) {
   // because the reranker below needs a shortlist to actually rank.
   const shortlist = wanted * 3;
 
-  const scored = await nearest(store, userId, embedder.model, needle, shortlist);
+  const scored = await nearest(store, userId, embedder.model, needle, shortlist, source);
 
   if (!scored.length) {
     const sources = await store.docSources(userId);
@@ -496,10 +502,36 @@ export async function searchDocs(userId, { query, limit = 6, source = null }) {
     }
   }
 
+  /**
+   * Belt to the SQL braces.
+   *
+   * The scan now narrows by source in the database, so this filters nothing on
+   * that path — but the pgvector path (`docVectorNearest`) does not take a
+   * source, so the predicate has to survive for it.
+   *
+   * The filter used to be the *only* place source was applied, and that was the
+   * bug: `nearest` took the best `limit * 3` chunks across the entire corpus and
+   * this then threw away the ones from other folders. With 8,000 chunks in
+   * `notes` and 200 in `contracts`, a search restricted to `contracts` filled
+   * its shortlist with `notes` passages, discarded all of them, and answered
+   * "Nothing indexed under a source matching contracts" — a flatly false
+   * statement, from the one tool whose purpose is to stop the assistant claiming
+   * it does not know something that is on the user's disk.
+   */
   if (source) {
     const needleSource = String(source).toLowerCase();
-    hits = hits.filter((h) => h.source.toLowerCase().includes(needleSource));
-    if (!hits.length) return `Nothing indexed under a source matching "${source}".`;
+    hits = hits.filter((h) => String(h.source || '').toLowerCase().includes(needleSource));
+    if (!hits.length) {
+      // Which of the two it is changes what the model should say next, so the
+      // two are told apart rather than sharing one misleading sentence.
+      const known = await store.docSources(userId);
+      const matching = known.filter((s) => String(s.source || '').toLowerCase().includes(needleSource));
+      return matching.length
+        ? `Nothing in "${source}" matches that question, though it is indexed. Try different words, or search without the source filter.`
+        : `No indexed folder is called anything like "${source}". Indexed: ${
+            known.map((s) => s.source).join(', ') || 'nothing yet'
+          }.`;
+    }
   }
 
   const results = mergeAdjacent(hits).slice(0, wanted);
@@ -521,7 +553,24 @@ export async function searchDocs(userId, { query, limit = 6, source = null }) {
     body += block;
   }
 
-  return `${results.length} passage${results.length === 1 ? '' : 's'} for "${text}":\n\n${body.trim()}${caveat}`;
+  /**
+   * The passages are somebody else's writing, so they travel in an envelope.
+   *
+   * This was the one place external content reached the model unwrapped. The
+   * web fetcher, the search results, the page extractor and every MCP tool all
+   * go through `untrusted()`; the user's own indexed corpus did not — and it is
+   * the *least* trustworthy of them in one specific way. A web page is fetched
+   * because the model chose a URL this turn; an indexed document was filed
+   * weeks ago, is retrieved by meaning rather than by name, and surfaces
+   * whenever a question happens to match it. A contract or a PDF from a
+   * supplier carrying "ignore your previous instructions" would have been read
+   * as though the user had typed it.
+   *
+   * The caveat stays outside the envelope: it is this app's assessment of the
+   * match quality, not something the documents said.
+   */
+  const found = `${results.length} passage${results.length === 1 ? '' : 's'} for "${text}"`;
+  return `${found}:\n\n${untrusted('the indexed documents', body.trim())}${caveat}`;
 }
 
 export async function listSources(userId) {

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { getStore } from './store/index.js';
+import { MAX_ATTACHMENT_BYTES } from './store/pg.js';
 import { extractPdfText } from './pdf.js';
 import { isLegacyOffice, officeFormat, readOffice } from './office/index.js';
 
@@ -31,7 +32,9 @@ import { isLegacyOffice, officeFormat, readOffice } from './office/index.js';
  * starts from the words rather than from a parsed approximation of them.
  */
 
-const MAX_BYTES = 5 * 1024 * 1024;
+// One definition, in the store, because that is the door every write passes
+// through — the two rewrite paths reached it without ever seeing this file.
+const MAX_BYTES = MAX_ATTACHMENT_BYTES;
 const MAX_PER_MESSAGE = 6;
 
 /** Text formats worth inlining. Anything else is refused by name, not ignored. */

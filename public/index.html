@@ -408,16 +408,35 @@
             </p>
             <div class="suggestions" id="suggestions"></div>
           </div>
-          <div id="messages"></div>
-          <div id="status-host"></div>
+          <!-- The transcript announces itself.
+
+               Without this the entire assistant reply, every tool card and every
+               status line arrived with no announcement whatsoever — a screen
+               reader user watching a thirty-step agent run was told nothing at
+               all. `polite` rather than `assertive` because prose streams in
+               token by token and an assertive region would interrupt itself
+               continuously; `additions text` so appended blocks are read and
+               re-rendered markdown is not re-read from the top.
+
+               The regions are declared here, empty, rather than created with
+               their content: a live region has to be in the DOM *before* it
+               changes, or assistive technology routinely misses the first
+               insertion. -->
+          <div id="messages" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></div>
+          <div id="status-host" role="status" aria-live="polite" aria-atomic="true"></div>
         </div>
 
         <!-- Floats over the transcript rather than sitting under it, so messages
              scroll away beneath the composer instead of stopping short of it. -->
         <div class="dock" id="dock">
-          <div class="approval" id="approval" hidden>
+          <!-- The run has stopped and is waiting on a person, so this one *is*
+               assertive: it is the only moment in the app where nothing further
+               happens until somebody answers. Announcing it politely would
+               queue it behind the streaming transcript above. -->
+          <div class="approval" id="approval" role="alertdialog" aria-labelledby="approval-title"
+               aria-live="assertive" hidden>
             <div class="approval__body">
-              <strong>Approve these actions?</strong>
+              <strong id="approval-title" data-i18n="approval.title">Approve these actions?</strong>
               <div class="approval__list" id="approval-list"></div>
             </div>
             <div class="approval__actions">
@@ -485,11 +504,16 @@
                 <span class="gauge__label" id="context-percent"></span>
               </button>
 
+              <!-- A placeholder is not an accessible name: it is not exposed as
+                   one, and it disappears on the first keystroke. This is the
+                   main input of the whole application, so it gets a real one. -->
               <textarea
                 id="input"
                 rows="1"
                 data-i18n-placeholder="composer.placeholder"
                 placeholder="Ask anything…  (Enter to send, Shift+Enter for a new line)"
+                data-i18n-aria-label="composer.label"
+                aria-label="Message"
                 autocomplete="off"
               ></textarea>
 
@@ -502,8 +526,13 @@
                   <span class="policy__icon" id="policy-icon"></span>
                   <span id="policy-label"></span>
                 </button>
-                <button class="icon-btn icon-btn--stop" id="stop" type="button" data-i18n-title="composer.stop" title="Stop" hidden>■</button>
-                <button class="icon-btn icon-btn--send" id="send" type="submit" data-i18n-title="composer.send" title="Send">↑</button>
+                <!-- `aria-label` as well as `title`. Name-from-content wins over
+                     `title`, so these two announced as "black square" and
+                     "upwards arrow" — the two most important buttons in the app.
+                     applyI18n() only rewrites an aria-label that already exists,
+                     so declaring it here is also what makes it translate. -->
+                <button class="icon-btn icon-btn--stop" id="stop" type="button" data-i18n-title="composer.stop" title="Stop" aria-label="Stop" hidden>■</button>
+                <button class="icon-btn icon-btn--send" id="send" type="submit" data-i18n-title="composer.send" title="Send" aria-label="Send">↑</button>
               </div>
             </div>
             <div class="composer__meta" id="composer-meta"></div>
@@ -1371,7 +1400,13 @@
       </div>
     </dialog>
 
+    <!-- Two regions, because the two kinds are not equally urgent. A notice
+         can wait for a gap in what is being read; a failure is the reason the
+         thing the user just asked for did not happen, and announcing it politely
+         means queueing it behind a streaming reply. Both live in one visual
+         stack — see the .toasts rule. -->
     <div class="toasts" id="toasts" aria-live="polite"></div>
+    <div class="toasts toasts--alert" id="toasts-alert" role="alert" aria-live="assertive"></div>
 
     <script type="module" src="/js/app.js"></script>
   </body>

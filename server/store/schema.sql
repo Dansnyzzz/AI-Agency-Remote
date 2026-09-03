@@ -591,3 +591,62 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
 CREATE INDEX IF NOT EXISTS workflow_runs_wf_idx   ON workflow_runs (workflow_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS workflow_runs_user_idx ON workflow_runs (user_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS workflow_runs_open_idx ON workflow_runs (status, lease_until);
+
+-- ── Schema 16 ────────────────────────────────────────────────────────────────
+--
+-- Indexes for queries that were reading whole tables, and a lease for scheduled
+-- tasks. Every statement here is additive; nothing is dropped or rewritten.
+
+-- The most frequently executed query in the app. A paired computer polls
+-- `recentJobAt` roughly every four seconds, forever — about 21,600 times a day
+-- per device — and the only index available was `(user_id, status, created_at)`.
+-- With `status` unconstrained, its residual order is wrong for `ORDER BY
+-- created_at DESC`, so each poll read every one of that account's job rows and
+-- sorted them to return one.
+CREATE INDEX IF NOT EXISTS tool_jobs_user_time_idx ON tool_jobs (user_id, created_at DESC);
+
+-- Postgres does not index the referencing side of a foreign key, so each of
+-- these fired a sequential scan when an account was deleted — all of them inside
+-- the single `DELETE FROM users` statement, holding locks throughout.
+-- `scheduled_tasks` is the worse case: it had no index at all, so `listTasks`
+-- was a cross-tenant sequential scan on an ordinary page load.
+CREATE INDEX IF NOT EXISTS scheduled_tasks_user_idx     ON scheduled_tasks (user_id, next_run_at);
+CREATE INDEX IF NOT EXISTS project_files_user_idx       ON project_files (user_id);
+CREATE INDEX IF NOT EXISTS attachment_versions_user_idx ON attachment_versions (user_id);
+CREATE INDEX IF NOT EXISTS pairings_user_idx            ON pairings (user_id);
+
+-- Three of the six sweep pruners scanned their table whole, and the sweep runs
+-- from the cron route *before* the agent turns, inside the same 300s budget it
+-- then hands the remainder of to workflows.
+CREATE INDEX IF NOT EXISTS tool_jobs_done_idx     ON tool_jobs (done_at) WHERE status IN ('done', 'error');
+CREATE INDEX IF NOT EXISTS research_runs_done_idx ON research_runs (completed_at);
+CREATE INDEX IF NOT EXISTS workflow_runs_done_idx ON workflow_runs (finished_at);
+
+-- Both shelves order by `pinned DESC, updated_at DESC` and neither index led
+-- with `pinned`, so both sorted their result set on every load.
+CREATE INDEX IF NOT EXISTS chats_shelf_idx ON chats (user_id, pinned DESC, updated_at DESC);
+
+-- Looked up by hash on every pairing claim and every enrolment, and indexed only
+-- by expiry. Not unique: two live rows could share a code and `peekEnrolment`
+-- returns `rows[0]` of an unordered result, so the installer could name the
+-- wrong account. Uniqueness needs a backfill first and is not attempted here.
+CREATE INDEX IF NOT EXISTS pairings_code_idx ON pairings (code_hash);
+
+-- A scheduled task that was cut off mid-run used to re-run in an hour, and again
+-- the hour after, forever: the claim pushed `next_run_at` forward but nothing
+-- recorded that the run had *started*, so an invocation killed at the function
+-- ceiling left no trace. A task found still 'running' when its lease has expired
+-- is now marked for a person to look at rather than repeated — the same rule
+-- `workflow_runs` already applies, and for the same reason: nobody can say
+-- whether the email went out.
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS run_state   TEXT;
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS started_at  TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS scheduled_tasks_lease_idx ON scheduled_tasks (run_state, lease_until);
+
+-- A reconnect used to *join* the run it was resuming rather than replace it,
+-- because the lease was re-entrant on the run id alone and the heartbeat then
+-- reported success to both invocations at once. The sequence makes a claim
+-- monotonic: the newer holder evicts the older, which then fails its heartbeat
+-- and stops, instead of two loops appending to one transcript.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS run_lock_seq BIGINT NOT NULL DEFAULT 0;

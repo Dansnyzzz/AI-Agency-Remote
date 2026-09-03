@@ -1,6 +1,18 @@
 import { renderMarkdown, escapeHtml } from './markdown.js';
 import { t } from './i18n.js';
 
+/**
+ * One repaint per frame, and a real fallback when there are no frames.
+ *
+ * A backgrounded tab does not run `requestAnimationFrame` at all, so a reply
+ * streaming into a tab the user has switched away from would never paint and
+ * would arrive all at once on return. `setTimeout` still fires there (throttled,
+ * which is fine — nobody is looking), so the streamed text keeps accumulating
+ * into the DOM either way.
+ */
+const raf = (fn) =>
+  (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16))(fn);
+
 const el = (tag, className, html) => {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -253,7 +265,7 @@ function attachmentStrip(files) {
         const open = el('button', 'bubble__thumb');
         open.type = 'button';
         open.dataset.file = file.id;
-        open.title = `Open ${file.name || 'this image'}`;
+        open.title = t('chat.openNamed').replace('{name}', file.name || '');
         open.append(img);
         strip.append(open);
       } else {
@@ -311,11 +323,11 @@ export function widgetFrame(widget) {
 
   const caption = document.createElement('figcaption');
   caption.className = 'widget__caption';
-  caption.textContent = widget.title || 'Diagram';
+  caption.textContent = widget.title || t('chat.diagram');
 
   const frame = document.createElement('iframe');
   frame.className = 'widget__frame';
-  frame.title = widget.title || 'Diagram';
+  frame.title = widget.title || t('chat.diagram');
   /**
    * No `allow-scripts`: a widget is a finished picture. Anything that needs to
    * run is a `create_file` artifact, which has its own frame and its own warning.
@@ -386,14 +398,14 @@ export function fileCard(file) {
   const open = el('button', 'btn btn--ghost filecard__btn');
   open.type = 'button';
   open.dataset.file = file.id;
-  open.textContent = 'Open';
+  open.textContent = t('chat.open');
 
   const download = el('a', 'btn btn--ghost filecard__btn');
   // The version marker only changes when the file is rewritten; without it a
   // browser holding the immutable first version would download that forever.
   download.href = `/api/attachments/${file.id}?download=1${file.version ? `&v=${file.version}` : ''}`;
   download.setAttribute('download', file.name);
-  download.textContent = 'Download';
+  download.textContent = t('chat.download');
 
   card.append(icon, body, open, download);
   return card;
@@ -424,11 +436,11 @@ export function userMessage(text, files = [], id = null) {
    */
   const actions = el('div', 'msg__actions');
   actions.innerHTML =
-    '<button class="msg__action" type="button" data-act="copy" title="Copy" aria-label="Copy message">' +
+    `<button class="msg__action" type="button" data-act="copy" title="${escapeHtml(t('chat.copy'))}" aria-label="${escapeHtml(t('chat.copy'))}">` +
     '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6">' +
     '<rect x="7" y="7" width="9.5" height="9.5" rx="2" /><path d="M13 4.5H5.5A1.5 1.5 0 0 0 4 6v7.5" />' +
     '</svg></button>' +
-    '<button class="msg__action" type="button" data-act="edit" title="Edit and ask again" aria-label="Edit message">' +
+    `<button class="msg__action" type="button" data-act="edit" title="${escapeHtml(t('chat.edit'))}" aria-label="${escapeHtml(t('chat.edit'))}">` +
     '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M13.5 2.9a1.9 1.9 0 0 1 2.7 2.7L7.8 14 4 15l1-3.8Z" />' +
     '</svg></button>';
@@ -456,6 +468,8 @@ export function assistantMessage() {
   let thinkingBody = null;
   let prose = null;
   let rawText = '';
+  /** Whether a repaint is already scheduled for the next frame — see appendText. */
+  let paintQueued = false;
 
   /**
    * A run of steps in one family, drawn as a single card.
@@ -553,7 +567,7 @@ export function assistantMessage() {
         out.open = !!result.isError;
         out.append(el('summary', null, escapeHtml(t('step.output'))));
         const pre = el('pre');
-        pre.textContent = result.content || '(no output)';
+        pre.textContent = result.content || t('chat.noOutput');
         out.append(pre);
         item.append(out);
 
@@ -598,7 +612,9 @@ export function assistantMessage() {
     appendThinking(delta) {
       if (!thinkingBlock) {
         thinkingBlock = el('details', 'block');
-        thinkingBlock.append(el('summary', null, '<span class="spinner"></span> Reasoning'));
+        thinkingBlock.append(
+          el('summary', null, `<span class="spinner"></span> ${escapeHtml(t('chat.reasoning'))}`),
+        );
         thinkingBody = el('div', 'block__body');
         thinkingBody.append(el('pre'));
         thinkingBlock.append(thinkingBody);
@@ -609,10 +625,32 @@ export function assistantMessage() {
 
     finishThinking() {
       if (thinkingBlock) {
-        thinkingBlock.querySelector('summary').innerHTML = 'Reasoning';
+        thinkingBlock.querySelector('summary').innerHTML = escapeHtml(t('chat.reasoning'));
       }
     },
 
+    /**
+     * Add to the reply, and repaint at most once a frame.
+     *
+     * This used to re-parse and re-insert the *whole* reply on every delta.
+     * `renderMarkdown` is a line-scanning parse with a dozen regex passes over
+     * the accumulated text, so running it per token is O(n²) in reply length: a
+     * 20,000-character answer arriving four characters at a time is about 5,000
+     * parses averaging 10,000 characters, each followed by throwing away and
+     * rebuilding the entire prose subtree. It was the most expensive thing in
+     * the client, on its hottest path.
+     *
+     * Two consequences were worse than the jank, because they are things a
+     * person notices without knowing why: **you could not select text in a
+     * streaming reply** — the selection was destroyed every token — and any
+     * `<details>` a reply had opened snapped shut continuously.
+     *
+     * Coalescing to one paint per animation frame collapses ~16ms of tokens
+     * into a single parse, which on a fast stream is a 10–50× cut with no
+     * change to what is finally shown. `flushText` exists so the end of a turn
+     * is never left waiting on a frame that may not come — a backgrounded tab
+     * does not run rAF at all.
+     */
     appendText(delta) {
       rawText += delta;
       if (!prose) {
@@ -623,7 +661,22 @@ export function assistantMessage() {
         prose = el('div', 'prose');
         body.append(prose);
       }
-      prose.innerHTML = renderMarkdown(rawText);
+      if (paintQueued) return;
+      paintQueued = true;
+      raf(() => {
+        paintQueued = false;
+        // `prose` can have been torn down by `resetText` between scheduling and
+        // painting — a provider restarting the reply on another key does exactly
+        // that — and painting into the removed node would resurrect the draft
+        // this whole mechanism exists to discard.
+        if (prose) prose.innerHTML = renderMarkdown(rawText);
+      });
+    },
+
+    /** Paint whatever is pending right now, without waiting for a frame. */
+    flushText() {
+      paintQueued = false;
+      if (prose) prose.innerHTML = renderMarkdown(rawText);
     },
 
     /**
@@ -636,6 +689,11 @@ export function assistantMessage() {
      */
     resetText() {
       rawText = '';
+      // Cancel any frame still owed. Without this the queued paint would run
+      // after the node was removed — harmless now that `appendText` re-checks
+      // `prose`, but leaving a scheduled write to a discarded draft in flight is
+      // not a thing to rely on being harmless.
+      paintQueued = false;
       if (prose) {
         prose.remove();
         prose = null;
@@ -709,7 +767,7 @@ export function assistantMessage() {
             `<span class="tool__name">${escapeHtml(call.name)}</span>` +
             `<span class="tool__arg">${escapeHtml(summariseToolInput(call.name, call.input))}</span>` +
             (result.ms != null ? `<span class="tool__time">${ms(result.ms)}</span>` : '');
-          inner.querySelector('pre').textContent = result.content || '(no output)';
+          inner.querySelector('pre').textContent = result.content || t('chat.noOutput');
 
           /**
            * A document came out of this call.
@@ -751,7 +809,7 @@ export function assistantMessage() {
         if (call.name === 'update_plan') api.setPlan(call.input?.steps);
         const handle = api.startTool(call);
         const result = resultsByCallId?.get(call.id);
-        handle.complete(result || { content: '(no result recorded)', isError: false });
+        handle.complete(result || { content: t('chat.noResult'), isError: false });
       }
       if (message.text) api.appendText(message.text);
       api.finish();
@@ -766,6 +824,9 @@ export function assistantMessage() {
      * drawn as though it were working.
      */
     finish() {
+      // The last tokens of a reply may still be owed a frame. A turn that ends
+      // must show all of what it said, not all but the final sentence.
+      if (paintQueued) api.flushText();
       closeGroup();
     },
   };
@@ -785,12 +846,15 @@ export function assistantMessage() {
 export function summaryDivider(replaced, text) {
   const wrap = el('div', 'compacted');
   const line = el('div', 'compacted__line');
-  line.textContent = `${replaced} earlier message${replaced === 1 ? '' : 's'} summarised to free up room`;
+  // Two keys rather than a plural rule: this dictionary has no plural machinery
+  // on purpose, and Vietnamese does not inflect the noun anyway.
+  line.textContent =
+    replaced === 1 ? t('chat.compactedOne') : t('chat.compacted').replace('{n}', String(replaced));
   wrap.append(line);
 
   if (text) {
     const fold = el('details', 'block compacted__fold');
-    fold.append(el('summary', null, 'Read the summary'));
+    fold.append(el('summary', null, escapeHtml(t('chat.summaryFold'))));
     const body = el('div', 'block__body');
     const pre = el('pre');
     pre.textContent = text;
@@ -801,6 +865,28 @@ export function summaryDivider(replaced, text) {
   return wrap;
 }
 
+/**
+ * Why the reply above this line is not a finished answer.
+ *
+ * Drawn into the transcript rather than toasted, and that is the whole point of
+ * it: a toast is gone in three seconds, and the question "was this answer cut
+ * off?" is asked while scrolling back through a conversation an hour later. The
+ * three outcomes it covers — truncated at the output cap, declined by a safety
+ * classifier, blocked by a content filter — used to leave nothing behind at all,
+ * so a half-written answer and a complete one looked the same for ever.
+ *
+ * `role="status"` rather than `alert`: it is worth announcing to a screen reader
+ * when it appears, and it is not an interruption.
+ */
+export function stopNote(kind, text) {
+  const wrap = el('div', `stopnote stopnote--${kind || 'unknown'}`);
+  wrap.setAttribute('role', 'status');
+  const line = el('div', 'stopnote__line');
+  line.textContent = text;
+  wrap.append(line);
+  return wrap;
+}
+
 export function statusLine(text) {
   const node = el('div', 'status-line');
   node.innerHTML = `<span class="spinner"></span><span>${escapeHtml(text)}</span>`;
@@ -808,12 +894,19 @@ export function statusLine(text) {
 }
 
 export function toast(message, kind = 'info') {
-  const host = document.getElementById('toasts');
+  // An error goes to the assertive region: it is why the thing the user just
+  // asked for did not happen, and a polite announcement queues behind whatever
+  // is being read — which for a streaming reply is a long time.
+  const host = document.getElementById(kind === 'error' ? 'toasts-alert' : 'toasts');
 
   // Repeating the same message stacks noise without adding information — the
   // second click of a failing button should not double the wall of red.
-  for (const existing of host.children) {
-    if (existing.dataset.message === message) return;
+  // Checked across both regions, so a message cannot appear once in each.
+  for (const region of ['toasts', 'toasts-alert']) {
+    const node = document.getElementById(region);
+    for (const existing of node ? node.children : []) {
+      if (existing.dataset.message === message) return;
+    }
   }
 
   const node = el('div', `toast${kind === 'error' ? ' toast--error' : ''}`);

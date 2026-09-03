@@ -13,7 +13,11 @@
 
   --text: #e8eef4;
   --text-dim: #9aa8b5;
-  --text-faint: #64727f;
+  /* 5.2:1 on --bg. Was #64727f — 3.9:1, under the 4.5 WCAG asks for, on a token
+     used 119 times at 11.5–12.5px: timestamps, hints, tool durations, the
+     disabled send button. Small faint text is the worst case for contrast, not
+     the one that earns an exemption. Still clearly fainter than --text-dim. */
+  --text-faint: #78868f;
 
   --accent: #5ee6a8;
   --accent-dim: #2f7f5f;
@@ -101,12 +105,14 @@
 
   --text: #101820;
   --text-dim: #4a5866;
-  --text-faint: #74828f;
+  /* 4.7:1 on --bg. Was #74828f — 3.7:1. See the note in the dark palette. */
+  --text-faint: #66727e;
 
   --accent: #10855a;
   --accent-dim: #7fd3ae;
   --accent-glow: rgba(16, 133, 90, 0.12);
-  --warn: #b06a00;
+  /* 5.1:1 on --bg. Was #b06a00 — 4.05:1, and it carries warnings. */
+  --warn: #9a5d00;
   --danger: #c3352f;
   --info: #1b6fc4;
 
@@ -145,12 +151,14 @@
 
     --text: #101820;
     --text-dim: #4a5866;
-    --text-faint: #74828f;
+    /* 4.7:1 on --bg. Was #74828f — 3.7:1. See the note in the dark palette. */
+  --text-faint: #66727e;
 
     --accent: #10855a;
     --accent-dim: #7fd3ae;
     --accent-glow: rgba(16, 133, 90, 0.12);
-    --warn: #b06a00;
+    /* 5.1:1 on --bg. Was #b06a00 — 4.05:1, and it carries warnings. */
+  --warn: #9a5d00;
     --danger: #c3352f;
     --info: #1b6fc4;
 
@@ -2586,6 +2594,12 @@ details.block pre {
   transform: translateX(-50%);
   pointer-events: none;
 }
+/* The assertive region sits directly under the polite one so the two read as a
+   single stack. Separate elements only because a live region's urgency is a
+   property of the container, and an error must not queue behind a notice. */
+.toasts--alert {
+  top: 58px;
+}
 .toast {
   max-width: 100%;
   padding: 10px 16px;
@@ -2794,9 +2808,22 @@ details.block pre {
     background: var(--bg-elev);
     box-shadow: var(--shadow);
     transform: translateX(-102%);
-    transition: transform 0.22s ease;
+    /* `visibility` as well as the transform, and this is not decoration.
+       A transform moves a panel off screen and leaves every control inside it
+       in the tab order and in the accessibility tree — so with the drawer shut
+       on a phone, tabbing out of the header walked through New chat, Search,
+       Projects, Artifacts, Scheduled, Workflows, Workspace, Settings and every
+       conversation row plus its ⋯ button, all invisible. The right-hand rail
+       already does exactly this; the drawer was simply missed.
+       Delayed on close so it does not blank mid-slide, immediate on open. */
+    visibility: hidden;
+    transition: transform 0.22s ease, visibility 0s linear 0.22s;
   }
-  .app.is-open .sidebar { transform: none; }
+  .app.is-open .sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.22s ease, visibility 0s;
+  }
 
   /* No room for a third column on a phone, so the rail slides over from the
      right the way the sidebar slides in from the left. */
@@ -3076,10 +3103,12 @@ details.block pre {
 }
 .attachment--failed .attachment__meta { color: var(--danger); }
 
+/* 26px, not 22. WCAG 2.5.8 asks for 24 as a floor and this is a phone-first
+   app; the glyph stays small, the hit area does not. */
 .attachment__remove {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -3523,6 +3552,34 @@ details.block pre {
   background: var(--line);
 }
 .compacted__fold { margin-top: 10px; }
+
+/* ─────────────────────────────────────────────────────────────
+   Why a reply stopped short.
+
+   Drawn into the transcript, not toasted, because the question it
+   answers — "was this answer cut off?" — is asked while scrolling
+   back, long after any toast is gone. Amber for the recoverable
+   ones (truncated: ask it to continue), red for the ones where the
+   provider refused outright. Both tokens already flip per theme.
+   ───────────────────────────────────────────────────────────── */
+.stopnote {
+  max-width: 780px;
+  margin: 10px auto 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.stopnote--refused,
+.stopnote--filtered {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.stopnote__line {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
 
 /* ─────────────────────────────────────────────────────────────
    Documents: the cards, and the viewer that opens them
@@ -4096,10 +4153,12 @@ details.block pre {
 }
 .queue__now:hover { border-color: var(--accent-dim); color: var(--accent); }
 
+/* 26px, not 22. WCAG 2.5.8 asks for 24 as a floor and this is a phone-first
+   app; the glyph stays small, the hit area does not. */
 .queue__drop {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -5044,8 +5103,8 @@ details.block pre {
 }
 .find__clear {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -5322,8 +5381,8 @@ details.block pre {
 .source__size { flex: none; color: var(--text-faint); font-size: 11.5px; }
 .source__drop {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -5579,4 +5638,30 @@ details.block pre {
 @media print {
   body.is-printing .doc .figure { break-inside: avoid; }
   body.is-printing .doc .figure img { max-height: none; }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Focus is never invisible.
+
+   The base rule near the top of this file gives every control a
+   `:focus-visible` ring, and seventeen later declarations of
+   `outline: none` — the API-key fields, the workspace editor, the
+   project composer, the find box, the inline message editor —
+   quietly took it back without offering a substitute. Where one
+   *was* offered it failed anyway: `.field input:focus` tints the
+   border to --accent-dim, which is 1.77:1 against white, well
+   under the 3:1 WCAG asks of a focus indicator.
+
+   So the guarantee lives here, last and `!important`. This is the
+   case that justifies it: a keyboard user who cannot see where
+   they are cannot use the application at all, and no individual
+   component's styling preference outranks that.
+
+   `:focus-visible` and not `:focus`, so a mouse click still
+   leaves no ring — the reason those rules were written in the
+   first place.
+   ───────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
 }

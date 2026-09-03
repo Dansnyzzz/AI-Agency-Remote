@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { t } from './i18n.js';
 import { escapeHtml, renderMarkdown, wireCopyButtons } from './markdown.js';
 import { openMenu } from './menu.js';
 import { toast } from './render.js';
@@ -28,7 +29,7 @@ window.addEventListener('message', async (event) => {
     (node) => node.contentWindow === event.source,
   );
   const reply = (body) => event.source?.postMessage({ __artifactStorageReply: true, id: message.id, ...body }, '*');
-  if (!frame) return reply({ error: 'This frame has no storage.' });
+  if (!frame) return reply({ error: t('viewer.noStorage') });
 
   const id = encodeURIComponent(frame.dataset.artifact);
   const key = message.key == null ? null : String(message.key);
@@ -318,8 +319,8 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
         '<div class="editor__bar">' +
         `<span class="editor__hint" id="viewer-editor-hint">${
           editable()
-            ? 'Markdown for documents, the file itself for code.'
-            : 'An earlier version, shown as it was. Restore it to edit.'
+            ? t('viewer.markdownNote')
+            : t('viewer.versionNote')
         }</span>` +
         (editable()
           ? '<button class="btn btn--primary editor__save" id="viewer-save" type="button">Save</button>'
@@ -350,7 +351,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
         return renderText(preview);
       case 'unreadable':
         return (
-          `<p class="viewer__empty">${escapeHtml(preview.message || 'This file could not be read.')}</p>` +
+          `<p class="viewer__empty">${escapeHtml(preview.message || t('viewer.unreadable'))}</p>` +
           '<p class="viewer__note">The file itself is intact — download it and open it in the application it came from.</p>'
         );
       default:
@@ -375,14 +376,14 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
 
     // A running page leads, because that is what somebody asked for when they
     // asked for a page. Its source is one press away.
-    if (runnable()) tabs.push(['run', eyeMark, 'Preview']);
+    if (runnable()) tabs.push(['run', eyeMark, t('viewer.tab.preview')]);
     // A running page has no second rendering worth showing: the page is the
     // preview and the source is the Code tab.
     else tabs.push(['preview', eyeMark, labelFor(preview.kind)]);
     // A PDF that has text worth reading, for a browser that will not frame one.
     if (preview.kind === 'pdf' && preview.text) tabs.push(['text', textMark, 'Text']);
     if (file.source != null && file.origin === 'generated') {
-      tabs.push(['source', codeMark, runnable() ? 'Code' : 'Source']);
+      tabs.push(['source', codeMark, runnable() ? t('viewer.tab.code') : t('viewer.tab.source')]);
     }
 
     tabsNode.hidden = tabs.length < 2;
@@ -397,7 +398,13 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
   }
 
   const labelFor = (kind) =>
-    kind === 'sheets' ? 'Sheets' : kind === 'slides' ? 'Slides' : kind === 'pdf' ? 'Pages' : 'Document';
+    kind === 'sheets'
+      ? t('viewer.kind.sheets')
+      : kind === 'slides'
+        ? t('viewer.kind.slides')
+        : kind === 'pdf'
+          ? t('viewer.kind.pages')
+          : t('viewer.kind.document');
 
   function renderSheetTabs() {
     const strip = $('viewer-sheets');
@@ -479,10 +486,18 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
    * saying so would be a button that fails. Then it is Download.
    */
   function primary() {
-    if (opener?.launchable && opener.app) return { label: `Open in ${opener.app}`, run: () => openOnMachine('open') };
-    if (opener?.launchable) return { label: 'Open', run: () => openOnMachine('open') };
-    if (tab === 'source' || current?.preview?.kind === 'text') return { label: 'Copy', run: copyRich };
-    return { label: 'Download', run: download };
+    if (opener?.launchable && opener.app) {
+      return {
+        id: 'openIn',
+        label: t('viewer.openIn').replace('{app}', opener.app),
+        run: () => openOnMachine('open'),
+      };
+    }
+    if (opener?.launchable) return { id: 'open', label: t('viewer.open'), run: () => openOnMachine('open') };
+    if (tab === 'source' || current?.preview?.kind === 'text') {
+      return { id: 'copy', label: t('viewer.copy'), run: copyRich };
+    }
+    return { id: 'download', label: t('viewer.download'), run: download };
   }
 
   function renderAction() {
@@ -623,7 +638,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     if (current.preview.kind === 'image') return copyImage();
 
     const { html, text } = copyPayload();
-    if (!text && !html) return toast('There is nothing in this one to copy.', 'error');
+    if (!text && !html) return toast(t('viewer.nothingToCopy'), 'error');
 
     try {
       if (html && window.ClipboardItem && navigator.clipboard?.write) {
@@ -633,16 +648,16 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
             'text/plain': new Blob([text], { type: 'text/plain' }),
           }),
         ]);
-        toast('Copied — paste into Word and it keeps its formatting.');
+        toast(t('viewer.copiedRich'));
         return;
       }
       await navigator.clipboard.writeText(text);
-      toast('Copied.');
+      toast(t('viewer.copied'));
     } catch {
       // Older browsers, and any refusal of the async clipboard. Selecting real
       // nodes and letting the browser do the copy carries the formatting too.
-      if (legacyCopy(html, text)) toast('Copied — paste into Word and it keeps its formatting.');
-      else toast('The browser would not allow copying. Press Ctrl/⌘+C instead.', 'error');
+      if (legacyCopy(html, text)) toast(t('viewer.copiedRich'));
+      else toast(t('viewer.copyRefused'), 'error');
     }
   }
 
@@ -653,9 +668,9 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
       // repainted through a canvas rather than refused.
       const png = blob.type === 'image/png' ? blob : await toPng(blob);
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
-      toast('Picture copied.');
+      toast(t('viewer.pictureCopied'));
     } catch {
-      toast('The browser would not allow copying the picture. Download it instead.', 'error');
+      toast(t('viewer.pictureCopyRefused'), 'error');
     }
   }
 
@@ -764,31 +779,38 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
 
     const items = [];
     // Whatever the button is not already doing.
-    const first = primary().label;
-    if (opener?.launchable && first !== 'Open' && !first.startsWith('Open in')) {
-      items.push({ label: `Open in ${opener.app || 'the default app'}`, icon: '↗', run: () => openOnMachine('open') });
+    // By id, not by label — see `primary()`.
+    const first = primary().id;
+    if (opener?.launchable && first !== 'open' && first !== 'openIn') {
+      items.push({
+        label: opener.app
+          ? t('viewer.openIn').replace('{app}', opener.app)
+          : t('viewer.openInDefault'),
+        icon: '↗',
+        run: () => openOnMachine('open'),
+      });
     }
-    if (opener) items.push({ label: 'Show in folder', icon: '🗀', run: () => openOnMachine('folder') });
-    if (first !== 'Download') items.push({ label: 'Download', icon: '⤓', run: download });
-    if (first !== 'Copy') {
+    if (opener) items.push({ label: t('viewer.showInFolder'), icon: '🗀', run: () => openOnMachine('folder') });
+    if (first !== 'download') items.push({ label: t('viewer.download'), icon: '⤓', run: download });
+    if (first !== 'copy') {
       items.push({
         // Named for what it carries: the formatting is the point, and 'Copy
         // text' promised the opposite of what it now does.
-        label: current.preview.kind === 'image' ? 'Copy picture' : 'Copy with formatting',
+        label: current.preview.kind === 'image' ? t('viewer.copyPicture') : t('viewer.copyFormatted'),
         icon: '⧉',
         run: copyRich,
       });
     }
     // Nothing worth printing in a frame we do not control, or in a picture.
     if (current.preview.kind !== 'pdf' && current.preview.kind !== 'image') {
-      items.push({ label: 'Print — or save as PDF', icon: '⎙', run: printIt });
+      items.push({ label: t('viewer.print'), icon: '⎙', run: printIt });
     }
     if (!opener) {
       items.push(null, {
-        label: 'No computer connected',
+        label: t('viewer.noComputer'),
         icon: '·',
         run: () =>
-          toast('Pair a computer to open files in Word, Excel or a folder. The header chip does it.', 'error'),
+          toast(t('viewer.noComputerHint'), 'error'),
       });
     }
     openMenu(moreNode, items);
@@ -850,7 +872,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     const box = document.getElementById('viewer-editor');
     const button = event.target.closest('#viewer-save');
     button.disabled = true;
-    button.textContent = 'Saving…';
+    button.textContent = t('viewer.saving');
 
     try {
       const { file } = await api.updateFile(current.file.id, box.value);
@@ -890,7 +912,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     if (on) document.body.appendChild(pane);
     else home.appendChild(pane);
     $('viewer-expand').textContent = on ? '⤡' : '⤢';
-    $('viewer-expand').title = on ? 'Back to the panel' : 'Full size';
+    $('viewer-expand').title = on ? t('viewer.backToPanel') : t('viewer.fullSize');
   }
 
   $('viewer-expand').addEventListener('click', () => expand(!expanded));
@@ -980,7 +1002,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
       const id = typeof file === 'string' ? file : file?.id;
       if (!id) return;
 
-      titleNode.textContent = (typeof file === 'object' && file.name) || 'Opening…';
+      titleNode.textContent = (typeof file === 'object' && file.name) || t('viewer.opening');
       kindNode.textContent = '';
       tabsNode.hidden = true;
       versionsNode.hidden = true;
@@ -993,7 +1015,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
         await load(id);
       } catch (err) {
         close();
-        toast(err.message || 'That file could not be opened.', 'error');
+        toast(err.message || t('viewer.couldNotOpen'), 'error');
       }
     },
 

@@ -128,7 +128,19 @@ export const api = {
   users: () => request('GET', '/api/admin/users'),
   deleteUser: (id) => request('DELETE', `/api/admin/users/${id}`),
 
-  bootstrap: () => request('GET', '/api/bootstrap'),
+  /**
+   * The zone rides along on the first call of every session.
+   *
+   * The scheduling routes have always sent it per request, but the *tools* —
+   * `schedule_task`, `workflow_write` — run inside an agent turn where there is
+   * no request to read it from, and were falling back to the server's clock.
+   * Recorded once here, it is available to every path that needs to know what
+   * "five in the afternoon" means.
+   */
+  bootstrap: () => {
+    const zone = localZone();
+    return request('GET', zone ? `/api/bootstrap?tz=${encodeURIComponent(zone)}` : '/api/bootstrap');
+  },
   savePrefs: (patch) => request('PUT', '/api/prefs', patch),
   saveKey: (provider, apiKey) => request('PUT', `/api/providers/${provider}/key`, { apiKey }),
   /** A spare, behind the ones already saved — tried in order when one is refused. */

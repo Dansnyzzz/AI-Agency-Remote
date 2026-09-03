@@ -210,7 +210,7 @@ section('schema.sql and SCHEMA_VERSION move together');
   const fingerprint = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
 
   /** Update BOTH of these, together, whenever schema.sql changes. */
-  const STAMPED = { version: 15, fingerprint: '4ba4df3dc2aa9292' };
+  const STAMPED = { version: 16, fingerprint: 'c8405a4b08beee0a' };
 
   check(
     'the recorded version matches the code',

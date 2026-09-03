@@ -1,4 +1,47 @@
 import OpenAI from 'openai';
+import { normaliseStop } from './stop.js';
+
+/**
+ * What one usage block from a Chat-Completions-shaped API is worth.
+ *
+ * Three things were being dropped on the floor here, and all three cost money
+ * or credibility:
+ *
+ * **Cached prompt tokens.** OpenAI reports them at
+ * `prompt_tokens_details.cached_tokens` and OpenRouter at the same path, and
+ * they are *included in* `prompt_tokens` rather than sitting beside it. Reading
+ * only the total means `estimateCost` charges the full input rate for tokens
+ * that were billed at a tenth of it. The Anthropic adapter was fixed for
+ * exactly this; the other two providers were left overstating every cached turn.
+ *
+ * **Cache writes.** OpenRouter reports `cache_write_tokens` — billed at a
+ * premium, not a discount — so netting it off with the reads would be wrong in
+ * the other direction. It is carried separately for the same reason.
+ *
+ * **The real price.** OpenRouter puts the actual billed cost on `usage.cost`,
+ * in dollars, on the last streamed chunk, with no request parameter needed.
+ * That is not an estimate derived from a price table that may be stale or
+ * absent — it is what the account was charged. Most of the library's models
+ * carry `price: null`, so for them this is the difference between a real figure
+ * and no figure at all.
+ */
+function readUsage(raw) {
+  if (!raw) return null;
+  const promptDetails = raw.prompt_tokens_details || {};
+  const cost = Number(raw.cost);
+  return {
+    input: raw.prompt_tokens || 0,
+    output: raw.completion_tokens || 0,
+    cacheRead: Number(promptDetails.cached_tokens) || 0,
+    cacheWrite: Number(promptDetails.cache_write_tokens) || 0,
+    // Reasoning tokens are already inside `completion_tokens`; kept only so the
+    // interface can say how much of an answer was thinking rather than prose.
+    reasoning: Number(raw.completion_tokens_details?.reasoning_tokens) || 0,
+    // Only when the provider actually stated one. A zero here would be read as
+    // "this turn was free", which is a different claim from "nobody told us".
+    ...(Number.isFinite(cost) && cost > 0 ? { costUsd: cost } : {}),
+  };
+}
 
 /**
  * Shared adapter for every OpenAI-Chat-Completions-shaped API: OpenAI itself
@@ -124,9 +167,7 @@ export async function* streamOpenAICompatible({
   let stopReason = null;
 
   for await (const chunk of stream) {
-    if (chunk.usage) {
-      usage = { input: chunk.usage.prompt_tokens || 0, output: chunk.usage.completion_tokens || 0 };
-    }
+    if (chunk.usage) usage = readUsage(chunk.usage);
     const choice = chunk.choices?.[0];
     if (!choice) continue;
     if (choice.finish_reason) stopReason = choice.finish_reason;
@@ -158,8 +199,16 @@ export async function* streamOpenAICompatible({
     return { id: slot.id || `call_${slot.name}`, name: slot.name, input };
   });
 
-  yield { type: 'done', stopReason, toolCalls, usage: usage || { input: 0, output: 0 } };
+  yield {
+    type: 'done',
+    stopReason,
+    // `length` and `content_filter` both end a reply that is not finished, and
+    // both used to arrive here looking exactly like `stop`.
+    stop: normaliseStop(stopReason),
+    toolCalls,
+    usage: usage || { input: 0, output: 0 },
+  };
 }
 
 /** Exposed so the suite can assert what the OpenAI wire format is handed. */
-export const __testing = { toMessages };
+export const __testing = { toMessages, readUsage };
