@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { t } from './i18n.js';
 import { toast } from './render.js';
 
 /**
@@ -81,7 +82,7 @@ export function createScreen() {
     // blanks for a frame.
     if (previous) setTimeout(() => URL.revokeObjectURL(previous), 200);
 
-    title.textContent = meta?.title || 'Screen';
+    title.textContent = meta?.title || t('screen.title');
     url.textContent = meta?.url || '';
 
     // Which thing you are actually looking at. The sandbox is the assistant's
@@ -90,8 +91,8 @@ export function createScreen() {
     const desktop = meta?.source === 'desktop';
     source.textContent = desktop ? 'desktop' : 'sandbox';
     source.title = desktop
-      ? 'The whole screen of the machine running the worker.'
-      : "The assistant's own browser window — separate from the browser you are using.";
+      ? t('screen.wholeMachine')
+      : t('screen.sandboxNote');
     // Only the sandbox is ours to close.
     closeButton.hidden = desktop;
     nav.hidden = desktop;
@@ -185,7 +186,7 @@ export function createScreen() {
     closeButton.disabled = true;
     try {
       const { message } = await api.closeScreen();
-      toast(message || 'Sandbox closed.');
+      toast(message || t('screen.sandboxClosed'));
       panel.hidden = true;
     } catch (err) {
       toast(err.message, 'error');
@@ -213,7 +214,7 @@ export function createScreen() {
     drive.setAttribute('aria-pressed', String(on));
     drive.classList.toggle('is-active', on);
     panel.classList.toggle('is-driving', on);
-    drive.title = on ? 'Stop controlling the page' : 'Take control — click and type into the page yourself';
+    drive.title = on ? t('screen.driveOn') : t('screen.driveOff');
     if (on) img.focus();
   };
   drive.addEventListener('click', () => setDriving(!driving));

@@ -130,9 +130,9 @@ export function createWorkspace() {
             <span class="entry__when">${escapeHtml(ago(entry.modified))}</span>
           </button>
           <button class="entry__act" type="button" data-rename="${escapeHtml(path)}"
-                  title="Rename or move" aria-label="Rename ${escapeHtml(entry.name)}">↳</button>
+                  title="${escapeHtml(t('ws.renameTitle'))}" aria-label="${escapeHtml(t('ws.renameAria').replace('{name}', entry.name))}">↳</button>
           <button class="entry__drop" type="button" data-delete="${escapeHtml(path)}"
-                  data-dir="${entry.dir ? '1' : ''}" aria-label="Delete ${escapeHtml(entry.name)}">✕</button>
+                  data-dir="${entry.dir ? '1' : ''}" aria-label="${escapeHtml(t('ws.deleteAria').replace('{name}', entry.name))}">✕</button>
         </div>`);
     }
 
