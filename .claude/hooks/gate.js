@@ -191,7 +191,26 @@ export function status() {
 
 /* ---------------------------------------------------------------- CLI ----- */
 
-/** The gate itself, in the order that fails cheapest first. */
+/**
+ * The gate itself, in the order that fails cheapest first.
+ *
+ * `full` has to match what CI blocks a merge on, or the stamp says something CI
+ * will later contradict. It did not: it ran lint, the suites and the hook tests,
+ * and skipped type-checking entirely — so a tree with seven type errors CI would
+ * reject was stamped `verified: true`, which is the one thing this file exists to
+ * make impossible. `npm run check` had always included it; the gate had not.
+ *
+ * `eval` is here for the same reason and costs seconds: it is deterministic, needs
+ * no key, and asserts that the agent is still *able* to choose well — that the
+ * right tool is on offer, that the rule telling it to stop at a sign-in page is
+ * still in the prompt.
+ *
+ * Two of CI's steps are deliberately still out: `test:ui` and `test:sandbox` both
+ * need a real browser and skip themselves without one, and a step that silently
+ * passes by not running is worse here than a step that is honestly absent. CI
+ * installs Chromium explicitly and runs them there. That gap is the reason the
+ * green stamp says `full` rather than `everything`.
+ */
 const STEPS = {
   fast: [
     ['run', 'lint'],
@@ -199,8 +218,10 @@ const STEPS = {
   ],
   full: [
     ['run', 'lint'],
-    ['test'],
     ['run', 'test:hooks'],
+    ['run', 'eval'],
+    ['run', 'typecheck'],
+    ['test'],
   ],
 };
 

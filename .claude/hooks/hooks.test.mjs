@@ -445,6 +445,30 @@ try {
   /* a leftover temp directory is not a test failure */
 }
 
+/* ── the gate must cover what CI blocks a merge on ─────────────── */
+
+{
+  // The gate stamped a tree green while typecheck was red, because STEPS.full
+  // never ran typecheck. That is the exact failure this directory exists to
+  // prevent: a stamp saying "verified" about a tree CI will reject.
+  //
+  // Pinned by reading the file rather than by running the gate — a real run is
+  // minutes long, and this check has to be cheap enough to stay in the suite.
+  const gateSource = fs.readFileSync(path.join(here, 'gate.js'), 'utf8');
+  const full = /full: \[([\s\S]*?)\],\r?\n\};/.exec(gateSource)?.[1] || '';
+
+  is(/'lint'/.test(full), 'the full gate runs lint');
+  is(/'typecheck'/.test(full), 'the full gate runs typecheck — the step it used to skip', full);
+  is(/'eval'/.test(full), 'the full gate runs the agent eval');
+  is(/'test:hooks'/.test(full), 'the full gate runs the hook suite');
+  is(/\['test'\]/.test(full), 'the full gate runs the suites');
+
+  // The fast gate is allowed to be small, but it must not quietly grow into the
+  // full one — verify-stop.js depends on the two meaning different things.
+  const fast = /fast: \[([\s\S]*?)\],/.exec(gateSource)?.[1] || '';
+  is(!/'typecheck'/.test(fast), 'and the fast gate stays fast');
+}
+
 console.log(
   failed === 0
     ? `\n[32mAll ${passed} hook checks passed.[0m\n`
