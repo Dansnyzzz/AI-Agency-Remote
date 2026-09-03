@@ -199,10 +199,40 @@ function passages(file, size = PASSAGE_CHARS) {
  * It only runs at all when the shelf does not fit; below that everything is
  * sent and there is nothing to rank.
  */
-function rank(all, question) {
-  const wanted = [...new Set(terms(question))];
-  if (!wanted.length) return all.map((p) => ({ ...p, score: 0 }));
+/**
+ * The half of the ranking that does not depend on the question.
+ *
+ * Cutting the shelf into passages and counting the words in each of them is a
+ * function of the documents alone, and it was being redone from scratch on
+ * every turn of every project conversation. A shelf can be 100 files of up to
+ * 400,000 characters, so that is tens of thousands of passages and one Map per
+ * passage, rebuilt to answer "what changed?" when nothing had.
+ *
+ * Keyed by the passage size and by every file's id and length, so a file that
+ * is edited, added or removed changes the key and the index is rebuilt. Length
+ * is a weak fingerprint on its own — an edit that preserves length would be
+ * missed — which is why `readProjectFiles` returning fresh rows is what this
+ * leans on, and why the cache is small and short-lived rather than a store.
+ *
+ * Bounded at eight shelves, oldest evicted. On serverless a cold invocation
+ * starts empty and pays the old cost once, so this is a saving on a warm
+ * instance and on any local run, not a guarantee.
+ */
+const INDEX_CACHE = new Map();
+const INDEX_CACHE_MAX = 8;
 
+function shelfIndex(files, size) {
+  const key = `${size}|${files.map((f) => `${f.id}:${f.text.length}`).join(',')}`;
+
+  const hit = INDEX_CACHE.get(key);
+  if (hit) {
+    // Re-insert so the map's own insertion order is the eviction order.
+    INDEX_CACHE.delete(key);
+    INDEX_CACHE.set(key, hit);
+    return hit;
+  }
+
+  const all = files.flatMap((f) => passages(f, size));
   const df = new Map();
   const bags = all.map((p) => {
     const bag = new Map();
@@ -210,6 +240,21 @@ function rank(all, question) {
     for (const w of new Set(bag.keys())) df.set(w, (df.get(w) || 0) + 1);
     return bag;
   });
+
+  const entry = { all, bags, df };
+  INDEX_CACHE.set(key, entry);
+  while (INDEX_CACHE.size > INDEX_CACHE_MAX) {
+    INDEX_CACHE.delete(INDEX_CACHE.keys().next().value);
+  }
+  return entry;
+}
+
+/** Exported for the suite: a shelf that has changed must not be answered from cache. */
+export const __testing = { INDEX_CACHE, shelfIndex };
+
+function rank({ all, bags, df }, question) {
+  const wanted = [...new Set(terms(question))];
+  if (!wanted.length) return all.map((p) => ({ ...p, score: 0 }));
 
   return all
     .map((p, i) => {
@@ -248,8 +293,7 @@ export function selectSources(files, question, budget = CONTEXT_CHARS) {
   }
 
   const size = passageSize(budget);
-  const all = files.flatMap((f) => passages(f, size));
-  const ordered = rank(all, question);
+  const ordered = rank(shelfIndex(files, size), question);
 
   /**
    * Only passages that actually match the question compete for the budget.
