@@ -273,6 +273,59 @@ export const vi = {
   'count.conversationsOne': '1 hội thoại',
   'pages.tasks.localOnly':
     'Việc theo giờ chỉ chạy khi app này đang mở. Khi triển khai lên server thì chúng chạy mà không cần app.',
+  /* ── chuỗi việc ──────────────────────────────────────────────── */
+  'wf.title': 'Chuỗi việc',
+  'wf.new': 'Chuỗi việc mới',
+  'wf.order.recent': 'Thêm gần đây',
+  'wf.describe': 'Mô tả cho trợ lý',
+  'wf.describeHint':
+    'Nói các bước theo thứ tự — "mỗi thứ hai: lấy số liệu, vẽ biểu đồ, gửi email cho nhóm".',
+  'wf.manual': 'Tự thiết lập',
+  'wf.none': 'Chưa có chuỗi việc nào.',
+  'wf.noneHint':
+    'Dùng khi một công việc có nhiều chặng bắt buộc theo thứ tự — và khi lỡ lặp lại một chặng thì sẽ thành chuyện. Nếu chỉ có một chỉ dẫn thì đó là việc chạy theo giờ, không phải chuỗi việc.',
+  'wf.pause': 'Tạm dừng',
+  'wf.resume': 'Chạy lại',
+  'wf.remove': 'Xoá',
+  'wf.removeConfirm': 'Xoá nhé?',
+  'wf.runNow': 'Chạy ngay',
+  'wf.running': 'Đang chạy…',
+  'wf.finished': 'Xong.',
+  'wf.startedBackground': 'Đã bắt đầu — nó sẽ chạy tiếp ở nền.',
+  'wf.openResult': 'Mở kết quả',
+  'wf.edit': 'Sửa',
+  'wf.paused': 'đang tạm dừng',
+  'wf.lastRun': 'lần chạy trước {status}',
+  'wf.neverRun': 'chưa chạy lần nào',
+  'wf.formEdit': 'Sửa chuỗi việc',
+  'wf.formCreate': 'Tạo chuỗi việc',
+  'wf.needStep': 'Cần ít nhất một bước — mỗi dòng một chỉ dẫn.',
+  'wf.saved': 'Đã lưu.',
+  'wf.created': 'Đã tạo.',
+
+  /* ── trình duyệt model ───────────────────────────────────────── */
+  'models.allVendors': 'Tất cả nhà cung cấp',
+  'models.empty': 'Thư viện đang trống — bấm Làm mới để tải về từ OpenRouter.',
+  'models.noMatch': 'Không có gì khớp. Thử ít từ hơn, hoặc thêm model bằng id trong Cài đặt → Models.',
+  'models.builtIn': 'Có sẵn — dùng key nhà cung cấp của bạn',
+  'models.onYourKey': '{provider} — trên key của bạn',
+  'models.refreshing': 'Đang làm mới…',
+  'models.refreshNow': 'Làm mới ngay',
+  'models.automatic': 'Tự động',
+  'models.autoName': 'Auto — model miễn phí tốt nhất',
+  'models.autoMeta':
+    'Chọn model miễn phí mạnh nhất mà bạn chạy được ngay lúc này. Hỗ trợ ảnh là một công tắc trong Cài đặt → Hành vi.',
+
+  /* ── danh sách tệp và trình sửa trong thư mục làm việc ───────── */
+  'ws.deleteConfirm': 'Xoá nhé?',
+  'ws.renamePrompt': 'Đổi tên hoặc di chuyển — sửa đường dẫn:',
+  'ws.moved': 'Đã chuyển.',
+  'ws.deleted': 'Đã xoá.',
+  'ws.leaveUnsaved': 'Thoát mà không lưu?',
+  'ws.saving': 'Đang lưu…',
+  'ws.saved': 'Đã lưu.',
+  'ws.newFilePrompt': 'Tệp mới — đặt tên, kèm đường dẫn nếu muốn để trong thư mục:',
+
 
 
 

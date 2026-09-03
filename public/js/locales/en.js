@@ -214,6 +214,59 @@ export const en = {
   'count.conversationsOne': '1 conversation',
   'pages.tasks.localOnly':
     'Scheduled tasks run while this app is running. On a deployment they run without it.',
+  /* ── workflows ───────────────────────────────────────────────── */
+  'wf.title': 'Workflows',
+  'wf.new': 'New workflow',
+  'wf.order.recent': 'Recently added',
+  'wf.describe': 'Describe it to the assistant',
+  'wf.describeHint':
+    'Say the steps in order — "every Monday: pull the numbers, chart them, email the team".',
+  'wf.manual': 'Set up manually',
+  'wf.none': 'No workflows yet.',
+  'wf.noneHint':
+    'Use one when a job has stages that must happen in order — and when repeating a stage by accident would be a problem. A single instruction is a scheduled task instead.',
+  'wf.pause': 'Pause',
+  'wf.resume': 'Resume',
+  'wf.remove': 'Remove',
+  'wf.removeConfirm': 'Remove?',
+  'wf.runNow': 'Run now',
+  'wf.running': 'Running…',
+  'wf.finished': 'Finished.',
+  'wf.startedBackground': 'Started — it will carry on in the background.',
+  'wf.openResult': 'Open result',
+  'wf.edit': 'Edit',
+  'wf.paused': 'paused',
+  'wf.lastRun': 'last run {status}',
+  'wf.neverRun': 'never run',
+  'wf.formEdit': 'Edit workflow',
+  'wf.formCreate': 'Create workflow',
+  'wf.needStep': 'Give it at least one step — one instruction per line.',
+  'wf.saved': 'Saved.',
+  'wf.created': 'Created.',
+
+  /* ── the model browser ───────────────────────────────────────── */
+  'models.allVendors': 'All vendors',
+  'models.empty': 'Library is empty — press Refresh to pull it from OpenRouter.',
+  'models.noMatch': 'Nothing matched. Try fewer words, or add the model by id in Settings → Models.',
+  'models.builtIn': 'Built in — your own provider keys',
+  'models.onYourKey': '{provider} — on your own key',
+  'models.refreshing': 'Refreshing…',
+  'models.refreshNow': 'Refresh now',
+  'models.automatic': 'Automatic',
+  'models.autoName': 'Auto — best free model',
+  'models.autoMeta':
+    'Picks the strongest free model you can run right now. Image support is a toggle in Settings → Behaviour.',
+
+  /* ── the workspace file list and editor ──────────────────────── */
+  'ws.deleteConfirm': 'Delete?',
+  'ws.renamePrompt': 'Rename or move — edit the path:',
+  'ws.moved': 'Moved.',
+  'ws.deleted': 'Deleted.',
+  'ws.leaveUnsaved': 'Leave without saving?',
+  'ws.saving': 'Saving…',
+  'ws.saved': 'Saved.',
+  'ws.newFilePrompt': 'New file — name it, with a path if you want a folder:',
+
 
 
 
