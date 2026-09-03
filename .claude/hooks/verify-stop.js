@@ -120,7 +120,7 @@ const more = names.length > 6 ? ` and ${names.length - 6} more` : '';
 const reason = names.length
   ? `Unproven: ${shown}${more}`
   : state.fastOnly
-    ? 'The last stamp was the fast gate — lint and hooks only, not the 24 suites.'
+    ? 'The last stamp was the fast gate — lint and hooks only, not the full suite.'
     : 'The last green run no longer matches this tree — there has been a commit or an edit since.';
 
 if (claimsCompletion(payload.last_assistant_message)) {
@@ -133,7 +133,7 @@ if (claimsCompletion(payload.last_assistant_message)) {
       `on disk now.\n\n` +
       `${reason}\n` +
       (names.length && state.fastOnly
-        ? `The last stamp was the fast gate — lint and hooks only, not the 24 suites.\n`
+        ? `The last stamp was the fast gate — lint and hooks only, not the full suite.\n`
         : '') +
       `\nRun \`npm run gate\` and let it finish, then say what it actually reported ` +
       `(CLAUDE.md §5, §10).\nIf the claim was about something the gate does not ` +
