@@ -152,19 +152,29 @@ export function createScreen() {
     } catch {
       // A missed frame is not worth reporting; the next poll catches up.
     }
+    // Re-checked after the await, not only before it. `stop()` can have run
+    // while the request was in flight, and re-arming here after `clearTimeout`
+    // had already fired left a poll chain nothing owned — a later `start()` then
+    // began a second one, both writing the same `timer`, so `stop()` could only
+    // ever cancel one of them and the poll rate silently doubled.
+    if (stopped) return;
     const fresh = Date.now() - lastFrameAt < STALE_MS;
     timer = setTimeout(pollTick, changed || fresh ? POLL_ACTIVE_MS : POLL_IDLE_MS);
   }
 
   // Nothing has arrived for a while: say so rather than leaving a stale frame
   // looking live.
-  const freshness = setInterval(() => {
+  // Only while something is actually streaming. This ran once a second for the
+  // life of the page whether or not the panel had ever been opened — and
+  // `unref` is a Node idiom: a browser `setInterval` returns a number, so the
+  // call that looked like it was disarming this did nothing at all.
+  setInterval(() => {
+    if (stopped) return;
     if (Date.now() - lastFrameAt > STALE_MS) {
       live.classList.remove('is-live');
       live.dataset.fps = '0';
     }
   }, 1000);
-  freshness.unref?.();
 
   document.getElementById('screen-hide').addEventListener('click', () => {
     panel.classList.toggle('is-collapsed');
@@ -391,6 +401,8 @@ export function createScreen() {
    * changed tabs is not a small thing to do by accident.
    */
   let everStarted = false;
+  /** Whether the panel is open because a tool opened it, rather than a person. */
+  let wokenByTool = false;
 
   // Streaming to a hidden tab is pure waste — and it would keep telling the
   // worker that somebody is watching when nobody is.
@@ -420,7 +432,26 @@ export function createScreen() {
     wake() {
       panel.hidden = false;
       panel.classList.remove('is-collapsed');
+      wokenByTool = true;
       start();
+    },
+    /**
+     * The run has finished; stop capturing unless a person is still using it.
+     *
+     * Nothing used to stop this. `wake()` was called the moment the assistant
+     * touched the browser or the desktop, and the stream then stayed open for as
+     * long as the tab was foregrounded — so the worker kept capturing and
+     * shipping frames of the user's screen long after the work was over. That is
+     * bandwidth, and on the desktop tools it is a privacy surprise.
+     *
+     * Only a panel this opened by itself is closed by itself: one the user
+     * opened, or is driving, is theirs. The last frame stays on screen — the
+     * panel is not hidden, only the capture ends.
+     */
+    restIfIdle() {
+      if (driving || !wokenByTool) return;
+      wokenByTool = false;
+      stop();
     },
   };
 }

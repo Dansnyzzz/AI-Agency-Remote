@@ -1,6 +1,18 @@
 import { renderMarkdown, escapeHtml } from './markdown.js';
 import { t } from './i18n.js';
 
+/**
+ * One repaint per frame, and a real fallback when there are no frames.
+ *
+ * A backgrounded tab does not run `requestAnimationFrame` at all, so a reply
+ * streaming into a tab the user has switched away from would never paint and
+ * would arrive all at once on return. `setTimeout` still fires there (throttled,
+ * which is fine — nobody is looking), so the streamed text keeps accumulating
+ * into the DOM either way.
+ */
+const raf = (fn) =>
+  (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16))(fn);
+
 const el = (tag, className, html) => {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -456,6 +468,8 @@ export function assistantMessage() {
   let thinkingBody = null;
   let prose = null;
   let rawText = '';
+  /** Whether a repaint is already scheduled for the next frame — see appendText. */
+  let paintQueued = false;
 
   /**
    * A run of steps in one family, drawn as a single card.
@@ -613,6 +627,28 @@ export function assistantMessage() {
       }
     },
 
+    /**
+     * Add to the reply, and repaint at most once a frame.
+     *
+     * This used to re-parse and re-insert the *whole* reply on every delta.
+     * `renderMarkdown` is a line-scanning parse with a dozen regex passes over
+     * the accumulated text, so running it per token is O(n²) in reply length: a
+     * 20,000-character answer arriving four characters at a time is about 5,000
+     * parses averaging 10,000 characters, each followed by throwing away and
+     * rebuilding the entire prose subtree. It was the most expensive thing in
+     * the client, on its hottest path.
+     *
+     * Two consequences were worse than the jank, because they are things a
+     * person notices without knowing why: **you could not select text in a
+     * streaming reply** — the selection was destroyed every token — and any
+     * `<details>` a reply had opened snapped shut continuously.
+     *
+     * Coalescing to one paint per animation frame collapses ~16ms of tokens
+     * into a single parse, which on a fast stream is a 10–50× cut with no
+     * change to what is finally shown. `flushText` exists so the end of a turn
+     * is never left waiting on a frame that may not come — a backgrounded tab
+     * does not run rAF at all.
+     */
     appendText(delta) {
       rawText += delta;
       if (!prose) {
@@ -623,7 +659,22 @@ export function assistantMessage() {
         prose = el('div', 'prose');
         body.append(prose);
       }
-      prose.innerHTML = renderMarkdown(rawText);
+      if (paintQueued) return;
+      paintQueued = true;
+      raf(() => {
+        paintQueued = false;
+        // `prose` can have been torn down by `resetText` between scheduling and
+        // painting — a provider restarting the reply on another key does exactly
+        // that — and painting into the removed node would resurrect the draft
+        // this whole mechanism exists to discard.
+        if (prose) prose.innerHTML = renderMarkdown(rawText);
+      });
+    },
+
+    /** Paint whatever is pending right now, without waiting for a frame. */
+    flushText() {
+      paintQueued = false;
+      if (prose) prose.innerHTML = renderMarkdown(rawText);
     },
 
     /**
@@ -636,6 +687,11 @@ export function assistantMessage() {
      */
     resetText() {
       rawText = '';
+      // Cancel any frame still owed. Without this the queued paint would run
+      // after the node was removed — harmless now that `appendText` re-checks
+      // `prose`, but leaving a scheduled write to a discarded draft in flight is
+      // not a thing to rely on being harmless.
+      paintQueued = false;
       if (prose) {
         prose.remove();
         prose = null;
@@ -766,6 +822,9 @@ export function assistantMessage() {
      * drawn as though it were working.
      */
     finish() {
+      // The last tokens of a reply may still be owed a frame. A turn that ends
+      // must show all of what it said, not all but the final sentence.
+      if (paintQueued) api.flushText();
       closeGroup();
     },
   };

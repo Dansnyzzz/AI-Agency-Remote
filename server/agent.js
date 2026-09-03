@@ -734,8 +734,9 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     } else {
       toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate });
     }
-    await store.appendMessage(userId, chatId, toolMessage);
-    messages.push(toolMessage);
+    // The stored copy, which carries the `seq` `absorbNewMessages` reads as its
+    // high-water mark.
+    messages.push(await store.appendMessage(userId, chatId, toolMessage));
   }
 
   /**
@@ -747,8 +748,23 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
    * waiting for the run to finish.
    */
   async function absorbNewMessages() {
+    /**
+     * Ask only for what is newer than the highest turn already in hand.
+     *
+     * This used to re-read the whole conversation — every message body, tool
+     * result included — once per step, purely to discover whether one new user
+     * message had arrived, and then throw all but that away. On a thirty-step
+     * turn that moved the entire transcript thirty times.
+     *
+     * Messages appended in this process carry a `seq` from `appendMessage`, so
+     * the high-water mark is simply the largest one seen. A message with no
+     * `seq` cannot move the mark (`|| 0`), and a mark of 0 asks for everything —
+     * which is the correct answer for a conversation nothing has been stored in
+     * yet.
+     */
     const known = new Set(messages.map((m) => m.id));
-    const fresh = await store.listMessages(userId, chatId);
+    const highWater = messages.reduce((n, m) => Math.max(n, Number(m.seq) || 0), 0);
+    const fresh = await store.messagesSince(userId, chatId, highWater);
     const added = fresh.filter((m) => m.role === 'user' && !known.has(m.id));
     if (!added.length) return false;
 
@@ -924,7 +940,9 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     }
     assistant.model = entry.id;
 
-    await store.appendMessage(userId, chatId, assistant);
+    // `seq` comes back on the stored copy; see `absorbNewMessages`.
+    const stored = await store.appendMessage(userId, chatId, assistant);
+    assistant.seq = stored.seq;
 
     /**
      * Never fatal, but never silent either.
@@ -987,8 +1005,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     }
 
     const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate });
-    await store.appendMessage(userId, chatId, toolMessage);
-    messages.push(toolMessage);
+    messages.push(await store.appendMessage(userId, chatId, toolMessage));
   }
 
   emit('status', {

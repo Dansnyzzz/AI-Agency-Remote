@@ -507,8 +507,21 @@ async function start() {
 
   await refreshChats();
 
-  // Keep the worker indicator honest without a websocket.
-  setInterval(refreshWorker, 20_000);
+  /**
+   * Keep the worker indicator honest without a websocket.
+   *
+   * Skipped while the tab is hidden. This fired every twenty seconds for the
+   * life of every open tab, foreground or not, to decide the colour of one dot —
+   * so a browser left with five background tabs made a request every four
+   * seconds to tell nobody anything. Refreshed immediately on return, so the
+   * dot is correct by the time it can be looked at.
+   */
+  setInterval(() => {
+    if (!document.hidden) refreshWorker();
+  }, 20_000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshWorker();
+  });
 
   /**
    * Nudge overdue scheduled tasks along, on a deployment only.
@@ -1689,6 +1702,23 @@ async function mirrorRun() {
         turn.finishThinking();
         turn.appendText(data?.delta || '');
         maybeScroll();
+      } else if (event === 'message') {
+        /**
+         * The turn was persisted, so the next prose is a new block.
+         *
+         * Without this `state.sealed` never became true in a following tab and
+         * `nextBlock()` never opened a fresh one — so every step of a
+         * multi-step turn concatenated into a single markdown blob, which then
+         * corrected itself minutes later on the reload below. Cheap to handle,
+         * and the difference between watching a run and watching a smear.
+         */
+        state.turn?.finishThinking();
+        state.sealed = true;
+      } else if (event === 'retry') {
+        // The provider is restarting this reply on another key: what was shown
+        // is being replaced, not continued. A follower that kept the abandoned
+        // half would show a duplicated paragraph with no way to tell.
+        nextBlock().resetText();
       } else if (event === 'status' && data?.phase === 'thinking') {
         setStatus(t('mirror.watching'));
       } else if (event === 'done' || event === 'error') {
@@ -1761,6 +1791,9 @@ async function stream(decision) {
     // See the note on `lastStopNote`: the dedupe is per run, not for the life
     // of the conversation. A second truncated turn has to be able to say so.
     state.lastStopNote = null;
+    // The assistant has stopped touching the screen, so stop shipping frames of
+    // it. Leaves a panel the user opened, or is driving, alone.
+    screenPanel.restIfIdle();
     await refreshChats();
 
     // Whatever was typed while this was running goes now — including after a
@@ -4319,8 +4352,31 @@ function scrollToEnd() {
   pinned = true;
   requestAnimationFrame(() => thread.scrollTo({ top: thread.scrollHeight }));
 }
+/**
+ * Keep the transcript pinned to the bottom, at most once a frame.
+ *
+ * Called from six stream handlers, so it ran on every `thinking` and every
+ * `text` delta — and reading `scrollHeight` immediately after writing markup
+ * forces a synchronous reflow of the whole transcript. Write, read, write, read,
+ * per token, on the longest DOM in the app: textbook layout thrash, and it
+ * compounded the per-token re-parse in `render.js` rather than merely adding to
+ * it.
+ *
+ * Batched onto the same frame as the repaint, so the measurement happens once,
+ * after the DOM has settled, instead of once per token before it has.
+ */
+let scrollQueued = false;
 function maybeScroll() {
-  if (pinned) thread.scrollTop = thread.scrollHeight;
+  if (!pinned || scrollQueued) return;
+  scrollQueued = true;
+  const run = () => {
+    scrollQueued = false;
+    // Re-checked: the user may have scrolled up in the meantime, and stealing
+    // the view back from somebody reading is worse than not following.
+    if (pinned) thread.scrollTop = thread.scrollHeight;
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, 16);
 }
 
 /* ── the detail rail ───────────────────────────────────────────── */

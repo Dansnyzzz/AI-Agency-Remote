@@ -214,9 +214,27 @@ async function runTask(task) {
  * Run everything that is due. Returns what it ran, so a cron endpoint can
  * report it and a test can assert on it.
  */
-export async function runDueTasks({ limit = 5, userId = null } = {}) {
+export async function runDueTasks({ limit = 5, userId = null, budgetMs = null } = {}) {
   const ran = [];
-  for (let i = 0; i < limit; i += 1) {
+  const started = Date.now();
+
+  /**
+   * Stop claiming when there is no room left to finish one.
+   *
+   * `limit` alone is a count, and a count is the wrong unit here: each task is a
+   * whole agent turn of up to `maxSteps` steps, and five of those cannot fit in
+   * a 300-second invocation. The route below this already computes a budget and
+   * threaded it into `runDueWorkflows` while handing tasks none at all — so the
+   * tasks ran until the function was killed, and whatever was left of the
+   * budget for workflows was nothing.
+   *
+   * Checked *before* claiming rather than after, because a claim marks the task
+   * as running and starts its lease. Claiming one there is no time to run is how
+   * a task ends up needing a person to look at it for no reason.
+   */
+  const roomLeft = () => budgetMs == null || Date.now() - started < budgetMs;
+
+  for (let i = 0; i < limit && roomLeft(); i += 1) {
     const task = await getStore().claimDueTask(new Date().toISOString(), userId);
     if (!task) break;
     ran.push(await runTask(task));
@@ -277,6 +295,12 @@ export async function sweep() {
     // a different name.
     store.pruneWorkflowRuns(),
     store.pruneResearchRuns(),
+    // One row per model call per role, never removed — and `checkQuota` sums a
+    // whole month of them before every single turn.
+    store.pruneUsageEvents(),
+    // A task whose invocation was killed mid-run is stopped for a person rather
+    // than left to re-claim itself every hour for ever.
+    store.reapStalledTasks(),
   ]);
 }
 

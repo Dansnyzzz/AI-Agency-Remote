@@ -358,7 +358,11 @@ export function createApp() {
       const remaining = () => Math.max(0, 240_000 - (Date.now() - started));
 
       await sweep().catch(() => {});
-      const ran = await runDueTasks();
+      // Tasks get a budget too. Without one they ran until the invocation was
+      // killed, which both left a task marked mid-run and guaranteed workflows
+      // inherited nothing — the very thing `remaining()` was written to prevent.
+      // Two thirds to tasks, so a long queue cannot starve the workflows below.
+      const ran = await runDueTasks({ budgetMs: Math.floor(remaining() * 0.66) });
 
       // Workflows share this heartbeat rather than adding a second cron: the
       // free tier allows one a day, and spending it twice is not an option. A
@@ -2520,7 +2524,17 @@ export function createApp() {
         ? req.body.runId
         : crypto.randomUUID();
 
-      if (!(await store.claimChatRun(req.user.id, chatId, runId))) {
+      /**
+       * Which holding of the lease this invocation is.
+       *
+       * A reconnection with the same `runId` is allowed back in — that is what
+       * makes resuming work — but it now *supersedes* the invocation it is
+       * replacing rather than joining it. The one it replaced fails its next
+       * heartbeat and aborts, so only one loop is ever appending to the
+       * transcript. See `claimChatRun`.
+       */
+      const runSeq = await store.claimChatRun(req.user.id, chatId, runId);
+      if (!runSeq) {
         return res.status(409).json({
           error: 'This conversation is already running somewhere else. Wait for it, or stop it there.',
           code: 'already_running',
@@ -2561,7 +2575,7 @@ export function createApp() {
       const ping = setInterval(() => {
         emit('ping', { t: Date.now() });
         store
-          .touchChatRun(req.user.id, chatId, runId)
+          .touchChatRun(req.user.id, chatId, runId, runSeq)
           .then((held) => {
             if (held === false) controller.abort();
           })
@@ -2599,7 +2613,9 @@ export function createApp() {
         clearInterval(ping);
         // Released whatever happened, including an abort — holding the lock
         // after the loop has stopped would lock the user out of their own chat.
-        await store.releaseChatRun(req.user.id, chatId, runId).catch(() => {});
+        // With the sequence, so a superseded invocation finishing late cannot
+        // release the lease the reconnection that replaced it now holds.
+        await store.releaseChatRun(req.user.id, chatId, runId, runSeq).catch(() => {});
         if (!res.writableEnded) res.end();
       }
     }),

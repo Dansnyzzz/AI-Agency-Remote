@@ -86,8 +86,15 @@ function splitStatements(sql) {
  *      through the agent loop stops being invisible; and
  *      doc_chunks_search_idx, which is the shape the vector search actually
  *      asks for
+ *  16  indexes for the queries that were reading whole tables — the four-second
+ *      job poll, the four unindexed foreign keys a user deletion cascades
+ *      through, the three sweep pruners, both shelf orderings, the pairing code
+ *      lookup; plus scheduled_tasks.run_state/lease_until/started_at so a task
+ *      cut off mid-run stops for a person instead of repeating every hour, and
+ *      chats.run_lock_seq so a resuming run evicts the previous holder of the
+ *      lease rather than joining it
  */
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 export function createPgStore(connectionString) {
   // Accepts a driver object instead of a URL so the tenancy-isolation tests can
@@ -116,25 +123,71 @@ export function createPgStore(connectionString) {
       schemaReady = (async () => {
         try {
           const rows = await sql.query('SELECT value FROM settings WHERE key = $1', ['schema_version']);
-          if (Number(rows[0]?.value) === SCHEMA_VERSION) return;
+          // `>=`, not `===`. An instance running older code must not decide that
+          // a *newer* database needs its own older schema replayed over the top
+          // — see the monotonic stamp below for the other half of this.
+          if (Number(rows[0]?.value) >= SCHEMA_VERSION) return;
         } catch {
           // No `settings` table yet: this is a fresh database, so fall through
           // and build it.
         }
 
         const ddl = fs.readFileSync(path.join(here, 'schema.sql'), 'utf8');
-        // The HTTP driver runs one statement per call.
-        for (const stmt of splitStatements(ddl)) {
-          await sql.query(stmt);
+        const statements = splitStatements(ddl);
+
+        /**
+         * One request, atomically, where the driver can do it.
+         *
+         * Replaying 80-odd DDL statements one at a time is 80 round trips, and
+         * after a version bump *every* cold-starting instance does it at the
+         * same moment. Concurrent `CREATE TABLE IF NOT EXISTS` on the same
+         * object is a known Postgres race — `IF NOT EXISTS` is a check, not a
+         * lock — and it surfaces as `duplicate key value violates unique
+         * constraint "pg_type_typname_nsp_index"`. In a transaction the loser
+         * rolls back cleanly instead of half-applying.
+         *
+         * The fallback stays for the driver-object path the isolation tests
+         * use, which has no `transaction`.
+         */
+        if (typeof sql.transaction === 'function') {
+          await sql.transaction(statements.map((stmt) => sql.query(stmt)));
+        } else {
+          for (const stmt of statements) await sql.query(stmt);
         }
+
+        /**
+         * The stamp only ever goes up.
+         *
+         * Written last, so a failed replay leaves the database unstamped and the
+         * next boot starts over — that part was already right. What was missing
+         * is the guard against going *backwards*: during a rollback or a staged
+         * rollout, an instance on older code read stamp 15, saw `15 !== 14`,
+         * replayed its own older schema and stamped the database down to 14.
+         * The next new-code cold start then saw `14 !== 15` and replayed
+         * everything again — a full DDL replay on nearly every cold start, which
+         * is exactly when the concurrency race above is most likely to fire.
+         */
         await sql.query(
-          `INSERT INTO settings (key, value) VALUES ('schema_version', $1)
-           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+          // `value` is JSONB, so both sides are extracted with `#>>` and cast.
+          // The parameter needs its own `::jsonb` — it arrives as text.
+          `INSERT INTO settings (key, value) VALUES ('schema_version', $1::jsonb)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            WHERE (settings.value #>> '{}')::int < (EXCLUDED.value #>> '{}')::int`,
           [JSON.stringify(SCHEMA_VERSION)],
         );
       })();
     }
-    return schemaReady;
+    /**
+     * A failed replay must not poison the instance.
+     *
+     * `schemaReady` was memoised including its rejection, and `q()` awaits it on
+     * every query — so one transient failure meant that warm instance returned
+     * the same error for the rest of its life rather than ever retrying.
+     */
+    return schemaReady.catch((err) => {
+      schemaReady = null;
+      throw err;
+    });
   }
 
   const q = async (text, params = []) => {
@@ -578,17 +631,38 @@ export function createPgStore(connectionString) {
      * on how quickly the two statements ran. At 75 seconds the boundary is
      * meaningless either way; at zero it is the whole behaviour.
      */
+    /**
+     * Take the run lease, and say *which* holding of it this is.
+     *
+     * The re-entrant clause (`run_lock_by = $3`) is what makes resuming work:
+     * the browser reconnects with the same `runId` and must be allowed back in.
+     * On its own, though, it also let the reconnection quietly *join* the run it
+     * meant to replace. Both invocations then held a lease that named them, so
+     * `touchChatRun` answered "still yours" to **both**, and the heartbeat that
+     * exists to stop an abandoned invocation could never fire. Two loops
+     * appended to one transcript: two tool messages for one assistant turn,
+     * which every provider rejects on the next request.
+     *
+     * `run_lock_seq` settles it. Every claim bumps it, so a later claim silently
+     * demotes the earlier holder — same run id or not — and the older
+     * invocation discovers on its next heartbeat that it is no longer the one,
+     * and stops. The reconnection replaces rather than duplicates.
+     *
+     * @returns the sequence number of this holding, or 0 if the lease was not
+     *   granted. Always ≥ 1 on success, so it stays usable as a boolean.
+     */
     async claimChatRun(userId, chatId, runId, staleMs = 75_000) {
       const rows = await q(
-        `UPDATE chats SET run_lock_at = NOW(), run_lock_by = $3
+        `UPDATE chats
+            SET run_lock_at = NOW(), run_lock_by = $3, run_lock_seq = run_lock_seq + 1
           WHERE id = $1 AND user_id = $2
             AND (run_lock_at IS NULL
                  OR run_lock_at <= NOW() - ($4 || ' milliseconds')::interval
                  OR run_lock_by = $3)
-      RETURNING run_lock_by`,
+      RETURNING run_lock_seq`,
         [chatId, userId, runId, String(staleMs)],
       );
-      return rows.length > 0;
+      return rows.length ? Number(rows[0].run_lock_seq) : 0;
     },
     /**
      * Keep a long run's lease alive while it is genuinely still working.
@@ -605,12 +679,19 @@ export function createPgStore(connectionString) {
      *   run finds out on its next heartbeat and stops for a fact rather than by
      *   inference.
      */
-    async touchChatRun(userId, chatId, runId) {
+    /**
+     * @param seq  which holding of the lease is asking. Omit only from a caller
+     *   that genuinely has no sequence to offer; matching on the run id alone is
+     *   what let a reconnection and the invocation it replaced both be told they
+     *   still held the lease. See `claimChatRun`.
+     */
+    async touchChatRun(userId, chatId, runId, seq = null) {
       const rows = await q(
         `UPDATE chats SET run_lock_at = NOW()
           WHERE id = $1 AND user_id = $2 AND run_lock_by = $3
+            AND ($4::bigint IS NULL OR run_lock_seq = $4::bigint)
       RETURNING id`,
-        [chatId, userId, runId],
+        [chatId, userId, runId, seq == null ? null : String(seq)],
       );
       return rows.length > 0;
     },
@@ -632,12 +713,20 @@ export function createPgStore(connectionString) {
       );
       return rows.length > 0;
     },
-    /** Only the holder may release, so a late finisher cannot free someone else's lock. */
-    async releaseChatRun(userId, chatId, runId) {
+    /**
+     * Only the holder may release, so a late finisher cannot free someone else's
+     * lock — and with `seq`, not even an earlier holding of the *same* run id.
+     *
+     * That last part matters on the resume path: the superseded invocation runs
+     * this in its `finally`, and without the sequence it would release the lease
+     * out from under the reconnection that had just taken it over.
+     */
+    async releaseChatRun(userId, chatId, runId, seq = null) {
       await q(
         `UPDATE chats SET run_lock_at = NULL, run_lock_by = NULL
-          WHERE id = $1 AND user_id = $2 AND run_lock_by = $3`,
-        [chatId, userId, runId],
+          WHERE id = $1 AND user_id = $2 AND run_lock_by = $3
+            AND ($4::bigint IS NULL OR run_lock_seq = $4::bigint)`,
+        [chatId, userId, runId, seq == null ? null : String(seq)],
       );
     },
     async deleteChat(userId, id) {
@@ -669,6 +758,36 @@ export function createPgStore(connectionString) {
         createdAt: r.created_at,
       }));
     },
+    /**
+     * Only what has arrived since `afterSeq`.
+     *
+     * The agent loop asks, once per step, whether the user has said anything
+     * new while it was working. It used to answer that by re-reading the
+     * *entire* transcript — every JSONB message body, including the tool
+     * results and the base64 that never shrinks — and then discarding all but
+     * the new rows. At `maxSteps` of 30 that is the whole conversation pulled
+     * over the wire thirty times in a single turn, and compaction does not help
+     * because it trims in memory, after the read.
+     *
+     * `messages_chat_seq_idx (chat_id, seq)` covers this exactly, so it costs
+     * an index seek and returns nothing at all in the common case.
+     */
+    async messagesSince(userId, chatId, afterSeq) {
+      const rows = await q(
+        `SELECT m.id, m.role, m.content, m.seq, m.created_at
+           FROM messages m JOIN chats c ON c.id = m.chat_id
+          WHERE m.chat_id = $1 AND c.user_id = $2 AND m.seq > $3
+          ORDER BY m.seq ASC`,
+        [chatId, userId, Number(afterSeq) || 0],
+      );
+      return rows.map((r) => ({
+        id: r.id,
+        role: r.role,
+        ...r.content,
+        seq: Number(r.seq),
+        createdAt: r.created_at,
+      }));
+    },
     async appendMessage(userId, chatId, message) {
       const { id, role, ...rest } = message;
       const rows = await q(
@@ -677,12 +796,21 @@ export function createPgStore(connectionString) {
                 COALESCE((SELECT MAX(seq) + 1 FROM messages WHERE chat_id = $2), 0),
                 $3, $4
           WHERE EXISTS (SELECT 1 FROM chats WHERE id = $2 AND user_id = $5)
-      RETURNING id`,
+      RETURNING id, seq`,
         [id, chatId, role, JSON.stringify(rest), userId],
       );
       if (!rows.length) throw new Error('Chat not found.');
       await this.touchChat(userId, chatId);
-      return message;
+      /**
+       * The `seq` comes back on the message.
+       *
+       * `messagesSince` needs a high-water mark, and the caller holds these
+       * objects in memory rather than re-reading them — so a turn appended
+       * during a run carried no position and could not advance the mark. It
+       * still worked (the id set filtered the duplicates) but it re-fetched
+       * every row this loop had just written, on every step.
+       */
+      return { ...message, seq: Number(rows[0].seq) };
     },
 
     /**
@@ -1057,6 +1185,28 @@ export function createPgStore(connectionString) {
         [String(keepDays)],
       );
     },
+    /**
+     * Usage rows do not need to be kept for ever.
+     *
+     * One row per model call *per role* — the turn, each sub-agent, compaction,
+     * every research persona, every page extraction — so a single twenty-step
+     * agentic turn writes twenty-odd. Heavy daily use is on the order of a
+     * thousand rows a day per account, and nothing was ever removing them.
+     *
+     * The size is the smaller half. `checkQuota` runs `usageThisMonth` on
+     * **every turn**, which sums a full calendar month of that account's rows
+     * before the model is even called — so the cost of starting a turn grew with
+     * how much the account had already used it.
+     *
+     * A generous window: 400 days keeps a full year-on-year comparison, and the
+     * monthly quota only ever reads the current month.
+     */
+    async pruneUsageEvents(keepDays = 400) {
+      await q(
+        `DELETE FROM usage_events WHERE created_at < NOW() - ($1 || ' days')::interval`,
+        [String(keepDays)],
+      );
+    },
     async getJob(userId, id) {
       const rows = await q('SELECT id, status, result FROM tool_jobs WHERE id = $1 AND user_id = $2', [
         id,
@@ -1280,27 +1430,61 @@ export function createPgStore(connectionString) {
      * has a *different number* of chunks, and upserting would leave the tail of
      * the previous version behind as text that is no longer in any document.
      */
+    /**
+     * Swap one file's chunks for its new ones, all or nothing.
+     *
+     * This was a `DELETE` followed by one `INSERT` per chunk in a loop — up to
+     * 129 sequential statements per file, and, far worse, **no transaction**.
+     * A failure anywhere after the delete left the file's previous index
+     * destroyed and the replacement half written: the user's document silently
+     * stopped being searchable, with nothing surfaced to say so. `search_docs`
+     * exists precisely to stop the assistant claiming it does not know
+     * something that is on their disk, so a half-built index is the one failure
+     * this table must not have.
+     *
+     * The rewrite does both halves at once. `unnest` turns the whole batch into
+     * a single INSERT, and where the driver has `transaction` the delete and
+     * the insert commit together or not at all.
+     */
     async replaceDocChunks(userId, path, rows) {
-      await q('DELETE FROM doc_chunks WHERE user_id = $1 AND path = $2', [userId, path]);
-      for (const row of rows) {
-        await q(
-          `INSERT INTO doc_chunks (id, user_id, source, path, ordinal, heading, text, embedding, dims, model, mtime)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-          [
-            row.id,
-            userId,
-            row.source,
-            path,
-            row.ordinal,
-            row.heading ?? null,
-            row.text,
-            row.embedding,
-            row.dims,
-            row.model,
-            row.mtime ?? null,
-          ],
-        );
+      const del = ['DELETE FROM doc_chunks WHERE user_id = $1 AND path = $2', [userId, path]];
+
+      if (!rows.length) {
+        await q(...del);
+        return;
       }
+
+      const columns = [
+        rows.map((r) => r.id),
+        rows.map(() => userId),
+        rows.map((r) => r.source),
+        rows.map(() => path),
+        rows.map((r) => r.ordinal),
+        rows.map((r) => r.heading ?? null),
+        rows.map((r) => r.text),
+        rows.map((r) => r.embedding),
+        rows.map((r) => r.dims),
+        rows.map((r) => r.model),
+        rows.map((r) => r.mtime ?? null),
+      ];
+      const ins = [
+        `INSERT INTO doc_chunks (id, user_id, source, path, ordinal, heading, text, embedding, dims, model, mtime)
+         SELECT * FROM unnest(
+           $1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::text[],
+           $7::text[], $8::text[], $9::int[], $10::text[], $11::bigint[]
+         )`,
+        columns,
+      ];
+
+      if (typeof sql.transaction === 'function') {
+        await ready();
+        await sql.transaction([sql.query(del[0], del[1]), sql.query(ins[0], ins[1])]);
+        return;
+      }
+      // The driver-object path (the isolation tests, PGlite) has no batch API.
+      // Still one statement per side rather than one per chunk.
+      await q(...del);
+      await q(...ins);
     },
 
     /**
@@ -1443,35 +1627,84 @@ export function createPgStore(connectionString) {
      * statement that selects it means two schedulers — or two serverless
      * invocations — cannot both pick up the same task and run it twice.
      */
-    async claimDueTask(now = new Date().toISOString(), userId = null) {
+    /**
+     * Claim one due task, and record that it has *started*.
+     *
+     * The hour pushed onto `next_run_at` was the only thing standing between a
+     * killed invocation and an infinite loop: nothing wrote an outcome until the
+     * whole agent turn had finished, so a run cut off at the function ceiling
+     * left no trace at all and the task came due again an hour later with the
+     * same prompt. "Every Friday, email the summary" became an email every hour,
+     * for ever, with `last_status` never showing anything wrong.
+     *
+     * `run_state = 'running'` plus a lease is the marker that was missing. A
+     * task found still running with an expired lease is not re-run — see
+     * `reapStalledTasks` — because nobody can say whether the email went out,
+     * and repeating an unattended side effect is worse than stopping to ask.
+     * `workflow_runs` has always worked this way; tasks simply never did.
+     */
+    async claimDueTask(now = new Date().toISOString(), userId = null, leaseMs = 600_000) {
       const rows = await q(
-        `UPDATE scheduled_tasks SET next_run_at = next_run_at + INTERVAL '1 hour',
-                                    last_run_at = NOW()
+        `UPDATE scheduled_tasks
+            SET next_run_at = next_run_at + INTERVAL '1 hour',
+                last_run_at = NOW(),
+                run_state   = 'running',
+                started_at  = NOW(),
+                lease_until = NOW() + ($3 || ' milliseconds')::interval
           WHERE id = (SELECT id FROM scheduled_tasks
                        WHERE enabled AND next_run_at <= $1
                          AND ($2::text IS NULL OR user_id = $2)
+                         AND (run_state IS DISTINCT FROM 'running'
+                              OR lease_until IS NULL
+                              OR lease_until <= NOW())
                        ORDER BY next_run_at LIMIT 1
                        FOR UPDATE SKIP LOCKED)
       RETURNING *`,
-        [now, userId],
+        [now, userId, String(leaseMs)],
       );
       return rows[0] ?? null;
     },
+    /**
+     * Tasks whose invocation died holding the lease.
+     *
+     * Marked for a person rather than retried, and disabled so the hourly
+     * re-claim stops: the whole point is that an unattended side effect which
+     * may or may not have happened is not something to repeat on a guess.
+     *
+     * @returns the tasks that were stopped, so the caller can say so.
+     */
+    async reapStalledTasks() {
+      const rows = await q(
+        `UPDATE scheduled_tasks
+            SET run_state = 'needs_attention',
+                enabled = FALSE,
+                last_status = 'stopped mid-run — it may or may not have finished, so it was not repeated'
+          WHERE run_state = 'running' AND lease_until IS NOT NULL AND lease_until <= NOW()
+      RETURNING id, user_id, title`,
+      );
+      return rows;
+    },
     /** Record the outcome and set the real next run, or retire a one-shot. */
     async finishTask(id, { status, chatId, nextRunAt }) {
+      // The lease is given up here and nowhere else. A task left marked
+      // `running` is precisely the signal `reapStalledTasks` reads, so clearing
+      // it is what distinguishes "finished" from "died holding it".
       if (nextRunAt) {
-        await q('UPDATE scheduled_tasks SET last_status = $2, last_chat = $3, next_run_at = $4 WHERE id = $1', [
-          id,
-          status,
-          chatId ?? null,
-          nextRunAt,
-        ]);
+        await q(
+          `UPDATE scheduled_tasks
+              SET last_status = $2, last_chat = $3, next_run_at = $4,
+                  run_state = NULL, lease_until = NULL
+            WHERE id = $1`,
+          [id, status, chatId ?? null, nextRunAt],
+        );
       } else {
-        await q('UPDATE scheduled_tasks SET last_status = $2, last_chat = $3, enabled = FALSE WHERE id = $1', [
-          id,
-          status,
-          chatId ?? null,
-        ]);
+        await q(
+          `UPDATE scheduled_tasks
+              SET last_status = $2, last_chat = $3, enabled = FALSE,
+                  run_state = NULL, lease_until = NULL
+            WHERE id = $1`,
+          [id, status, chatId ?? null],
+        );
       }
     },
 
@@ -1710,14 +1943,34 @@ export function createPgStore(connectionString) {
      * preserved so "who first added this" and the original discovery date
      * survive every refresh.
      */
+    /**
+     * The whole catalogue in a handful of statements, not one per model.
+     *
+     * This was a loop issuing one INSERT per model. The daily OpenRouter
+     * refresh carries the entire library — several hundred to well over a
+     * thousand rows — and on Neon each one is its own HTTP round trip inside a
+     * cron route that shares the 300-second function ceiling. At 40ms a trip
+     * that is 40 seconds of pure latency; at 150ms it does not finish at all,
+     * and the library silently stops being refreshed.
+     *
+     * Batched with `unnest` at 200 rows a statement: a thousand round trips
+     * becomes five. Chunked rather than sent whole so a very large catalogue
+     * cannot approach the parameter or payload limits.
+     */
     async upsertModels(models) {
-      for (const m of models) {
+      const BATCH = 200;
+      for (let i = 0; i < models.length; i += BATCH) {
+        const slice = models.slice(i, i + BATCH);
         await q(
           `INSERT INTO shared_models
              (id, provider, model, family, label, description, context,
               price_in, price_out, is_free, released_at, added_by, vision,
               max_output, refreshed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, NOW())
+           SELECT *, NOW() FROM unnest(
+             $1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+             $7::bigint[], $8::double precision[], $9::double precision[],
+             $10::boolean[], $11::timestamptz[], $12::text[], $13::boolean[], $14::int[]
+           )
            ON CONFLICT (id) DO UPDATE SET
              provider    = EXCLUDED.provider,
              model       = EXCLUDED.model,
@@ -1733,20 +1986,20 @@ export function createPgStore(connectionString) {
              max_output  = EXCLUDED.max_output,
              refreshed_at = NOW()`,
           [
-            m.id,
-            m.provider,
-            m.model,
-            m.family,
-            m.label,
-            m.description ?? null,
-            m.context ?? null,
-            m.priceIn ?? null,
-            m.priceOut ?? null,
-            !!m.isFree,
-            m.releasedAt ?? null,
-            m.addedBy ?? null,
-            !!m.vision,
-            m.maxOutput ?? null,
+            slice.map((m) => m.id),
+            slice.map((m) => m.provider),
+            slice.map((m) => m.model),
+            slice.map((m) => m.family),
+            slice.map((m) => m.label),
+            slice.map((m) => m.description ?? null),
+            slice.map((m) => m.context ?? null),
+            slice.map((m) => m.priceIn ?? null),
+            slice.map((m) => m.priceOut ?? null),
+            slice.map((m) => !!m.isFree),
+            slice.map((m) => m.releasedAt ?? null),
+            slice.map((m) => m.addedBy ?? null),
+            slice.map((m) => !!m.vision),
+            slice.map((m) => m.maxOutput ?? null),
           ],
         );
       }
