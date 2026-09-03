@@ -480,16 +480,90 @@ async function systemStats() {
  * Windows `desktop_launch` does more (it waits for the window and can then drive
  * it), but it only exists there, so this is the portable floor.
  */
+/**
+ * Start-Process, with the app and its arguments arriving out of band.
+ *
+ * The name and the arguments come from the model, so they never appear in the
+ * script text — they are read from the environment, the same way the toast above
+ * takes its title and body. `Start-Process` resolves a bare name through
+ * ShellExecute exactly as `start` did, so nothing is lost by leaving cmd behind.
+ */
+const WINDOWS_LAUNCH =
+  "$ErrorActionPreference='Stop';" +
+  '$app=$env:AIR_APP;$raw=$env:AIR_ARGS;' +
+  'if([string]::IsNullOrEmpty($raw)){Start-Process -FilePath $app}' +
+  'else{Start-Process -FilePath $app -ArgumentList ([string[]]($raw -split "`n"))}';
+
 async function launchApp({ app, args = [] }) {
   const name = String(app || '').trim();
   if (!name) throw new Error('Name the application to start.');
   const extra = (Array.isArray(args) ? args : [args]).map(String).filter(Boolean);
 
-  const [command, argv] = IS_WIN
-    ? ['cmd', ['/c', 'start', '', name, ...extra]]
-    : IS_MAC
-      ? ['open', ['-a', name, ...(extra.length ? ['--args', ...extra] : [])]]
-      : [name, extra];
+  /**
+   * Nothing legitimate carries a control character, and a newline is the one
+   * that could still confuse an argument boundary — the arguments travel to
+   * PowerShell as a single newline-separated environment variable. Same check,
+   * and the same reasoning, as `openCommand` in worker/tools.js.
+   */
+  for (const value of [name, ...extra]) {
+    if ([...value].some((ch) => ch.codePointAt(0) < 0x20)) {
+      throw new Error('That application name or argument contains control characters, so nothing was started.');
+    }
+  }
+
+  /**
+   * Windows goes through PowerShell rather than cmd, and that is a security fix
+   * rather than a preference.
+   *
+   * It used to be `cmd /c start "" <app> <args...>`. Node quotes an argument
+   * only when it contains a space, a tab or a quote — so `&`, `|`, `^` and `>`
+   * reached cmd.exe unquoted and cmd split on them. Measured on this machine:
+   * `launch_app({ app: 'notepad&ver' })` ran `ver` as a second command, `|`
+   * piped into one, and `>` created a file. The app name is chosen by the model,
+   * and a model can be talked into things by a web page it is reading.
+   *
+   * It is graded `ordinary` in the tool catalogue, so under the default guarded
+   * policy none of that stopped for approval first. The identical bug was found
+   * and fixed in `open_url` — see the comment above `openCommand` in
+   * worker/tools.js — and this call site was missed at the time.
+   *
+   * macOS and Linux always used an argv array with no shell, so they were never
+   * affected and are unchanged.
+   */
+  if (IS_WIN) {
+    try {
+      await powershell(WINDOWS_LAUNCH, {
+        env: { AIR_APP: name, AIR_ARGS: extra.join('\n') },
+        timeout: 20_000,
+      });
+    } catch (err) {
+      /**
+       * PowerShell reports a missing program as a page of CategoryInfo with the
+       * script echoed back, which is no use to anybody and puts the script text
+       * into the transcript. Translated to the same sentence the POSIX branch
+       * gives, so the model reads one answer whatever the platform.
+       *
+       * Worth noting this is now *reported* at all: `cmd /c start` returned
+       * success for a name that does not exist and left Windows to show an error
+       * box on the user's screen that the model never saw, so it would go on to
+       * claim it had started something.
+       */
+      const said = String(err?.message || '');
+      throw new Error(
+        /cannot find the file|No such file|not recognized/i.test(said)
+          ? `There is no application called "${name}" on this computer, or it is not on the PATH.`
+          : `Could not start ${name}: ${said.split('\n')[0].trim()}`,
+      );
+    }
+    return (
+      `Started ${name}${extra.length ? ` with ${extra.join(' ')}` : ''} on their screen. ` +
+      'Starting it is not the same as it being ready — say what you launched rather than assuming it worked.'
+    );
+  }
+
+  const [command, argv] = IS_MAC
+    ? ['open', ['-a', name, ...(extra.length ? ['--args', ...extra] : [])]]
+    : [name, extra];
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, argv, { detached: true, stdio: 'ignore', windowsHide: true });

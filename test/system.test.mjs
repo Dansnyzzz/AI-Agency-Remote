@@ -274,6 +274,52 @@ section('input that would break a shell is refused, not passed through');
   );
 }
 
+/* ── launch_app must not hand the shell a model's string ───────── */
+
+section('launch_app is not a command line');
+{
+  // It used to be `cmd /c start "" <app> <args...>`. Node quotes an argument
+  // only when it contains a space, a tab or a quote, so `&`, `|`, `^` and `>`
+  // reached cmd.exe unquoted and cmd split on them. Measured before the fix:
+  // an app name of `notepad&ver` ran `ver` as a second command, `|` piped into
+  // one, and `>` created a file. The name comes from the model, and a model can
+  // be talked into things by a page it is reading — and the tool is graded
+  // `ordinary`, so under the default guarded policy none of that stopped to ask.
+  //
+  // Windows now goes through Start-Process with the name and the arguments
+  // arriving in environment variables, so no parser sits between the value and
+  // the program. Asserted here is the part that holds on every platform: a
+  // control character is refused outright, the same rule openCommand applies in
+  // worker/tools.js, and the one that matters most because the arguments travel
+  // as a newline-separated variable.
+  const launch = LOCAL_IMPLEMENTATIONS.launch_app;
+  check('the worker implements it', typeof launch === 'function');
+
+  const refuses = async (input, what) => {
+    let message = '';
+    try {
+      await launch(input);
+    } catch (err) {
+      message = err?.message || '';
+    }
+    check(what, /control characters/i.test(message), message || 'it did not throw');
+  };
+
+  await refuses({ app: 'notepad\nver' }, 'a newline in the name is refused');
+  await refuses({ app: 'notepad\u0000ver' }, 'a NUL in the name is refused');
+  await refuses({ app: 'notepad', args: ['ok', 'bad\narg'] }, 'and a newline in an argument too');
+
+  // An empty name was always refused. Kept so the guard above cannot be
+  // satisfied by making every input throw.
+  let empty = '';
+  try {
+    await launch({ app: '   ' });
+  } catch (err) {
+    empty = err?.message || '';
+  }
+  check('an empty name still asks for one, not for control characters', /name the application/i.test(empty), empty);
+}
+
 console.log(
   failures === 0
     ? '\n[32mAll system-tool checks passed.[0m\n'
