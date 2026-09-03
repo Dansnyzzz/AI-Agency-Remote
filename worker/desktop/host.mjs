@@ -86,8 +86,26 @@ function osascript(source) {
   });
 }
 
-/** AppleScript string literal — the only two characters that need escaping. */
-const as = (value) => `"${String(value ?? '').replace(/[\\"]/g, '\\$&')}"`;
+/**
+ * AppleScript string literal.
+ *
+ * Backslash and quote are what AppleScript itself needs escaped. A newline is
+ * the third character that matters and it was missing: these strings are
+ * interpolated into a script that is then run line by line, so a value carrying
+ * a newline does not stay a value — it becomes another line of AppleScript.
+ *
+ * Window titles reach here from `desktop_look({ window })`, and a window title
+ * is whatever the application put there, which on a browser is whatever the page
+ * said. `applescriptString` in worker/system.js already strips newlines for
+ * exactly this reason; this copy did not.
+ *
+ * Replaced with a space rather than escaped, matching that function, because a
+ * title that spans lines is not a title anyone is trying to match.
+ */
+const as = (value) =>
+  `"${String(value ?? '')
+    .replace(/[\\"]/g, '\\$&')
+    .replace(/[\r\n]+/g, ' ')}"`;
 
 async function macWindows() {
   const out = await osascript(`
