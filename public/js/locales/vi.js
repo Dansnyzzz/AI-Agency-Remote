@@ -397,7 +397,7 @@ export const vi = {
   'screen.title': 'Màn hình',
   'screen.wholeMachine': 'Toàn bộ màn hình của máy đang chạy worker.',
   'screen.sandboxClosed': 'Đã đóng trình duyệt sandbox.',
-  'screen.driveOn': 'Ngừng điều khiển trang',
+  'screen.driveOn': 'Ngừng điều khiển trang (hoặc bấm Escape)',
   'screen.driveOff': 'Tự điều khiển — bấm và gõ thẳng vào trang',
   'ws.renameAria': 'Đổi tên {name}',
   'ws.deleteAria': 'Xoá {name}',

@@ -328,12 +328,39 @@ export function createScreen() {
 
   img.addEventListener('keydown', (event) => {
     if (!driving) return;
+
+    /**
+     * Two keys are the user's, not the remote machine's.
+     *
+     * Tab was being swallowed and forwarded, which made this a keyboard trap:
+     * once focus was on the picture there was no key that moved it off, and the
+     * only way out was a mouse click on the drive button. That is a WCAG 2.1.2
+     * failure and, more plainly, it means somebody driving by keyboard could get
+     * stuck inside a remote desktop with no way back to their own page.
+     *
+     * Escape now turns driving off rather than being sent on. It was already
+     * being swallowed here and then reaching the document listener, where it
+     * only left full-screen — so pressing it looked like it did nothing while
+     * the keyboard stayed captured.
+     *
+     * Losing Tab and Escape on the remote side is a real cost and the right
+     * trade: `desktop_key` sends either deliberately when a task needs it, and
+     * neither is worth trapping a person inside a panel for.
+     */
+    if (event.key === 'Tab') return; // let the browser move focus out
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setDriving(false);
+      drive.focus(); // land somewhere sensible rather than on <body>
+      return;
+    }
+
     // Printable characters go as text so accents and IME output survive; named
     // keys go as key presses so Enter and Backspace still mean something.
     if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       send({ type: 'text', text: event.key });
-    } else if (['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    } else if (['Enter', 'Backspace', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
       event.preventDefault();
       send({ type: 'key', key: event.key });
     }

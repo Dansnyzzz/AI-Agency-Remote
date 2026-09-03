@@ -338,7 +338,7 @@ export const en = {
   'screen.title': 'Screen',
   'screen.wholeMachine': 'The whole screen of the machine running the worker.',
   'screen.sandboxClosed': 'Sandbox closed.',
-  'screen.driveOn': 'Stop controlling the page',
+  'screen.driveOn': 'Stop controlling the page (or press Escape)',
   'screen.driveOff': 'Take control — click and type into the page yourself',
   'ws.renameAria': 'Rename {name}',
   'ws.deleteAria': 'Delete {name}',
