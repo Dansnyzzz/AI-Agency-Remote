@@ -413,7 +413,7 @@ section('connector token cannot be redirected');
 // ── keeping credentials out of long-lived notes ─────────────────────
 section('secret redaction');
 {
-  const gone = (text) => !redactSecrets(text).text.includes(text.match(/\S{20,}/)?.[0] ?? ' ');
+  const gone = (text) => !redactSecrets(text).text.includes(text.match(/\S{20,}/)?.[0] ?? '\u0000');
   const caught = (text) => redactSecrets(text).found.length > 0;
 
   check('an OpenRouter key is stripped', gone('key is sk-or-v1-' + 'a'.repeat(40)));

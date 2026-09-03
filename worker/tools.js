@@ -684,7 +684,7 @@ async function searchWorkspace({ query, path: target = '.', glob: globFilter, ig
     } catch {
       continue;
     }
-    if (content.includes(' ')) continue; // a binary file has no lines to show
+    if (content.includes('\u0000')) continue; // a binary file has no lines to show
     scanned += 1;
 
     const hits = [];
