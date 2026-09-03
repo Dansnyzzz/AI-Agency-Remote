@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { normaliseStop, refusalDetail } from './stop.js';
 
 /**
  * Anthropic adapter.
@@ -177,6 +178,16 @@ export async function* streamAnthropic({
   yield {
     type: 'done',
     stopReason: final.stop_reason,
+    /**
+     * Why it stopped, in words somebody can act on.
+     *
+     * `stop_details` is populated only when `stop_reason` is `refusal` and is
+     * null for every other outcome, so it is read through a guard rather than
+     * trusted — see `refusalDetail`. A refusal arrives as HTTP 200 with no
+     * content at all, which is precisely why it has to be said out loud: the
+     * turn otherwise "succeeds" and leaves an empty message on screen.
+     */
+    stop: normaliseStop(final.stop_reason, refusalDetail(final.stop_details)),
     toolCalls,
     raw: { anthropic: final.content },
     /**

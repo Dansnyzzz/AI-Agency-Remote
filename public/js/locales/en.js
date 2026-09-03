@@ -52,6 +52,25 @@ export const en = {
   // moves is what separates waiting from wondering.
   'status.waiting': 'Waiting for {model} to start — {n}s',
   'status.waitingFree': 'Waiting for {model} — free models queue when busy ({n}s). Switch model if this drags.',
+
+  /* ── why a reply stopped ─────────────────────────────────────────
+   *
+   * Only ever shown when the reply is *not* a finished answer. Three of these
+   * used to end a turn looking exactly like a complete one: the stream stops,
+   * the spinner clears, and the last paragraph simply has no end. Saying which
+   * of them happened is the difference between "the assistant answered" and
+   * "the assistant was cut off" — and only one of those is worth acting on.
+   */
+  'stop.truncated':
+    'Cut off — the reply hit this model’s maximum output length. Ask it to continue, or pick a model with a larger output limit.',
+  'stop.refused':
+    'The provider’s safety system declined this request, so the model produced nothing. Rephrasing, or a different model, is the way on.',
+  'stop.filtered':
+    'The provider’s content filter blocked this reply. What you can see is only the part that got through.',
+  'stop.recitation':
+    'Stopped because the answer was reproducing source material too closely. Ask for it in your own words and it will usually go through.',
+  'stop.unknown': 'The provider ended this reply for a reason it did not explain.',
+
   // The checklist drawn inside a message by `update_plan`, and the count beside
   // the same steps in the progress rail.
   'chat.plan': 'Plan',

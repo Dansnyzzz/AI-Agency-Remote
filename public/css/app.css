@@ -3525,6 +3525,34 @@ details.block pre {
 .compacted__fold { margin-top: 10px; }
 
 /* ─────────────────────────────────────────────────────────────
+   Why a reply stopped short.
+
+   Drawn into the transcript, not toasted, because the question it
+   answers — "was this answer cut off?" — is asked while scrolling
+   back, long after any toast is gone. Amber for the recoverable
+   ones (truncated: ask it to continue), red for the ones where the
+   provider refused outright. Both tokens already flip per theme.
+   ───────────────────────────────────────────────────────────── */
+.stopnote {
+  max-width: 780px;
+  margin: 10px auto 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.stopnote--refused,
+.stopnote--filtered {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.stopnote__line {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* ─────────────────────────────────────────────────────────────
    Documents: the cards, and the viewer that opens them
 
    A Word file, a spreadsheet and a deck cannot be drawn by a

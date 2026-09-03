@@ -801,6 +801,28 @@ export function summaryDivider(replaced, text) {
   return wrap;
 }
 
+/**
+ * Why the reply above this line is not a finished answer.
+ *
+ * Drawn into the transcript rather than toasted, and that is the whole point of
+ * it: a toast is gone in three seconds, and the question "was this answer cut
+ * off?" is asked while scrolling back through a conversation an hour later. The
+ * three outcomes it covers — truncated at the output cap, declined by a safety
+ * classifier, blocked by a content filter — used to leave nothing behind at all,
+ * so a half-written answer and a complete one looked the same for ever.
+ *
+ * `role="status"` rather than `alert`: it is worth announcing to a screen reader
+ * when it appears, and it is not an interruption.
+ */
+export function stopNote(kind, text) {
+  const wrap = el('div', `stopnote stopnote--${kind || 'unknown'}`);
+  wrap.setAttribute('role', 'status');
+  const line = el('div', 'stopnote__line');
+  line.textContent = text;
+  wrap.append(line);
+  return wrap;
+}
+
 export function statusLine(text) {
   const node = el('div', 'status-line');
   node.innerHTML = `<span class="spinner"></span><span>${escapeHtml(text)}</span>`;

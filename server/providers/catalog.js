@@ -291,3 +291,30 @@ export function estimateCost(entry, usage) {
   const output = (usage.output || 0) / 1e6 * entry.price.out;
   return input + output;
 }
+
+/**
+ * What a turn cost, preferring the provider's own figure over our arithmetic.
+ *
+ * `estimateCost` is exactly that — an estimate, from a price table somebody has
+ * to keep current, and null for the large majority of the model library where
+ * no price was ever verified. OpenRouter and OrcaRouter both report the real
+ * billed amount on `usage.cost`, in dollars, on the final streamed chunk. When
+ * a provider has told us what it charged, believing it beats recomputing it:
+ * the figure is right even for a model whose price we never knew, and it stays
+ * right when a provider changes its rates without telling anybody.
+ *
+ * `source` travels with the number so the interface can be honest about which
+ * of the two it is showing. "$0.0043" and "about $0.0043" are different claims,
+ * and a usage page that cannot tell them apart is inviting somebody to trust
+ * the wrong one.
+ *
+ * @returns {{usd: number, source: 'provider'|'estimate'}|null}
+ *   null only when neither the provider said and nor we can work it out.
+ */
+export function priceTurn(entry, usage) {
+  const stated = Number(usage?.costUsd);
+  if (Number.isFinite(stated) && stated >= 0) return { usd: stated, source: 'provider' };
+
+  const worked = estimateCost(entry, usage);
+  return worked == null ? null : { usd: worked, source: 'estimate' };
+}

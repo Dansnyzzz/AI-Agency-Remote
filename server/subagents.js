@@ -5,7 +5,7 @@ import { availableTools, assessRisk } from './tools/definitions.js';
 import { getPrefs } from './settings.js';
 import { record as recordUsage } from './usage.js';
 import { workerStatus } from './localTools.js';
-import { estimateCost } from './providers/catalog.js';
+import { priceTurn } from './providers/catalog.js';
 
 /**
  * Sub-agents — several independent investigations at once.
@@ -186,7 +186,7 @@ export async function runParallel({
       chatId,
       model: entry.id,
       usage,
-      costUsd: estimateCost(entry, usage) || 0,
+      costUsd: priceTurn(entry, usage)?.usd || 0,
       role: 'subagent',
     });
   }

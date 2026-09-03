@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { getStore } from './store/index.js';
 import { streamCompletion } from './providers/index.js';
-import { estimateCost } from './providers/catalog.js';
+import { priceTurn } from './providers/catalog.js';
 import { record as recordUsage } from './usage.js';
 import { modelForRole } from './roleModel.js';
 
@@ -256,7 +256,7 @@ export async function compact({ userId, chatId, entry, prefs, messages, signal, 
       chatId,
       model: writer.id,
       usage: spent,
-      costUsd: estimateCost(writer, spent) || 0,
+      costUsd: priceTurn(writer, spent)?.usd || 0,
       role: 'compaction',
     }).catch(() => {});
   }

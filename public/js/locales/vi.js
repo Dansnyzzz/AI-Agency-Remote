@@ -117,6 +117,24 @@ export const vi = {
   // thứ phân biệt 'đang chờ' với 'không biết chuyện gì'.
   'status.waiting': 'Đang chờ {model} bắt đầu — {n}s',
   'status.waitingFree': 'Đang chờ {model} — model miễn phí phải xếp hàng lúc đông ({n}s). Đổi model nếu lâu quá.',
+
+  /* ── vì sao câu trả lời dừng lại ─────────────────────────────────
+   *
+   * Chỉ hiện khi câu trả lời *chưa* trọn vẹn. Ba trong số này trước đây kết
+   * thúc y hệt một lượt bình thường: luồng ngắt, vòng quay biến mất, và đoạn
+   * cuối đơn giản là không có kết. Nói rõ đã xảy ra chuyện gì chính là khác
+   * biệt giữa "trợ lý đã trả lời" và "trợ lý bị cắt ngang".
+   */
+  'stop.truncated':
+    'Bị cắt ngang — câu trả lời chạm giới hạn độ dài đầu ra của model này. Bảo nó viết tiếp, hoặc chọn model có giới hạn đầu ra lớn hơn.',
+  'stop.refused':
+    'Hệ thống an toàn của nhà cung cấp đã từ chối yêu cầu này nên model không tạo ra gì cả. Hãy diễn đạt lại, hoặc đổi model.',
+  'stop.filtered':
+    'Bộ lọc nội dung của nhà cung cấp đã chặn câu trả lời này. Phần bạn thấy chỉ là phần lọt qua được.',
+  'stop.recitation':
+    'Dừng lại vì câu trả lời đang chép lại tài liệu nguồn quá sát. Hỏi lại bằng lời của bạn thì thường sẽ qua.',
+  'stop.unknown': 'Nhà cung cấp kết thúc câu trả lời này mà không nói lý do.',
+
   'empty.title': 'Hôm nay bạn muốn làm gì?',
   'empty.body':
     'Chọn model rồi hỏi bất cứ điều gì. Khi máy tính của bạn đã kết nối, trợ lý có thể đọc tệp, sửa code và chạy lệnh ngay trên máy đó.',

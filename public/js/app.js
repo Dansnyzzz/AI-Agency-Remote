@@ -9,6 +9,7 @@ import {
   summariseToolInput,
   revealInStrip,
   summaryDivider,
+  stopNote,
 } from './render.js';
 import { createModelBrowser } from './models.js';
 import { createScreen } from './screen.js';
@@ -1739,7 +1740,7 @@ async function streamOnce(decision) {
       runId: state.runId,
       signal: state.abort.signal,
       handlers: {
-        status: ({ phase, name, message, seconds, model, free }) => {
+        status: ({ phase, name, message, seconds, model, free, stop }) => {
           if (phase === 'compacting') setStatus(t('status.compacting'));
           else if (phase === 'thinking') setStatus(t('status.thinking'));
           /**
@@ -1762,6 +1763,11 @@ async function streamOnce(decision) {
                 .replace('{n}', String(seconds ?? 0)),
             );
           } else if (phase === 'tool') setStatus(t('status.tool').replace('{name}', name));
+          // A turn that stopped badly but still asked for tools — truncated
+          // part-way through writing a call, most often. Drawn into the
+          // transcript rather than toasted, because the loop carries on and a
+          // toast would be gone before the consequences arrived.
+          else if (stop) noteStop({ kind: stop, message });
           else if (message) toast(message);
         },
         thinking: ({ delta }) => {
@@ -1838,16 +1844,57 @@ async function streamOnce(decision) {
           state.turn?.finish();
           toast(message, 'error');
         },
-        done: () => {
+        done: ({ stop }) => {
           outcome = 'done';
           // Collapse any run of steps still drawn as in progress. Without this a
           // finished turn keeps a spinner for the rest of the conversation.
           state.turn?.finish();
+          /**
+           * Say when the reply is not actually an answer.
+           *
+           * `stop.message` is non-null exactly when the turn ended badly — cut
+           * off at the output cap, declined by a safety classifier, blocked by
+           * a content filter. This event carried that all along and this
+           * handler used to drop it, so a truncated reply and a finished one
+           * were indistinguishable on screen, and a refusal (which returns no
+           * content at all) showed as an empty message with no explanation.
+           *
+           * Translated from the stable `kind` rather than shown in the server's
+           * English, and the server's own sentence is the fallback for a kind
+           * this build has no string for yet.
+           */
+          if (stop?.message) noteStop(stop);
         },
       },
     });
 
   return state.abort.signal.aborted ? 'done' : outcome;
+}
+
+/**
+ * Draw the reason a reply stopped short, once.
+ *
+ * Translated from the stable `kind` the server sends rather than from its
+ * English sentence — the app is used in Vietnamese, and a warning nobody can
+ * read is barely better than no warning. The server's own wording is the
+ * fallback for a kind this build has no string for, which is what keeps a newer
+ * provider outcome visible instead of silently blank.
+ *
+ * Guarded against repeats: a truncated turn can report itself on the tool path
+ * and again on the way out, and two identical notices side by side read as two
+ * separate failures.
+ */
+function noteStop({ kind, message }) {
+  // `t` returns the key itself for a string it does not have — see i18n.js,
+  // where that is deliberate so a gap is loud rather than silently English.
+  // Here it is the signal to fall back to what the server wrote.
+  const key = `stop.${kind}`;
+  const translated = t(key);
+  const body = translated === key ? message : translated;
+  if (!body || state.lastStopNote === `${kind}:${body}`) return;
+  state.lastStopNote = `${kind}:${body}`;
+  $('messages').append(stopNote(kind, body));
+  maybeScroll();
 }
 
 /** The block new prose should go into, starting a fresh one after a save. */
@@ -1973,7 +2020,7 @@ function setStatus(text) {
   if (text) host.append(statusLine(text));
 }
 
-function renderUsage({ input, output, cost, priced }) {
+function renderUsage({ input, output, cost, priced, estimated, cacheRead }) {
   // Nothing to report rather than "0 tokens this turn", which reads as a turn
   // that happened and cost nothing.
   if (!input && !output) {
@@ -1981,9 +2028,16 @@ function renderUsage({ input, output, cost, priced }) {
     return;
   }
   const tokens = `${(input + output).toLocaleString()} tokens`;
-  $('composer-meta').textContent = priced
-    ? `${tokens} · ~$${cost.toFixed(4)} this turn`
-    : `${tokens} this turn`;
+  // "~$" only when the figure is our own arithmetic. When the provider invoiced
+  // the turn — OpenRouter and OrcaRouter both do — the number is exact and the
+  // tilde would be understating what we actually know.
+  const money = priced ? ` · ${estimated ? '~' : ''}$${cost.toFixed(4)} this turn` : ' this turn';
+  // A cache hit is the single biggest lever on an agentic conversation's cost,
+  // and it was invisible. Shown only when it was substantial enough to matter.
+  const cached = cacheRead && input && cacheRead / input >= 0.2
+    ? ` · ${Math.round((cacheRead / input) * 100)}% cached`
+    : '';
+  $('composer-meta').textContent = `${tokens}${money}${cached}`;
 }
 
 function setRunning(running) {

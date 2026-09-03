@@ -13,7 +13,7 @@ import { workerStatus } from './localTools.js';
 import { skillMenu } from './skills.js';
 import { connectorSummary } from './connectors.js';
 import { mcpTools } from './mcp/registry.js';
-import { estimateCost } from './providers/catalog.js';
+import { priceTurn } from './providers/catalog.js';
 import { loadForTranscript, toParts } from './attachments.js';
 import { projectPrompt } from './projects.js';
 import { compact, shouldCompact, measure, activeTranscript } from './compact.js';
@@ -689,7 +689,13 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     log.info('tools activated', { names: names.join(','), total: activated.size });
   };
 
-  const totals = { input: 0, output: 0, cost: 0 };
+  /**
+   * `priced` says whether the running cost is worth showing at all, and
+   * `estimated` whether it is our arithmetic or the provider's own invoice.
+   * Both travel to the browser so the usage line can say which it is rather
+   * than presenting a guess with the confidence of a receipt.
+   */
+  const totals = { input: 0, output: 0, cost: 0, cacheRead: 0, estimated: false };
 
   // ── Resume: the previous run ended with tool calls still outstanding ──
   // Either it stopped for approval, or the connection was cut mid-run.
@@ -893,23 +899,59 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       assistant.usage = done.usage;
       totals.input += done.usage.input || 0;
       totals.output += done.usage.output || 0;
-      const cost = estimateCost(entry, done.usage);
-      if (cost != null) totals.cost += cost;
+      totals.cacheRead += done.usage.cacheRead || 0;
+      // The provider's own figure where it gave one — OpenRouter and OrcaRouter
+      // both do — and our price table where it did not. See `priceTurn`.
+      const priced = priceTurn(entry, done.usage);
+      if (priced) {
+        totals.cost += priced.usd;
+        if (priced.source === 'estimate') totals.estimated = true;
+      }
       // Recorded per model call rather than per turn, so the usage page can
       // break spending down by model.
-      await recordUsage(userId, { chatId, model: entry.id, usage: done.usage, costUsd: cost || 0, role: 'turn' });
+      await recordUsage(userId, {
+        chatId,
+        model: entry.id,
+        usage: done.usage,
+        costUsd: priced?.usd || 0,
+        role: 'turn',
+      });
     }
     assistant.model = entry.id;
 
     await store.appendMessage(userId, chatId, assistant);
     messages.push(assistant);
     emit('message', { message: assistant });
-    emit('usage', { ...totals, priced: entry.price != null });
+    // Priced when we have a rate card *or* the provider invoiced us. The second
+    // half is what makes a cost appear at all for the large part of the library
+    // whose price was never verified.
+    emit('usage', { ...totals, priced: entry.price != null || totals.cost > 0 });
 
     if (!assistant.toolCalls.length) {
-      emit('done', { stopReason: done?.stopReason || 'end_turn' });
+      /**
+       * Say why it stopped, not merely that it did.
+       *
+       * `stop` is the normalised form, and its `message` is non-null exactly
+       * when the reply in front of the user is *not* a finished answer — cut
+       * off at the output cap, declined by a safety classifier, blocked by a
+       * content filter. All three used to end the turn looking identical to a
+       * complete one, which is the whole reason this travels.
+       */
+      const stop = done?.stop || { kind: done?.stopReason ? 'unknown' : 'end_turn', raw: done?.stopReason ?? null, message: null };
+      emit('done', { stopReason: done?.stopReason || 'end_turn', stop });
       return;
     }
+
+    /**
+     * A turn can stop badly *and* still have asked for tools.
+     *
+     * The commonest is truncation: the model hit its output cap part-way
+     * through writing a tool call, so the arguments are cut off and the call
+     * that follows will fail on an argument nobody mangled deliberately. Said
+     * here rather than only on the `done` path, because on this path the loop
+     * carries on and the reason would otherwise never be seen at all.
+     */
+    if (done?.stop?.message) emit('status', { message: done.stop.message, stop: done.stop.kind });
 
     const pending = needsApproval(assistant.toolCalls, policy);
     if (pending.length) {
