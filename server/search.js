@@ -213,9 +213,16 @@ async function searchDuckDuckGo(query, count) {
     const results = [];
     const link = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
     const snippet = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+    // Bounded by the same `count` the link loop below uses. It was unbounded,
+    // and ran to exhaustion over the whole response to collect snippets that
+    // were then mostly discarded — the loop below stops at `count`, so every
+    // one past that was parsed and thrown away. The page is a remote document,
+    // so its length is not this code's to assume.
     const snippets = [];
     let found;
-    while ((found = snippet.exec(html))) snippets.push(stripTags(found[1]));
+    while ((found = snippet.exec(html)) && snippets.length < count) {
+      snippets.push(stripTags(found[1]));
+    }
 
     let match;
     while ((match = link.exec(html)) && results.length < count) {
