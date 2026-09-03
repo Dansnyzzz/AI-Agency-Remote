@@ -1,0 +1,24 @@
+# Line endings, where they change behaviour rather than taste.
+#
+# This repository has core.autocrlf=true on at least one developer machine, so a
+# checkout on Windows rewrites LF to CRLF in the working tree. For source that
+# is only ever read by Node that is invisible. For two kinds of file it is not.
+#
+# public/setup.sh is *served over HTTP* and piped straight into a shell — the
+# app tells people to run `bash -c "$(curl -fsSL .../setup.sh)"` (server/app.js).
+# The server sends whatever is on disk, so a Windows checkout would hand a Mac
+# or Linux user a script whose every line ends in a carriage return, and bash
+# would carry those into command names and arguments. The failure would look
+# like nonsense from a script that is fine in the repository.
+#
+# The shell scripts under worker/ and scripts/ are executed on POSIX machines
+# for the same reason.
+*.sh text eol=lf
+
+# PowerShell is fine either way, but it is executed rather than read, so it is
+# pinned too rather than left to a global setting nobody remembers.
+*.ps1 text eol=crlf
+
+# Everything else follows whatever the checkout is configured for; git still
+# stores LF. Declared explicitly so `text` is not guessed per file.
+* text=auto
