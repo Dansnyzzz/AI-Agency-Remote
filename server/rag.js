@@ -35,6 +35,7 @@
  */
 import crypto from 'node:crypto';
 import { getStore } from './store/index.js';
+import { untrusted } from './tools/untrusted.js';
 import { getApiKey, baseUrlFor } from './settings.js';
 
 /**
@@ -552,7 +553,24 @@ export async function searchDocs(userId, { query, limit = 6, source = null }) {
     body += block;
   }
 
-  return `${results.length} passage${results.length === 1 ? '' : 's'} for "${text}":\n\n${body.trim()}${caveat}`;
+  /**
+   * The passages are somebody else's writing, so they travel in an envelope.
+   *
+   * This was the one place external content reached the model unwrapped. The
+   * web fetcher, the search results, the page extractor and every MCP tool all
+   * go through `untrusted()`; the user's own indexed corpus did not — and it is
+   * the *least* trustworthy of them in one specific way. A web page is fetched
+   * because the model chose a URL this turn; an indexed document was filed
+   * weeks ago, is retrieved by meaning rather than by name, and surfaces
+   * whenever a question happens to match it. A contract or a PDF from a
+   * supplier carrying "ignore your previous instructions" would have been read
+   * as though the user had typed it.
+   *
+   * The caveat stays outside the envelope: it is this app's assessment of the
+   * match quality, not something the documents said.
+   */
+  const found = `${results.length} passage${results.length === 1 ? '' : 's'} for "${text}"`;
+  return `${found}:\n\n${untrusted('the indexed documents', body.trim())}${caveat}`;
 }
 
 export async function listSources(userId) {

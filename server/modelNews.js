@@ -108,11 +108,32 @@ export async function pendingAnnouncement(userId) {
     if (now - new Date(row.released_at).getTime() > RECENT_MS) continue;
     if (!NOTABLE_FAMILIES.has(row.family || familyOf(row.model || row.id))) continue;
 
-    state.lastShownAt = new Date().toISOString();
-    await store.setUserSetting(userId, NEWS_KEY, state);
+    /**
+     * The quiet period starts when it is *shown*, not when it is fetched.
+     *
+     * This used to stamp `lastShownAt` here, before the response had been
+     * delivered — so a prefetch, a double render, or a response the browser
+     * never received burned the twenty-hour window and the account was simply
+     * never told about the model. The write moved to `markAnnouncementShown`,
+     * which the client calls once the dialog is actually on screen.
+     */
     return describe(row);
   }
   return null;
+}
+
+/**
+ * Record that an announcement really reached somebody.
+ *
+ * Separate from reading it, so the quiet period cannot be spent by a request
+ * whose answer nobody saw. Safe to call more than once: the window is measured
+ * from the last stamp, and re-stamping it a second later changes nothing.
+ */
+export async function markAnnouncementShown(userId) {
+  const store = getStore();
+  const state = await newsState(userId);
+  state.lastShownAt = new Date().toISOString();
+  await store.setUserSetting(userId, NEWS_KEY, state);
 }
 
 /** Everything the modal needs to let somebody decide without leaving it. */

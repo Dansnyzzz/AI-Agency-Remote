@@ -27,6 +27,7 @@ import { emailBackend } from './email.js';
 import { summary as usageSummary, limitFor } from './usage.js';
 import { getPrefs, setPrefs, setApiKey, addApiKey, removeApiKey, providerStatus } from './settings.js';
 import { getStore, initStore, isServerless } from './store/index.js';
+import { RUN_LEASE_STALE_MS } from './store/pg.js';
 import { workerStatus, usesInProcessTools, handleIndexPayload } from './localTools.js';
 import { publish, subscribe, poll, forget as forgetScreen } from './screenHub.js';
 import { PROVIDERS } from './providers/catalog.js';
@@ -76,7 +77,7 @@ import {
   previewEnrolment,
   redeemEnrolment,
 } from './devices.js';
-import { pendingAnnouncement, decideAnnouncement } from './modelNews.js';
+import { pendingAnnouncement, decideAnnouncement, markAnnouncementShown } from './modelNews.js';
 import {
   saveUpload,
   verifyOwned,
@@ -220,6 +221,17 @@ export function createApp() {
   });
 
   const wrap = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+
+  /**
+   * Whether a turn is live in this conversation right now.
+   *
+   * Measured against the same staleness the lease itself uses, so a route that
+   * refuses mid-run and the claim that decides who is running can never
+   * disagree — they did, by 45 seconds, and in that window a chat could be
+   * claimed by a new run while still refusing message edits.
+   */
+  const isRunning = (chat) =>
+    !!chat?.run_lock_at && Date.now() - new Date(chat.run_lock_at).getTime() < RUN_LEASE_STALE_MS;
 
   /** `req.body` is undefined in Express 5 when no JSON arrived — never assume it. */
   const body = (req) => req.body || {};
@@ -851,6 +863,17 @@ export function createApp() {
     '/models/news',
     wrap(async (req, res) => {
       try {
+        /**
+         * "It is on their screen now" — not a decision, just an acknowledgement.
+         *
+         * The quiet period used to start when the announcement was *fetched*, so
+         * a response nobody saw spent it and the account was never told. The
+         * browser reports back once the dialog is actually up.
+         */
+        if (req.body?.action === 'shown') {
+          await markAnnouncementShown(req.user.id);
+          return res.json({ ok: true, shown: true });
+        }
         const outcome = await decideAnnouncement(req.user.id, req.body?.id, req.body?.action);
         // Taking it means using it — being told about a model and then having to
         // go and find it in a picker is a half-finished feature.
@@ -2445,7 +2468,7 @@ export function createApp() {
       const store = getStore();
       const chat = await store.getChat(req.user.id, req.params.id);
       if (!chat) return res.status(404).json({ error: 'Chat not found' });
-      if (chat.run_lock_at && Date.now() - new Date(chat.run_lock_at).getTime() < 120_000) {
+      if (isRunning(chat)) {
         return res.status(409).json({ error: 'This conversation is running. Stop it first.' });
       }
 
@@ -2476,6 +2499,18 @@ export function createApp() {
       const chatId = req.params.id;
       const chat = await store.getChat(req.user.id, chatId);
       if (!chat) return res.status(404).json({ error: 'Chat not found' });
+      /**
+       * Not while a turn is running.
+       *
+       * The message-edit route has always refused mid-run, for exactly the
+       * reason this one needed to and did not: writing a summary between an
+       * assistant turn and the tool message answering it means the next turn's
+       * `activeTranscript` slices from the summary, and that assistant turn plus
+       * its results vanish from what the model sees.
+       */
+      if (isRunning(chat)) {
+        return res.status(409).json({ error: 'This conversation is running. Stop it first.' });
+      }
 
       const prefs = await getPrefs(req.user.id);
       const messages = await store.listMessages(req.user.id, chatId);

@@ -12,6 +12,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * contains one, which is exactly the kind of failure that only shows up on a
  * fresh database. Quote state is tracked so a ';' or '--' inside a string
  * literal is left alone.
+ *
+ * **It does not understand dollar-quoting or block comments.** Single quotes and
+ * `--` are handled; `$$ … $$` and `/* … *\/` are not. So the natural way to
+ * write a conditional backfill —
+ *
+ *     DO $$ BEGIN IF NOT EXISTS (…) THEN UPDATE …; END IF; END $$;
+ *
+ * — would be shredded at the inner semicolon and fail as several broken
+ * fragments. Every statement in schema.sql today is a plain CREATE or ALTER, so
+ * this has never mattered; it is written down because the next non-trivial
+ * migration is exactly when somebody reaches for a DO block, and the failure
+ * would look like a syntax error in perfectly good SQL.
  */
 function splitStatements(sql) {
   let stripped = '';
@@ -95,6 +107,37 @@ function splitStatements(sql) {
  *      lease rather than joining it
  */
 export const SCHEMA_VERSION = 16;
+
+/**
+ * How long a run lease may go untouched before another run may take it.
+ *
+ * Exported because two places have to agree on it and did not: this is what
+ * `claimChatRun` treats as dead, while the message-edit route used its own
+ * 120s — so between 75s and 120s a conversation could be claimed by a new run
+ * and still refuse edits, for no reason anybody could see. One number now.
+ */
+export const RUN_LEASE_STALE_MS = 75_000;
+
+/**
+ * How many earlier drafts of a generated document are kept.
+ *
+ * Each one is a full copy of the file's bytes, and nothing pruned them, so this
+ * was the fastest-growing table in the database. Twenty covers what the history
+ * is actually for — going back past a change you regret — without keeping every
+ * draft of a document rewritten fifty times.
+ */
+const KEEP_VERSIONS = 20;
+
+/**
+ * The largest a single stored file may be.
+ *
+ * Defined here because this is the one place every write passes through.
+ * `saveGenerated` checked it and the two *rewrite* paths did not — a document
+ * the assistant regenerated could grow without any limit at all, and each
+ * oversized copy was then filed as a version as well. `attachments.js` imports
+ * this rather than keeping a second number.
+ */
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 export function createPgStore(connectionString) {
   // Accepts a driver object instead of a URL so the tenancy-isolation tests can
@@ -690,7 +733,7 @@ export function createPgStore(connectionString) {
      * @returns the sequence number of this holding, or 0 if the lease was not
      *   granted. Always ≥ 1 on success, so it stays usable as a boolean.
      */
-    async claimChatRun(userId, chatId, runId, staleMs = 75_000) {
+    async claimChatRun(userId, chatId, runId, staleMs = RUN_LEASE_STALE_MS) {
       const rows = await q(
         `UPDATE chats
             SET run_lock_at = NOW(), run_lock_by = $3, run_lock_seq = run_lock_seq + 1
@@ -1005,6 +1048,15 @@ export function createPgStore(connectionString) {
       const current = (await q('SELECT * FROM attachments WHERE id = $1 AND user_id = $2', [id, userId]))[0];
       if (!current || current.origin !== 'generated') return null;
 
+      // Enforced here because all four rewrite paths reach this and only the
+      // upload path checked. See MAX_ATTACHMENT_BYTES.
+      if (Number(bytes) > MAX_ATTACHMENT_BYTES) {
+        throw new Error(
+          `That document came to ${Math.round(Number(bytes) / 1024 / 1024)}MB, over the ` +
+            `${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB limit for a single file.`,
+        );
+      }
+
       const seen = await q(
         'SELECT COALESCE(MAX(revision), 0)::int AS n FROM attachment_versions WHERE attachment_id = $1',
         [id],
@@ -1038,6 +1090,25 @@ export function createPgStore(connectionString) {
       RETURNING id, name, mime, kind, bytes, origin, created_at`,
         [id, userId, data, bytes, source ?? null, name ?? null, mime ?? null],
       );
+
+      /**
+       * Keep the last twenty drafts, not all of them.
+       *
+       * Every rewrite copies the *entire* outgoing file — base64 and all — into
+       * a new row, and nothing was ever removing them: `attachment_versions` is
+       * the fastest-growing table in the database by bytes and appears in no
+       * pruner. A document rewritten fifty times was fifty full copies kept for
+       * ever, for a history nobody scrolls past the first few entries of.
+       *
+       * Twenty is generous for "go back to the one before the change I regret",
+       * which is what the feature is for.
+       */
+      await q(
+        `DELETE FROM attachment_versions
+          WHERE attachment_id = $1 AND user_id = $2 AND revision <= $3`,
+        [id, userId, seen[0].n + 1 - KEEP_VERSIONS],
+      );
+
       return rows[0] ?? null;
     },
 
@@ -1079,7 +1150,8 @@ export function createPgStore(connectionString) {
     async pruneOrphanAttachments(olderThanHours = 24) {
       await q(
         `DELETE FROM attachments
-          WHERE chat_id IS NULL AND created_at < NOW() - ($1 || ' hours')::interval`,
+          WHERE chat_id IS NULL AND origin = 'upload'
+            AND created_at < NOW() - ($1 || ' hours')::interval`,
         [String(olderThanHours)],
       );
     },
@@ -1609,11 +1681,34 @@ export function createPgStore(connectionString) {
      * ships pgvector and the in-process Postgres a laptop runs does not, and the
      * same code has to be correct on both.
      */
+    /**
+     * The extension **and** the column it would query.
+     *
+     * This asked only whether pgvector was installed. `docVectorNearest`
+     * queries `doc_chunks.embedding_vec`, and that column exists nowhere in this
+     * repository — not in schema.sql, not in any migration, and nothing writes
+     * it. So on a database where somebody had run `CREATE EXTENSION vector` by
+     * hand, the probe answered yes and every search then paid one
+     * guaranteed-to-fail round trip before falling back, with the failure
+     * swallowed so it showed up only as latency nobody could explain.
+     *
+     * Asking for the column as well makes the probe mean what its name says.
+     * The streaming fallback is correct and bounded, so answering `false` here
+     * costs nothing but the round trip it saves.
+     */
     async vectorSearchReady() {
       if (vectorReady !== null) return vectorReady;
       try {
-        const rows = await q("SELECT 1 AS ok FROM pg_extension WHERE extname = 'vector'");
-        vectorReady = rows.length > 0;
+        const ext = await q("SELECT 1 AS ok FROM pg_extension WHERE extname = 'vector'");
+        if (!ext.length) {
+          vectorReady = false;
+          return vectorReady;
+        }
+        const column = await q(
+          `SELECT 1 AS ok FROM information_schema.columns
+            WHERE table_name = 'doc_chunks' AND column_name = 'embedding_vec'`,
+        );
+        vectorReady = column.length > 0;
       } catch {
         vectorReady = false;
       }

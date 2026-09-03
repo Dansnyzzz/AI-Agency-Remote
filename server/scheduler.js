@@ -317,7 +317,11 @@ export function startScheduler() {
   if (timer || isServerless()) return;
   timer = setInterval(() => {
     runDueTasks().catch((err) => log.error('scheduled tasks failed', err));
-    sweep();
+    // Caught, like the line above it. `Promise.allSettled` absorbs the query
+    // failures inside `sweep`, but a missing store method — a store that has
+    // drifted from this file — would throw before reaching it, and an
+    // unhandled rejection every sixty seconds takes the process down on Node.
+    sweep().catch((err) => log.error('sweep failed', err));
   }, 60_000);
   timer.unref?.();
 }

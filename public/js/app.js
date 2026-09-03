@@ -3779,7 +3779,12 @@ function showModelNews(model) {
 async function checkModelNews() {
   try {
     const { model } = await api.modelNews();
-    if (model) showModelNews(model);
+    if (!model) return;
+    showModelNews(model);
+    // Only now is the twenty-hour quiet period spent — see markAnnouncementShown.
+    // Not awaited: the dialog is up either way, and a failed acknowledgement
+    // should mean being told again, not losing the dialog.
+    api.decideModelNews(model.id, 'shown').catch(() => {});
   } catch {
     /* never worth interrupting a session over */
   }

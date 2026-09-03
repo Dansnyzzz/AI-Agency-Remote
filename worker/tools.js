@@ -6,6 +6,39 @@ import { spawn } from 'node:child_process';
 import { resolveInWorkspace, workspace, moveWorkspace, rel, fullDiskAccess } from './paths.js';
 import { BROWSER_IMPLEMENTATIONS, browserIsOpen, browserSnapshot, renderPdf, renderImage } from './browser.js';
 import { BACKGROUND_IMPLEMENTATIONS } from './background.js';
+
+/**
+ * Hand a URL or a path to the desktop's default handler, without a shell.
+ *
+ * This used to be `spawn('cmd', ['/c', 'start', '', target])` on Windows, and
+ * that is a command injection. Node does not escape cmd.exe metacharacters: it
+ * quotes an argument only when it contains a space, a tab or a quote, so a
+ * target like `https://example.com/x&calc` — which passes the `^https?://`
+ * test and contains none of those — reached the command line verbatim, and
+ * cmd.exe split it at the bare `&` and ran the second half. The model can be
+ * talked into calling `open_url` by any page it reads, so the attacker input
+ * is a web page, not the user.
+ *
+ * Quoting the target would work and is fragile: `&` is legitimate and common in
+ * real URLs (`?v=x&t=30`), so it cannot simply be rejected, and `%` expansion
+ * survives quotes. Removing cmd.exe removes the entire class instead.
+ * `rundll32 url.dll,FileProtocolHandler` is what the shell itself calls for a
+ * double-click, takes the target as its own argv entry, and never parses it.
+ *
+ * Control characters are refused outright: nothing legitimate carries them, and
+ * a newline is the one thing that could still confuse an argv boundary.
+ */
+function openCommand(target) {
+  // A newline is the one character that could still confuse an argv boundary,
+  // and nothing legitimate carries control characters. Checked by code point
+  // rather than a regex so the source stays readable ASCII.
+  if ([...target].some((ch) => ch.codePointAt(0) < 0x20)) {
+    throw new Error('That address contains control characters and was not opened.');
+  }
+  if (process.platform === 'win32') return ['rundll32.exe', ['url.dll,FileProtocolHandler', target]];
+  if (process.platform === 'darwin') return ['open', [target]];
+  return ['xdg-open', [target]];
+}
 import { safeFetch } from '../server/util/safeFetch.js';
 import { DESKTOP_IMPLEMENTATIONS, desktopAllowed } from './desktop.js';
 import { SYSTEM_IMPLEMENTATIONS } from './system.js';
@@ -766,12 +799,7 @@ function openUrl({ target }) {
     // Each platform has its own "open with the default app" command. On Windows
     // `start` needs an empty title argument first, or a quoted target is taken
     // as the window title and nothing opens.
-    const [command, args] =
-      process.platform === 'win32'
-        ? ['cmd', ['/c', 'start', '', resolved]]
-        : process.platform === 'darwin'
-          ? ['open', [resolved]]
-          : ['xdg-open', [resolved]];
+    const [command, args] = openCommand(resolved);
 
     const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
     child.on('error', (err) => reject(new Error(`Could not open it: ${err.message}`)));
@@ -991,11 +1019,7 @@ async function revealFile({ name, data, how = 'open' }) {
         : process.platform === 'darwin'
           ? ['open', ['-R', target]]
           : ['xdg-open', [folder]]
-      : process.platform === 'win32'
-        ? ['cmd', ['/c', 'start', '', target]]
-        : process.platform === 'darwin'
-          ? ['open', [target]]
-          : ['xdg-open', [target]];
+      : openCommand(target);
 
   const app = how === 'open' ? await defaultApp(extension) : null;
 
