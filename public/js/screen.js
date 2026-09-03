@@ -214,7 +214,12 @@ export function createScreen() {
     drive.setAttribute('aria-pressed', String(on));
     drive.classList.toggle('is-active', on);
     panel.classList.toggle('is-driving', on);
-    drive.title = on ? t('screen.driveOn') : t('screen.driveOff');
+    // Both, or the screen reader keeps announcing the state it was in before:
+    // name-from-content does not apply once an aria-label exists, so a stale one
+    // is what gets read out.
+    const label = on ? t('screen.driveOn') : t('screen.driveOff');
+    drive.title = label;
+    drive.setAttribute('aria-label', label);
     if (on) img.focus();
   };
   drive.addEventListener('click', () => setDriving(!driving));

@@ -96,10 +96,10 @@
         <p class="gate__sub" id="gate-sub">Sign in to continue.</p>
 
         <div id="gate-accounts">
-          <input id="gate-name" class="gate__input gate__input--text" type="text" placeholder="Your name" autocomplete="name" hidden />
-          <input id="gate-email" class="gate__input gate__input--text" type="email" placeholder="you@example.com" autocomplete="email" />
+          <input id="gate-name" class="gate__input gate__input--text" type="text" placeholder="Your name" autocomplete="name" hidden data-i18n-title="gate.name" aria-label="Your name" />
+          <input id="gate-email" class="gate__input gate__input--text" type="email" placeholder="you@example.com" autocomplete="email" data-i18n-title="gate.email" aria-label="Email address" />
           <div class="gate__field" id="gate-password-field">
-            <input id="gate-password" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="Password" autocomplete="current-password" />
+            <input id="gate-password" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="Password" autocomplete="current-password" data-i18n-title="gate.password" aria-label="Password" />
             <button class="gate__reveal" type="button" data-reveal="gate-password" aria-controls="gate-password" aria-pressed="false" aria-label="Show password" title="Show password">
               <svg class="gate__eye gate__eye--shown" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                 <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
@@ -112,14 +112,14 @@
               </svg>
             </button>
           </div>
-          <input id="gate-totp" class="gate__input" type="text" inputmode="numeric" placeholder="Authenticator code" autocomplete="one-time-code" hidden />
+          <input id="gate-totp" class="gate__input" type="text" inputmode="numeric" placeholder="Authenticator code" autocomplete="one-time-code" hidden data-i18n-title="gate.totp" aria-label="Authenticator code" />
         </div>
 
         <!-- Choosing a new password, from either an emailed link or a code. -->
         <div id="gate-newpass" hidden>
-          <input id="gate-resetcode" class="gate__input" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" />
+          <input id="gate-resetcode" class="gate__input" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" data-i18n-title="gate.resetcode" aria-label="The 6-digit code from your email" />
           <div class="gate__field">
-            <input id="gate-newpassword" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="New password" autocomplete="new-password" />
+            <input id="gate-newpassword" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="New password" autocomplete="new-password" data-i18n-title="gate.newpassword" aria-label="New password" />
             <button class="gate__reveal" type="button" data-reveal="gate-newpassword" aria-controls="gate-newpassword" aria-pressed="false" aria-label="Show password" title="Show password">
               <svg class="gate__eye gate__eye--shown" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                 <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
@@ -345,7 +345,7 @@
                 <svg class="find__mark" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
                   <circle cx="9" cy="9" r="5.5" /><path d="m13.2 13.2 3.3 3.3" />
                 </svg>
-                <input id="page-search" type="text" placeholder="Search projects…" autocomplete="off" />
+                <input id="page-search" type="text" placeholder="Search projects…" autocomplete="off" data-i18n-title="pages.searchInput" aria-label="Search projects" />
                 <button class="find__clear" id="page-search-clear" type="button" aria-label="Clear search">✕</button>
               </div>
               <button class="pill" id="page-sort" type="button" hidden></button>
@@ -386,7 +386,7 @@
                    because it is the reason to come here. Nothing is created
                    until it is sent. -->
               <div class="starter">
-                <textarea id="project-page-ask" rows="2" placeholder="How can I help you today?"></textarea>
+                <textarea id="project-page-ask" rows="2" placeholder="How can I help you today?" data-i18n-title="project.askInput" aria-label="Ask about this project"></textarea>
                 <div class="starter__row">
                   <span class="starter__chip" id="project-page-chip"></span>
                   <button class="starter__send" id="project-page-send" type="button" aria-label="Start conversation" disabled>↑</button>
@@ -474,8 +474,7 @@
                 id="file-input"
                 multiple
                 accept="image/*,text/*,application/pdf,application/json,.md,.csv,.log,.yml,.yaml,.ts,.tsx,.js,.jsx,.py,.sql,.xml,.html,.css,.docx,.xlsx,.pptx,.docm,.xlsm,.pptm"
-                hidden
-              />
+                hidden data-i18n-title="composer.attachInput" aria-label="Attach files" />
               <!-- Drawn rather than typed. As the character "+" this sat
                    visibly high in its circle: a text glyph is centred on the
                    font's own maths axis, which is above the middle of the line
@@ -561,10 +560,17 @@
               <span class="screen__live" id="screen-live"></span>
               <span class="tag" id="screen-source">sandbox</span>
               <span class="screen__title" id="screen-title">Screen</span>
-              <button class="icon-btn" id="screen-drive" title="Take control — click and type into the page yourself" aria-pressed="false">🖰</button>
-              <button class="icon-btn" id="screen-stop" title="Close the sandbox browser">✕</button>
-              <button class="icon-btn" id="screen-expand" title="Full size">⤢</button>
-              <button class="icon-btn" id="screen-hide" title="Hide">▾</button>
+              <!-- Same rule as #stop and #send above, and for the same reason:
+                   name-from-content wins over `title`, so with only a glyph
+                   inside these announced as "mouse", "multiplication x", "north
+                   east and south west arrow" and "black down-pointing small
+                   triangle". applyI18n() only rewrites an aria-label that
+                   already exists, so declaring it here is also what makes it
+                   translate — none of these four had data-i18n-title either. -->
+              <button class="icon-btn" id="screen-drive" type="button" data-i18n-title="screen.driveOff" title="Take control — click and type into the page yourself" aria-label="Take control — click and type into the page yourself" aria-pressed="false">🖰</button>
+              <button class="icon-btn" id="screen-stop" type="button" data-i18n-title="screen.close" title="Close the sandbox browser" aria-label="Close the sandbox browser">✕</button>
+              <button class="icon-btn" id="screen-expand" type="button" data-i18n-title="screen.expand" title="Full size" aria-label="Full size">⤢</button>
+              <button class="icon-btn" id="screen-hide" type="button" data-i18n-title="screen.hide" title="Hide" aria-label="Hide">▾</button>
             </header>
             <!-- A real address bar above the picture rather than a caption
                  under it. The panel is a browser window somebody else is
@@ -695,8 +701,7 @@
             autocomplete="off"
             autocapitalize="characters"
             spellcheck="false"
-            maxlength="9"
-          />
+            maxlength="9" data-i18n-title="pair.codeInput" aria-label="Pairing code from your computer" />
           <button class="btn btn--ghost" id="pair-submit" type="button">Pair</button>
         </div>
         <p class="hint" id="pair-status"></p>
@@ -776,6 +781,8 @@
             type="search"
             placeholder="Search — try &quot;free claude&quot;, &quot;>200k&quot;, &quot;&lt;$1&quot;, or paste a model id"
             autocomplete="off"
+            data-i18n-title="models.searchInput"
+            aria-label="Search models"
           />
           <button class="search__clear" id="model-search-clear" type="button" hidden aria-label="Clear">✕</button>
         </div>
@@ -798,7 +805,7 @@
 
         <div class="browser__row" id="vendor-row">
           <div class="chips" id="family-filter"></div>
-          <select id="model-sort" class="mini-select" title="Sort order">
+          <select id="model-sort" class="mini-select" title="Sort order" data-i18n-title="models.sortInput" aria-label="Sort order">
             <option value="new">Newest first</option>
             <option value="old">Oldest first</option>
             <option value="name">Name A–Z</option>
@@ -847,7 +854,7 @@
                three characters. A real regular expression is one line away in
                the chat, where `grep` already lives. -->
           <input class="workspace__find" id="workspace-find" type="search"
-                 placeholder="Search in these files…  ↵" autocomplete="off" />
+                 placeholder="Search in these files…  ↵" autocomplete="off" data-i18n-title="workspace.findInput" aria-label="Search in these files" />
           <button class="btn btn--ghost" id="workspace-new" type="button" formnovalidate>New file</button>
           <button class="icon-btn" value="close" aria-label="Close">✕</button>
         </div>
@@ -1045,7 +1052,7 @@
       <div class="browser__controls">
         <div class="search">
           <span class="search__icon" aria-hidden="true">⌕</span>
-          <input id="search-input" type="search" placeholder="Search titles and everything said" autocomplete="off" />
+          <input id="search-input" type="search" placeholder="Search titles and everything said" autocomplete="off" data-i18n-title="search.inputLabel" aria-label="Search titles and everything said" />
           <button class="search__clear" id="search-clear" type="button" hidden aria-label="Clear">✕</button>
         </div>
       </div>
@@ -1244,7 +1251,7 @@
             <textarea id="task-prompt" rows="4" placeholder="Read the reports in D:\campaigns and summarise the week."></textarea>
           </div>
           <div class="row">
-            <input type="text" id="task-when" placeholder="17:00 or fri 17:00" style="max-width:12rem" />
+            <input type="text" id="task-when" placeholder="17:00 or fri 17:00" style="max-width:12rem" data-i18n-title="task.whenInput" aria-label="When to run it" />
             <label class="row" style="gap:6px">
               <input type="checkbox" id="task-repeat" checked /> repeat
             </label>
