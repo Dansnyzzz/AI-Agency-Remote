@@ -642,12 +642,24 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n  ${signal} — stopping background commands…`);
-  const [{ stopAllBackground }, { closeBrowser }] = await Promise.all([
+  /**
+   * The desktop host and its camera belong in here too, and were missing.
+   *
+   * `stopDesktop` existed and was exported and called by nothing, so Ctrl-C
+   * stopped the background commands and the browser and left the PowerShell
+   * host and the screen-capture process running — the capture one still
+   * grabbing the whole desktop several times a second, for a worker that had
+   * exited. That is precisely the "process nobody remembers to stop" this
+   * function was written to prevent, one import short of doing it.
+   */
+  const [{ stopAllBackground }, { closeBrowser }, { stopDesktop }] = await Promise.all([
     import('./background.js'),
     import('./browser.js'),
+    import('./desktop.js'),
   ]);
   await stopAllBackground().catch(() => {});
   await closeBrowser().catch(() => {});
+  await stopDesktop().catch(() => {});
   console.log('  Local access is cut off.\n');
   process.exit(0);
 }

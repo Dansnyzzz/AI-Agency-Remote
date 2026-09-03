@@ -16,6 +16,15 @@ let sink = null;
 let watching = true; // optimistic: the opening seconds are when people look
 let active = null; // { name, stop }
 let lastWatchedAt = Date.now();
+
+/**
+ * How long frames may keep failing before this decides nobody is watching.
+ *
+ * Long enough that a reconnect, a redeploy or a few seconds of bad wifi does not
+ * stop a live session; short enough that a worker whose server has gone away
+ * stops capturing the screen rather than doing it indefinitely.
+ */
+const UNREACHABLE_GRACE_MS = 30_000;
 /** What the people watching have asked for — currently just "show it big". */
 let preference = { hd: false };
 
@@ -46,7 +55,22 @@ export async function publishFrame(payload) {
     if (watching) lastWatchedAt = Date.now();
     return watching;
   } catch {
-    // A dropped frame is never worth failing the action that produced it.
+    /**
+     * A dropped frame is never worth failing the action that produced it — but
+     * it must not read as "somebody is still watching" for ever either.
+     *
+     * This returned the *previous* `watching` value, so once the server became
+     * unreachable the answer stayed `true` permanently: nothing ever cleared
+     * it, the source never got its cue to stop, and the capture loop went on
+     * grabbing the whole desktop several times a second for a viewer that was
+     * not there and a server that could not be reached.
+     *
+     * The grace window is what keeps a single blip from stopping a live
+     * session. Past it, sustained failure is treated as nobody watching, which
+     * is both the safe answer and almost certainly the true one — and the next
+     * frame that does get through sets it straight back.
+     */
+    if (watching && Date.now() - lastWatchedAt > UNREACHABLE_GRACE_MS) watching = false;
     return watching;
   }
 }
