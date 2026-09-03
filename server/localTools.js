@@ -25,34 +25,86 @@ export function usesInProcessTools(user) {
 }
 
 let runtime = null;
+/** In-flight load, so two concurrent first calls do not both build it. */
+let runtimePending = null;
+/**
+ * The one account these local tools belong to.
+ *
+ * There is one browser, one workspace and one screen in this process — the
+ * runtime is a singleton and cannot be otherwise, because it *is* the machine.
+ * The sinks below, though, were rebound on every call with a closure over
+ * whichever user asked last. On a locally-run server with more than one admin
+ * (the only accounts that reach these tools at all) that meant admin A could
+ * start a browser session, admin B take a turn, and A's next captured frame be
+ * published to B's screen hub and drawn in B's panel — a photograph of somebody
+ * else's desktop. Indexed document chunks went the same way, deciding which
+ * account's `doc_chunks` rows they became.
+ *
+ * Rebinding cannot be made safe, because the thing behind the sink is shared:
+ * two admins driving one browser is a race whatever the frames are addressed
+ * to. So the machine belongs to whoever claimed it, and a second admin is told
+ * plainly rather than quietly shown the first one's screen.
+ */
+let owner = null;
 
 async function loadRuntime() {
   if (runtime) return runtime;
-  const [{ setWorkspace }, tools, screen, indexer] = await Promise.all([
-    import('../worker/paths.js'),
-    import('../worker/tools.js'),
-    import('../worker/screen.js'),
-    import('../worker/indexer.js'),
-  ]);
-  setWorkspace(process.env.WORKSPACE || path.join(os.homedir(), 'AI-Remote-Workspace'));
-  runtime = { implementations: tools.LOCAL_IMPLEMENTATIONS, info: tools.workerInfo(), screen, indexer };
-  return runtime;
+  // Two concurrent first calls both saw `runtime === null` and both ran the
+  // imports and `setWorkspace`. Harmless in practice and trivially avoidable.
+  if (runtimePending) return runtimePending;
+
+  runtimePending = (async () => {
+    const [{ setWorkspace }, tools, screen, indexer] = await Promise.all([
+      import('../worker/paths.js'),
+      import('../worker/tools.js'),
+      import('../worker/screen.js'),
+      import('../worker/indexer.js'),
+    ]);
+    setWorkspace(process.env.WORKSPACE || path.join(os.homedir(), 'AI-Remote-Workspace'));
+    runtime = { implementations: tools.LOCAL_IMPLEMENTATIONS, info: tools.workerInfo(), screen, indexer };
+    return runtime;
+  })();
+
+  try {
+    return await runtimePending;
+  } finally {
+    runtimePending = null;
+  }
 }
 
 export async function inProcessImplementations(user) {
   const { screen, implementations, indexer } = await loadRuntime();
 
-  // Running in the server process there is no HTTP hop for frames — hand them
-  // straight to the hub, and answer the same "is anyone looking?" question the
-  // worker gets over the wire.
-  screen.setFrameSink(async ({ frame, ...meta }) => publish(user.id, frame, meta));
+  if (owner && owner !== user.id) {
+    throw new Error(
+      'The local tools on this machine are already in use by another account on this server. ' +
+        'Only one account can drive one computer at a time — pair a worker to use your own machine instead.',
+    );
+  }
 
-  // Same for chunked documents: the embedding key is in this very process, so
-  // the batch goes straight to the ingester rather than out and back over HTTP.
-  indexer.setIndexSink((payload) => handleIndexPayload(user.id, payload));
+  if (owner !== user.id) {
+    owner = user.id;
+
+    // Bound once, to the owner, rather than re-bound to whoever asked last.
+    // Running in the server process there is no HTTP hop for frames — hand them
+    // straight to the hub, and answer the same "is anyone looking?" question the
+    // worker gets over the wire.
+    screen.setFrameSink(async ({ frame, ...meta }) => publish(owner, frame, meta));
+
+    // Same for chunked documents: the embedding key is in this very process, so
+    // the batch goes straight to the ingester rather than out and back over HTTP.
+    indexer.setIndexSink((payload) => handleIndexPayload(owner, payload));
+  }
 
   return implementations;
 }
+
+/** Exposed so a test can hand the machine to a different account. */
+export const __testing = {
+  releaseLocalTools() {
+    owner = null;
+  },
+};
 
 /**
  * One batch from the indexer, whichever way it arrived.

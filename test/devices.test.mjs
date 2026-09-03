@@ -833,8 +833,8 @@ section('new-model announcement');
   check('asked once per account', (await alice.call('GET', '/api/models/news')).json?.model === null);
 
   // Alice's decision is Alice's. Checked against the stored state rather than by
-  // re-asking, because Bob is inside his own once-a-day quiet period — asking
-  // would answer null for a completely different and equally correct reason.
+  // re-asking, because what is on trial is whose record was written — and reading
+  // it directly says that, where a second GET would only say what Bob is offered.
   const bobId = (await store.getUserByEmail('bob@example.com')).id;
   const bobState = await store.getUserSetting(bobId, 'modelNews');
   check(

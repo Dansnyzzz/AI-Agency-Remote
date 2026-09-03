@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { t } from './i18n.js';
 import { escapeHtml } from './markdown.js';
 
 /**
@@ -73,14 +74,20 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
   return {
     /** The shell calls this when the shelf is left, so the timer dies with it. */
     onHide: stopPolling,
-    title: 'Workflows',
-    newLabel: 'New workflow',
-    orderLabel: 'Sort by',
+    get title() {
+      return t('wf.title');
+    },
+    get newLabel() {
+      return t('wf.new');
+    },
+    get orderLabel() {
+      return t('pages.sortBy');
+    },
     lede:
       'Several steps, in order, run without anyone watching. Each step sees what the last one produced, ' +
       'and a run that is interrupted carries on where it stopped rather than starting again.',
     orders: [
-      { id: 'recent', label: 'Recently added' },
+      { id: 'recent', label: t('wf.order.recent') },
       { id: 'name', label: 'Name' },
     ],
 
@@ -96,23 +103,22 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
 
     newMenu: () => [
       {
-        label: 'Describe it to the assistant',
+        label: t('wf.describe'),
         icon: '💬',
         run: () => {
           onLeave();
-          toast('Say the steps in order — "every Monday: pull the numbers, chart them, email the team".');
+          toast(t('wf.describeHint'));
         },
       },
-      { label: 'Set up manually', icon: '⚙', run: () => openForm() },
+      { label: t('wf.manual'), icon: '⚙', run: () => openForm() },
     ],
 
     render: (list) => {
       if (!list.length) {
         return blank(
           workflowMark,
-          'No workflows yet.',
-          'Use one when a job has stages that must happen in order — and when repeating a stage by ' +
-            'accident would be a problem. A single instruction is a scheduled task instead.',
+          t('wf.none'),
+          t('wf.noneHint'),
         );
       }
 
@@ -152,18 +158,18 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
               <div class="wf__name">${escapeHtml(wf.title)}</div>
               <div class="wf__when">
                 ${escapeHtml(wf.cron ? `every ${wf.cron}` : 'runs when you press it')}
-                ${wf.enabled ? '' : ' · paused'}
-                ${run ? ` · last run ${escapeHtml(RUN_LOOK[run.status] || run.status)}` : ' · never run'}
+                ${wf.enabled ? '' : ` · ${escapeHtml(t('wf.paused'))}`}
+                ${run ? ` · ${escapeHtml(t('wf.lastRun').replace('{status}', RUN_LOOK[run.status] || run.status))}` : ` · ${escapeHtml(t('wf.neverRun'))}`}
               </div>
             </div>
             <div class="wf__acts">
-              ${run?.chat_id ? `<button class="task__act" data-open="${escapeHtml(run.chat_id)}">Open result</button>` : ''}
-              <button class="task__act" data-run="${escapeHtml(wf.id)}">Run now</button>
-              <button class="task__act" data-edit="${escapeHtml(wf.id)}">Edit</button>
+              ${run?.chat_id ? `<button class="task__act" data-open="${escapeHtml(run.chat_id)}">${escapeHtml(t('wf.openResult'))}</button>` : ''}
+              <button class="task__act" data-run="${escapeHtml(wf.id)}">${escapeHtml(t('wf.runNow'))}</button>
+              <button class="task__act" data-edit="${escapeHtml(wf.id)}">${escapeHtml(t('wf.edit'))}</button>
               <button class="task__act" data-toggle="${escapeHtml(wf.id)}" data-on="${!!wf.enabled}">${
-                wf.enabled ? 'Pause' : 'Resume'
+                wf.enabled ? t('wf.pause') : t('wf.resume')
               }</button>
-              <button class="task__act" data-drop="${escapeHtml(wf.id)}">Remove</button>
+              <button class="task__act" data-drop="${escapeHtml(wf.id)}">${escapeHtml(t('wf.remove'))}</button>
             </div>
           </div>
           ${attention}
@@ -199,14 +205,14 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
           // presses it a second time and starts a second run.
           const was = button.textContent;
           button.disabled = true;
-          button.textContent = 'Running…';
+          button.textContent = t('wf.running');
           try {
             const { run } = await api.runWorkflow(button.dataset.run);
             toast(
               run?.status === 'done'
-                ? 'Finished.'
+                ? t('wf.finished')
                 : run?.status === 'running'
-                  ? 'Started — it will carry on in the background.'
+                  ? t('wf.startedBackground')
                   : `Stopped: ${RUN_LOOK[run?.status] || run?.status || 'unknown'}.`,
             );
           } catch (err) {
@@ -237,7 +243,7 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
         button.addEventListener('click', async () => {
           if (!ready) {
             ready = true;
-            button.textContent = 'Remove?';
+            button.textContent = t('wf.removeConfirm');
             setTimeout(() => {
               ready = false;
               button.textContent = original;
@@ -284,7 +290,7 @@ export function workflowForm({ toast, reload }) {
       }
     }
 
-    $('workflow-form-title').textContent = workflow ? 'Edit workflow' : 'Create workflow';
+    $('workflow-form-title').textContent = workflow ? t('wf.formEdit') : t('wf.formCreate');
     $('workflow-form-name').value = workflow?.title || '';
     $('workflow-form-steps').value = (workflow?.steps || []).map((s) => s.instruction).join('\n');
     $('workflow-form-when').value = workflow?.cron || '';
@@ -306,7 +312,7 @@ export function workflowForm({ toast, reload }) {
     // Checked here as well as on the server, because the server's answer to an
     // empty workflow is a 400 and this is a nicer place to hear it.
     if (!steps.length) {
-      error.textContent = 'Give it at least one step — one instruction per line.';
+      error.textContent = t('wf.needStep');
       return;
     }
 
@@ -322,7 +328,7 @@ export function workflowForm({ toast, reload }) {
       else await api.createWorkflow(payload);
 
       sheet().close();
-      toast(editing ? 'Saved.' : 'Created.');
+      toast(editing ? t('wf.saved') : t('wf.created'));
       reload();
     } catch (err) {
       error.textContent = err.message;

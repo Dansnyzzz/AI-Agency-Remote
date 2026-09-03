@@ -97,7 +97,22 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
     return { isError: false, content: String(result.output ?? ''), shot: result.shot || undefined };
   }
 
-  await store.completeJob(userId, id, { status: 'error', result: { error: 'Timed out.' } });
+  // Only if it is genuinely still open. The worker may have finished and be
+  // posting its answer right now, and overwriting that with "Timed out." both
+  // loses the result and tells the model to run the whole thing again.
+  await store.completeJob(userId, id, {
+    status: 'error',
+    result: { error: 'Timed out.' },
+    onlyIfOpen: true,
+  });
+
+  // Re-read before reporting: if the worker's answer landed during the grace
+  // window, that is the truth and the timeout was a false alarm.
+  const late = await store.getJob(userId, id).catch(() => null);
+  if (late && late.status === 'done' && !late.result?.error) {
+    return { isError: false, content: String(late.result?.output ?? ''), shot: late.result?.shot || undefined };
+  }
+
   return {
     isError: true,
     content: `The worker did not answer within ${Math.round(timeoutMs / 1000)}s. It may be offline, or the command may have hung.`,
@@ -109,7 +124,7 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
  * thrown error would break the agent loop where the model could otherwise read
  * the failure and adjust.
  */
-export async function executeTool({ user, name, input, chatId, signal, deviceHint }) {
+export async function executeTool({ user, name, input, chatId, signal, deviceHint, deliverable }) {
   const userId = user.id;
 
   /**
@@ -144,7 +159,10 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
       if (!impl) return { isError: true, content: `Tool "${name}" has no implementation.` };
       // The whole user, not just the id: delegating to sub-agents needs the
       // account's model, preferences and worker, not merely a key to scope by.
-      const result = await impl(input || {}, { userId, user, chatId, signal });
+      // `deliverable` is the set of tool names this account can actually be
+      // given this turn. Only `load_tools` reads it, and only so it stops
+      // promising tools that will never arrive — see loadToolsTool.
+      const result = await impl(input || {}, { userId, user, chatId, signal, deliverable });
 
       /**
        * A tool may hand back more than a sentence.
@@ -156,7 +174,28 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
        * else still returns a string and is untouched.
        */
       if (result && typeof result === 'object' && 'content' in result) {
-        return { isError: false, content: String(result.content ?? ''), file: result.file };
+        /**
+         * `widget` travels too, and forgetting it made two whole tools inert.
+         *
+         * `chart` and `show_widget` both return `{ content, widget }` (see
+         * cloud.js), the agent loop already attaches `widget` to the tool result
+         * (agent.js), and the browser already draws `result.widget.markup`
+         * (render.js). The plumbing existed at both ends and was cut exactly
+         * here — the local branch below learned to forward `shot`, and this one
+         * never learned about `widget`.
+         *
+         * The failure was invisible from the model's side, which is what made
+         * it survive: `chart` answered "Drew the bar chart in the conversation.
+         * The user can see it, so say what it shows rather than listing the
+         * numbers again", so the model confidently described a picture that was
+         * never drawn — not live, and not on reload.
+         */
+        return {
+          isError: false,
+          content: String(result.content ?? ''),
+          file: result.file,
+          widget: result.widget,
+        };
       }
       return { isError: false, content: String(result ?? '') };
     }
@@ -189,7 +228,20 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
       return { isError: false, content: String(output ?? '') };
     }
 
-    const timeoutMs = Math.min(Number(input?.timeout_ms) || DEFAULT_LOCAL_TIMEOUT_MS, 600_000);
+    /**
+     * The server waits a little longer than the worker does.
+     *
+     * The worker kills a command at `timeout_ms` and only *then* serialises its
+     * output and posts the result back. With both deadlines identical — which is
+     * exactly what asking for the maximum produced — the server gave up while
+     * that round trip was still in flight, overwrote the job with "Timed out.",
+     * and told the model the command had not finished. It had. The worker's real
+     * answer landed a moment later and was never read, and the model, told the
+     * build had timed out, ran it again.
+     */
+    const GRACE_MS = 15_000;
+    const timeoutMs =
+      Math.min(Number(input?.timeout_ms) || DEFAULT_LOCAL_TIMEOUT_MS, 600_000) + GRACE_MS;
     return await runViaWorker({ user, userId, name, input: input || {}, chatId, timeoutMs, signal, deviceHint });
   } catch (err) {
     return { isError: true, content: `${name} failed: ${safeError(err) || String(err)}` };

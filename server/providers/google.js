@@ -1,4 +1,49 @@
 import { GoogleGenAI } from '@google/genai';
+import { normaliseStop } from './stop.js';
+
+/**
+ * The effort dial, in Gemini's units.
+ *
+ * The dial in the interface reached Anthropic (`output_config.effort`) and the
+ * reasoning models behind the OpenAI shape (`reasoning_effort`), and reached
+ * Gemini not at all: this adapter sent `{ includeThoughts: true }` and nothing
+ * else, so a conversation set to "low" thought exactly as hard — and cost
+ * exactly as much — as one set to "max". A setting that silently does nothing
+ * on a third of the providers is worse than no setting.
+ *
+ * `thinkingLevel` is the current control and takes MINIMAL / LOW / MEDIUM /
+ * HIGH. Our scale has two rungs above Gemini's top one, so both land on HIGH —
+ * asking for more than a provider offers is not a reason to send it something
+ * it will reject.
+ */
+const THINKING_LEVEL = {
+  low: 'LOW',
+  medium: 'MEDIUM',
+  high: 'HIGH',
+  xhigh: 'HIGH',
+  max: 'HIGH',
+};
+
+/**
+ * What one `usageMetadata` block is worth.
+ *
+ * `cachedContentTokenCount` is a subset of `promptTokenCount`, exactly as the
+ * Anthropic cache figures are a subset of the prompt there — so it rides
+ * alongside the total rather than being netted out of it, and `estimateCost`
+ * can charge it at the cached rate instead of the full one.
+ *
+ * `thoughtsTokenCount` is billed as output and is *not* included in
+ * `candidatesTokenCount`, so it has to be added rather than assumed.
+ */
+function readUsage(meta) {
+  if (!meta) return null;
+  return {
+    input: meta.promptTokenCount || 0,
+    output: (meta.candidatesTokenCount || 0) + (meta.thoughtsTokenCount || 0),
+    cacheRead: meta.cachedContentTokenCount || 0,
+    reasoning: meta.thoughtsTokenCount || 0,
+  };
+}
 
 /** Gemini accepts an OpenAPI subset — unknown JSON Schema keywords are rejected. */
 function toGeminiSchema(schema) {
@@ -76,9 +121,11 @@ function toContents(messages) {
 export async function* streamGoogle({
   apiKey,
   model,
+  entry,
   system,
   messages,
   tools,
+  effort = 'high',
   maxTokens = 32000,
   signal,
 }) {
@@ -100,7 +147,19 @@ export async function* streamGoogle({
           ],
         }
       : {}),
-    thinkingConfig: { includeThoughts: true },
+    /**
+     * Reasoning is shown live in the interface, so ask for the summaries; and
+     * ask for the depth the user actually chose.
+     *
+     * `thinkingLevel` is opt-out per catalogue entry for the same reason
+     * `effort` is on the Anthropic side — an older model rejects the field
+     * outright, and a rejected request is a worse outcome than an unhonoured
+     * dial.
+     */
+    thinkingConfig: {
+      includeThoughts: true,
+      ...(entry?.effort === false ? {} : { thinkingLevel: THINKING_LEVEL[effort] || 'HIGH' }),
+    },
     abortSignal: signal,
   };
 
@@ -115,13 +174,7 @@ export async function* streamGoogle({
   for await (const chunk of stream) {
     const candidate = chunk.candidates?.[0];
     if (candidate?.finishReason) stopReason = candidate.finishReason;
-    if (chunk.usageMetadata) {
-      usage = {
-        input: chunk.usageMetadata.promptTokenCount || 0,
-        output:
-          (chunk.usageMetadata.candidatesTokenCount || 0) + (chunk.usageMetadata.thoughtsTokenCount || 0),
-      };
-    }
+    if (chunk.usageMetadata) usage = readUsage(chunk.usageMetadata);
 
     for (const part of candidate?.content?.parts || []) {
       /**
@@ -160,8 +213,16 @@ export async function* streamGoogle({
     }
   }
 
-  yield { type: 'done', stopReason, toolCalls, usage };
+  yield {
+    type: 'done',
+    stopReason,
+    // `SAFETY`, `RECITATION` and `MAX_TOKENS` all end a reply early, and all
+    // three used to reach the browser looking like a finished answer.
+    stop: normaliseStop(stopReason),
+    toolCalls,
+    usage,
+  };
 }
 
 /** Exposed so the suite can assert what Gemini is actually handed. */
-export const __testing = { toContents };
+export const __testing = { toContents, readUsage, THINKING_LEVEL };

@@ -117,6 +117,307 @@ export const vi = {
   // thứ phân biệt 'đang chờ' với 'không biết chuyện gì'.
   'status.waiting': 'Đang chờ {model} bắt đầu — {n}s',
   'status.waitingFree': 'Đang chờ {model} — model miễn phí phải xếp hàng lúc đông ({n}s). Đổi model nếu lâu quá.',
+
+  /* ── vì sao câu trả lời dừng lại ─────────────────────────────────
+   *
+   * Chỉ hiện khi câu trả lời *chưa* trọn vẹn. Ba trong số này trước đây kết
+   * thúc y hệt một lượt bình thường: luồng ngắt, vòng quay biến mất, và đoạn
+   * cuối đơn giản là không có kết. Nói rõ đã xảy ra chuyện gì chính là khác
+   * biệt giữa "trợ lý đã trả lời" và "trợ lý bị cắt ngang".
+   */
+  'stop.truncated':
+    'Bị cắt ngang — câu trả lời chạm giới hạn độ dài đầu ra của model này. Bảo nó viết tiếp, hoặc chọn model có giới hạn đầu ra lớn hơn.',
+  'stop.refused':
+    'Hệ thống an toàn của nhà cung cấp đã từ chối yêu cầu này nên model không tạo ra gì cả. Hãy diễn đạt lại, hoặc đổi model.',
+  'stop.filtered':
+    'Bộ lọc nội dung của nhà cung cấp đã chặn câu trả lời này. Phần bạn thấy chỉ là phần lọt qua được.',
+  'stop.recitation':
+    'Dừng lại vì câu trả lời đang chép lại tài liệu nguồn quá sát. Hỏi lại bằng lời của bạn thì thường sẽ qua.',
+  'stop.unknown': 'Nhà cung cấp kết thúc câu trả lời này mà không nói lý do.',
+
+  'approval.title': 'Duyệt các hành động này?',
+  'composer.label': 'Tin nhắn',
+
+  /* ── chính khung hội thoại ───────────────────────────────────────
+   *
+   * Những chuỗi này người dùng gặp ở *mọi* lượt — phần suy luận gập lại, kết
+   * quả của một tool, các nút trên một tài liệu — mà trước đây đều là tiếng
+   * Anh cứng, trong khi nút đổi ngôn ngữ trong Cài đặt lại nói ngược lại.
+   */
+  'chat.reasoning': 'Suy luận',
+  'chat.noOutput': '(không có kết quả)',
+  'chat.noResult': '(không ghi nhận được kết quả)',
+  'chat.diagram': 'Sơ đồ',
+  'chat.open': 'Mở',
+  'chat.download': 'Tải về',
+  'chat.openNamed': 'Mở {name}',
+  'chat.copy': 'Sao chép',
+  'chat.edit': 'Sửa',
+  'chat.summaryFold': 'Đọc bản tóm tắt',
+  'chat.compacted': 'Đã tóm tắt {n} tin nhắn cũ để lấy thêm chỗ',
+  'chat.compactedOne': 'Đã tóm tắt 1 tin nhắn cũ để lấy thêm chỗ',
+
+  /* ── những gì hiện ra trong lúc một lượt đang chạy ───────────── */
+  'status.reconnecting': 'Đang kết nối lại…',
+  'status.restarting': 'Đang viết lại câu trả lời đó…',
+  'status.paused': 'Đã tạm dừng sau nhiều lần nối lại. Gửi một tin nhắn để chạy tiếp.',
+  'status.streamFailed': 'Luồng dữ liệu bị lỗi.',
+  'status.queued': 'Đã gửi — trợ lý sẽ đọc ở bước kế tiếp.',
+  'status.pickedUp': 'Đã tiếp nhận: "{text}"',
+  'status.folded': 'Đã gộp {n} tin nhắn cũ thành một bản tóm tắt để lấy thêm chỗ.',
+  'usage.tokens': '{n} token',
+  'usage.thisTurn': 'lượt này',
+  'usage.cached': '{n}% từ cache',
+  /* ── chip chế độ, ngay cạnh nút Gửi ──────────────────────────────
+   *
+   * Năm chế độ và câu giải thích cho từng cái. Nó nằm ngay cạnh nút gửi — thứ
+   * được nhìn nhiều nhất trong app — mà trước đây luôn là tiếng Anh.
+   */
+  'policy.guarded.label': 'Có kiểm soát',
+  'policy.ask.label': 'Hỏi trước',
+  'policy.auto.label': 'Tự chạy',
+  'policy.plan.label': 'Lập kế hoạch',
+  'policy.readonly.label': 'Chỉ đọc',
+  'policy.guarded.hint':
+    'Đọc, sửa file trong workspace, điều khiển trình duyệt và các lệnh thường ngày đều chạy thẳng. ' +
+    'Xoá, ghi ra ngoài workspace, đụng vào đường dẫn hệ thống Windows và đóng cửa sổ chưa lưu thì dừng lại hỏi. ' +
+    'Phép kiểm tra đó là một danh sách các mẫu nguy hiểm đã biết, không phải sandbox — thứ phá hoại mà nó chưa biết vẫn sẽ chạy.',
+  'policy.auto.hint': 'Không chặn gì cả, kể cả hành động phá huỷ. Nhanh nhất, và cũng là cái có thể làm mất việc.',
+  'policy.ask.hint': 'Mọi thay đổi đều chờ bạn duyệt. An toàn nhất, và cũng làm phiền nhất — bạn sẽ bị hỏi rất nhiều.',
+  'policy.plan.hint': 'Tìm hiểu và đọc, rồi trả về một kế hoạch thay vì tự làm. Không có gì trên máy bạn bị thay đổi.',
+  'policy.readonly.hint': 'Trợ lý được xem, nhưng các tool có thể thay đổi bất cứ thứ gì thì không bao giờ được đưa cho nó.',
+
+  /* Model được yêu cầu nghĩ kỹ tới mức nào, năm nấc từ rẻ tới cẩn thận. */
+  'effort.low': 'Thấp',
+  'effort.medium': 'Vừa',
+  'effort.high': 'Cao',
+  'effort.xhigh': 'Rất cao',
+  'effort.max': 'Tối đa',
+  /* ── các kệ: Dự án, Tệp đã tạo, Chạy theo giờ ────────────────────
+   *
+   * Bốn màn hình gọi t() đúng 0 lần. Hai từ điển vẫn khớp nhau suốt thời gian
+   * đó — chính vì vậy test:i18n không hề phát hiện ra.
+   */
+  'pages.projects.title': 'Dự án',
+  'pages.projects.new': 'Dự án mới',
+  'pages.sortBy': 'Sắp xếp theo',
+  'pages.filterBy': 'Lọc theo',
+  'pages.order.updated': 'Sửa gần nhất',
+  'pages.order.created': 'Ngày tạo',
+  'pages.order.name': 'Tên',
+  'pages.order.archived': 'Đã lưu trữ',
+  'pages.projects.noneMatch': 'Không có dự án nào khớp.',
+  'pages.projects.none': 'Chưa có dự án nào.',
+  'pages.projects.noneHint':
+    'Một dự án gom hướng dẫn và tài liệu của nó vào một chỗ, và mọi hội thoại mở trong đó đều trả lời dựa trên các tài liệu ấy.',
+  'pages.projects.archivedNoneMatch': 'Không có dự án lưu trữ nào khớp.',
+  'pages.projects.archivedNone': 'Chưa lưu trữ gì.',
+  'pages.pinned': 'Đã ghim',
+  'pages.optionsFor': 'Tuỳ chọn cho {name}',
+
+  'pages.artifacts.title': 'Tệp đã tạo',
+  'pages.artifacts.new': 'Tệp mới',
+  'pages.artifacts.none': 'Chưa có tệp nào.',
+  'pages.artifacts.noneMatch': 'Không có gì khớp.',
+  'pages.artifacts.newHint': 'Cứ nói bạn muốn tạo gì — một báo cáo, một bảng tính, một trang nhỏ.',
+  'pages.kind.all': 'Tất cả',
+  'pages.kind.page': 'Trang',
+  'pages.kind.code': 'Mã nguồn',
+  'pages.kind.document': 'Văn bản',
+  'pages.kind.sheet': 'Bảng tính',
+  'pages.kind.deck': 'Slide',
+
+  'pages.tasks.title': 'Việc chạy theo giờ',
+  'pages.tasks.new': 'Việc mới',
+  'pages.tasks.none': 'Chưa đặt việc nào.',
+  'pages.order.next': 'Lần chạy tới',
+  'pages.tasks.describe': 'Mô tả cho trợ lý',
+  'pages.tasks.describeHint': 'Nói nó chạy gì và khi nào — "8 giờ sáng mỗi ngày trong tuần, tìm…"',
+  'pages.tasks.manual': 'Tự thiết lập',
+  'pages.tasks.scheduled': 'Đã đặt lịch.',
+  'pages.tasks.openResult': 'Mở kết quả',
+  'pages.tasks.pause': 'Tạm dừng',
+  'pages.tasks.resume': 'Chạy lại',
+  'pages.tasks.remove': 'Xoá',
+  'pages.tasks.removeConfirm': 'Xoá nhé?',
+  'pages.tasks.every': 'mỗi {cron}',
+  'pages.tasks.once': 'một lần',
+  'pages.tasks.next': 'lần tới {when}',
+  'pages.tasks.paused': 'đang tạm dừng',
+  'pages.tasks.last': 'lần trước {status}',
+
+  /* Bốn gợi ý mở đầu hiện ra khi kệ Chạy theo giờ còn trống. */
+  'pages.idea.briefing.name': 'Tóm tắt buổi sáng',
+  'pages.idea.briefing.what': 'Đêm qua có gì thay đổi trong những thứ bạn theo dõi, đã tìm và tóm tắt sẵn.',
+  'pages.idea.briefing.when': 'Các ngày trong tuần lúc 08:00',
+  'pages.idea.watch.name': 'Theo dõi một chủ đề',
+  'pages.idea.watch.what': 'Kiểm tra tin tức về một chủ đề, và chỉ lên tiếng khi thật sự có gì mới.',
+  'pages.idea.watch.when': 'Hằng ngày lúc 09:00',
+  'pages.idea.report.name': 'Báo cáo tuần',
+  'pages.idea.report.what': 'Một file Word tóm tắt cả tuần, tạo sẵn và để lại trong hội thoại.',
+  'pages.idea.report.when': 'Thứ sáu lúc 16:00',
+  'pages.idea.tests.name': 'Kiểm tra thư mục làm việc',
+  'pages.idea.tests.what': 'Chạy test trên máy bạn và báo lại cái nào hỏng.',
+  'pages.idea.tests.when': 'Các ngày trong tuần lúc 09:00',
+  /* Thời gian tương đối, và hai con số trên thẻ dự án. Tiếng Việt không biến
+     đổi danh từ theo số nhiều, nên đây là cả cụm chứ không phải gốc từ cộng
+     's' — cũng chính vì thế mà `plural()` không dịch thẳng được. */
+  'when.justNow': 'vừa xong',
+  'when.minutes': '{n} phút trước',
+  'when.hours': '{n} giờ trước',
+  'when.yesterday': 'hôm qua',
+  'when.days': '{n} ngày trước',
+  'count.sources': '{n} nguồn',
+  'count.sourcesOne': '1 nguồn',
+  'count.conversations': '{n} hội thoại',
+  'count.conversationsOne': '1 hội thoại',
+  'count.messages': '{n} tin nhắn',
+  'count.messagesOne': '1 tin nhắn',
+  'count.pages': '{n} trang',
+  'count.pagesOne': '1 trang',
+  'pages.tasks.localOnly':
+    'Việc theo giờ chỉ chạy khi app này đang mở. Khi triển khai lên server thì chúng chạy mà không cần app.',
+  /* ── chuỗi việc ──────────────────────────────────────────────── */
+  'wf.title': 'Chuỗi việc',
+  'wf.new': 'Chuỗi việc mới',
+  'wf.order.recent': 'Thêm gần đây',
+  'wf.describe': 'Mô tả cho trợ lý',
+  'wf.describeHint':
+    'Nói các bước theo thứ tự — "mỗi thứ hai: lấy số liệu, vẽ biểu đồ, gửi email cho nhóm".',
+  'wf.manual': 'Tự thiết lập',
+  'wf.none': 'Chưa có chuỗi việc nào.',
+  'wf.noneHint':
+    'Dùng khi một công việc có nhiều chặng bắt buộc theo thứ tự — và khi lỡ lặp lại một chặng thì sẽ thành chuyện. Nếu chỉ có một chỉ dẫn thì đó là việc chạy theo giờ, không phải chuỗi việc.',
+  'wf.pause': 'Tạm dừng',
+  'wf.resume': 'Chạy lại',
+  'wf.remove': 'Xoá',
+  'wf.removeConfirm': 'Xoá nhé?',
+  'wf.runNow': 'Chạy ngay',
+  'wf.running': 'Đang chạy…',
+  'wf.finished': 'Xong.',
+  'wf.startedBackground': 'Đã bắt đầu — nó sẽ chạy tiếp ở nền.',
+  'wf.openResult': 'Mở kết quả',
+  'wf.edit': 'Sửa',
+  'wf.paused': 'đang tạm dừng',
+  'wf.lastRun': 'lần chạy trước {status}',
+  'wf.neverRun': 'chưa chạy lần nào',
+  'wf.formEdit': 'Sửa chuỗi việc',
+  'wf.formCreate': 'Tạo chuỗi việc',
+  'wf.needStep': 'Cần ít nhất một bước — mỗi dòng một chỉ dẫn.',
+  'wf.saved': 'Đã lưu.',
+  'wf.created': 'Đã tạo.',
+
+  /* ── trình duyệt model ───────────────────────────────────────── */
+  'models.allVendors': 'Tất cả nhà cung cấp',
+  'models.empty': 'Thư viện đang trống — bấm Làm mới để tải về từ OpenRouter.',
+  'models.noMatch': 'Không có gì khớp. Thử ít từ hơn, hoặc thêm model bằng id trong Cài đặt → Models.',
+  'models.builtIn': 'Có sẵn — dùng key nhà cung cấp của bạn',
+  'models.onYourKey': '{provider} — trên key của bạn',
+  'models.refreshing': 'Đang làm mới…',
+  'models.refreshNow': 'Làm mới ngay',
+  'models.automatic': 'Tự động',
+  'models.autoName': 'Auto — model miễn phí tốt nhất',
+  'models.autoMeta':
+    'Chọn model miễn phí mạnh nhất mà bạn chạy được ngay lúc này. Hỗ trợ ảnh là một công tắc trong Cài đặt → Hành vi.',
+
+  /* ── danh sách tệp và trình sửa trong thư mục làm việc ───────── */
+  'ws.deleteConfirm': 'Xoá nhé?',
+  'ws.renamePrompt': 'Đổi tên hoặc di chuyển — sửa đường dẫn:',
+  'ws.moved': 'Đã chuyển.',
+  'ws.deleted': 'Đã xoá.',
+  'ws.leaveUnsaved': 'Thoát mà không lưu?',
+  'ws.saving': 'Đang lưu…',
+  'ws.saved': 'Đã lưu.',
+  'ws.newFilePrompt': 'Tệp mới — đặt tên, kèm đường dẫn nếu muốn để trong thư mục:',
+  /* ── trang dự án ─────────────────────────────────────────────── */
+  'proj.pin': 'Ghim',
+  'proj.unpin': 'Bỏ ghim',
+  'proj.pinned': 'Đã ghim lên đầu.',
+  'proj.unpinned': 'Đã bỏ ghim.',
+  'proj.pinAria': 'Ghim dự án',
+  'proj.unpinAria': 'Bỏ ghim dự án',
+  'proj.editDetails': 'Sửa thông tin',
+  'proj.archive': 'Lưu trữ',
+  'proj.restore': 'Khôi phục',
+  'proj.archived': 'Đã lưu trữ. Nó nằm ở kệ lưu trữ, mọi thứ bên trong vẫn còn nguyên.',
+  'proj.restored': 'Đã đưa trở lại kệ.',
+  'proj.delete': 'Xoá',
+  'proj.deleted': 'Đã xoá.',
+  'proj.answersFrom': 'Trả lời từ {sources}',
+  'proj.answersFirstFrom': 'Ưu tiên trả lời từ {sources}',
+  'proj.noSources': 'Chưa có nguồn nào — trả lời như một hội thoại bình thường',
+  'proj.untitled': 'Chưa đặt tên',
+  'proj.editInstructions': 'Sửa hướng dẫn',
+  'proj.instructionsSaved': 'Đã lưu hướng dẫn.',
+  'proj.uploadFromDevice': 'Tải lên từ máy',
+  'proj.addTextContent': 'Thêm nội dung văn bản',
+  'proj.nothingToAdd': 'Không có gì để thêm.',
+  'proj.pastedText': 'Văn bản đã dán',
+  'proj.added': 'Đã thêm.',
+  'proj.addedSources': 'Đã thêm {sources}.',
+  'proj.fallbackName': 'Dự án',
+
+  /* ── trình xem tệp đã tạo ────────────────────────────────────── */
+  'viewer.noStorage': 'Khung này không có nơi lưu.',
+  'viewer.markdownNote': 'Markdown cho văn bản, còn mã nguồn thì hiện đúng tệp gốc.',
+  'viewer.versionNote': 'Một phiên bản cũ, hiện đúng như lúc đó. Khôi phục lại thì mới sửa được.',
+  'viewer.unreadable': 'Không đọc được tệp này.',
+  'viewer.tab.preview': 'Xem trước',
+  'viewer.tab.code': 'Mã nguồn',
+  'viewer.tab.source': 'Nguồn',
+  'viewer.kind.sheets': 'Trang tính',
+  'viewer.kind.slides': 'Slide',
+  'viewer.kind.pages': 'Trang',
+  'viewer.kind.document': 'Tài liệu',
+  'viewer.open': 'Mở',
+  'viewer.openIn': 'Mở bằng {app}',
+  'viewer.openInDefault': 'Mở bằng ứng dụng mặc định',
+  'viewer.copy': 'Sao chép',
+  'viewer.download': 'Tải về',
+  'viewer.showInFolder': 'Mở thư mục chứa',
+  'viewer.copyPicture': 'Sao chép ảnh',
+  'viewer.copyFormatted': 'Sao chép kèm định dạng',
+  'viewer.print': 'In — hoặc lưu thành PDF',
+  'viewer.noComputer': 'Chưa kết nối máy tính nào',
+  'viewer.noComputerHint':
+    'Kết nối một máy tính để mở tệp bằng Word, Excel hoặc mở thư mục. Bấm vào chip ở thanh trên.',
+  'viewer.nothingToCopy': 'Tệp này không có gì để sao chép.',
+  'viewer.copiedRich': 'Đã sao chép — dán vào Word là giữ nguyên định dạng.',
+  'viewer.copied': 'Đã sao chép.',
+  'viewer.copyRefused': 'Trình duyệt không cho sao chép. Hãy nhấn Ctrl/⌘+C.',
+  'viewer.pictureCopied': 'Đã sao chép ảnh.',
+  'viewer.pictureCopyRefused': 'Trình duyệt không cho sao chép ảnh. Hãy tải nó về.',
+  'viewer.saving': 'Đang lưu…',
+  'viewer.backToPanel': 'Về lại bảng bên',
+  'viewer.fullSize': 'Toàn màn hình',
+  'viewer.opening': 'Đang mở…',
+  'viewer.couldNotOpen': 'Không mở được tệp đó.',
+
+  /* ── bảng màn hình trực tiếp ─────────────────────────────────── */
+  'screen.title': 'Màn hình',
+  'screen.wholeMachine': 'Toàn bộ màn hình của máy đang chạy worker.',
+  'screen.sandboxClosed': 'Đã đóng trình duyệt sandbox.',
+  'screen.driveOn': 'Ngừng điều khiển trang',
+  'screen.driveOff': 'Tự điều khiển — bấm và gõ thẳng vào trang',
+  'ws.renameAria': 'Đổi tên {name}',
+  'ws.deleteAria': 'Xoá {name}',
+  'ws.renameTitle': 'Đổi tên hoặc di chuyển',
+  'proj.memoryScope': 'Ghi nhớ được lưu theo tài khoản, không theo từng dự án.',
+  'proj.accountWide': 'toàn tài khoản',
+  'proj.addContext': 'Thêm ngữ cảnh',
+  'proj.removeAria': 'Xoá {name}',
+  'proj.needName': 'Dự án cần có tên.',
+  'proj.deleteConfirm':
+    'Xoá “{name}”?\n\nCác nguồn của nó sẽ mất theo. Những hội thoại đã mở trong dự án thì vẫn giữ — chúng quay về danh sách thường.',
+  'count.chars': '{n} ký tự',
+  'count.charsK': '{n}K ký tự',
+  'count.charsM': '{n}M ký tự',
+  'screen.sandboxNote': 'Cửa sổ trình duyệt riêng của trợ lý — tách biệt với trình duyệt bạn đang dùng.',
+
+
+
+
+
   'empty.title': 'Hôm nay bạn muốn làm gì?',
   'empty.body':
     'Chọn model rồi hỏi bất cứ điều gì. Khi máy tính của bạn đã kết nối, trợ lý có thể đọc tệp, sửa code và chạy lệnh ngay trên máy đó.',

@@ -13,11 +13,12 @@ import { workerStatus } from './localTools.js';
 import { skillMenu } from './skills.js';
 import { connectorSummary } from './connectors.js';
 import { mcpTools } from './mcp/registry.js';
-import { estimateCost } from './providers/catalog.js';
+import { priceTurn } from './providers/catalog.js';
 import { loadForTranscript, toParts } from './attachments.js';
 import { projectPrompt } from './projects.js';
 import { compact, shouldCompact, measure, activeTranscript } from './compact.js';
 import { log } from './util/trace.js';
+import { mapWithLimit, MAX_PARALLEL_TOOLS } from './util/parallel.js';
 
 /**
  * There is one mode.
@@ -419,42 +420,7 @@ export function needsApproval(toolCalls, policy) {
   });
 }
 
-/**
- * How many tool calls may be in flight at once.
- *
- * There was no ceiling: every call the model made in one turn started at the
- * same instant. That is fine for three `web_fetch`es and genuinely dangerous for
- * fifteen `run_command`s, which is fifteen shells starting together on somebody
- * else's laptop — and there is no backpressure anywhere else in the chain to
- * catch it. Parallelism is still most of why a turn feels fast, so this is a
- * limit rather than a queue: four is comfortably more than a model asks for in
- * the ordinary case, and it holds the pathological one to something a machine
- * can survive.
- */
-const MAX_PARALLEL_TOOLS = 4;
-
-/**
- * Run every call, at most `MAX_PARALLEL_TOOLS` at a time, and return the results
- * in the order they were requested.
- *
- * Order matters more than it looks: a tool result has to line up with the call
- * it answers, and every provider rejects a batch where they do not.
- */
-async function mapWithLimit(items, limit, worker) {
-  const out = new Array(items.length);
-  let next = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next;
-      next += 1;
-      out[i] = await worker(items[i], i);
-    }
-  });
-  await Promise.all(runners);
-  return out;
-}
-
-async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools }) {
+async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable }) {
   const results = await mapWithLimit(
     toolCalls,
     MAX_PARALLEL_TOOLS,
@@ -468,6 +434,9 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint,
         chatId,
         signal,
         deviceHint,
+        // So `load_tools` can refuse to promise a tool this account cannot be
+        // given, instead of reporting it loaded and never delivering it.
+        deliverable,
       });
       const result = {
         toolCallId: call.id,
@@ -689,7 +658,43 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     log.info('tools activated', { names: names.join(','), total: activated.size });
   };
 
-  const totals = { input: 0, output: 0, cost: 0 };
+  /**
+   * Every tool this account could actually be given this turn.
+   *
+   * `load_tools` used to check only that a name was a real tool, so it happily
+   * answered "Loaded send_email — you will have it from your next step onward"
+   * for a connector that was never linked, and the tool then never appeared.
+   * The model planned around a capability it could not receive.
+   *
+   * Derived by asking `availableTools` with everything activated, so it is
+   * filtered by the *same* worker, connector, provider and policy rules that
+   * decide the real catalogue — the two cannot drift, because there is one
+   * function deciding both. `context: 0` means "nobody said", which switches off
+   * the window-based trimming: this is a question about eligibility, not about
+   * what fits.
+   */
+  const loadable = () =>
+    new Set(
+      availableTools({
+        workerOnline,
+        desktopOnline: !!worker?.info?.desktop,
+        policy,
+        connected: connectors.ids,
+        providers: Object.entries(providerKeys)
+          .filter(([, status]) => status?.configured)
+          .map(([provider]) => provider),
+        context: 0,
+        extra: mcp.tools,
+      }).map((t) => t.name),
+    );
+
+  /**
+   * `priced` says whether the running cost is worth showing at all, and
+   * `estimated` whether it is our arithmetic or the provider's own invoice.
+   * Both travel to the browser so the usage line can say which it is rather
+   * than presenting a guess with the confidence of a receipt.
+   */
+  const totals = { input: 0, output: 0, cost: 0, cacheRead: 0, estimated: false };
 
   // ── Resume: the previous run ended with tool calls still outstanding ──
   // Either it stopped for approval, or the connection was cut mid-run.
@@ -726,10 +731,11 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       };
       for (const r of toolMessage.results) emit('tool_result', r);
     } else {
-      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate });
+      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
     }
-    await store.appendMessage(userId, chatId, toolMessage);
-    messages.push(toolMessage);
+    // The stored copy, which carries the `seq` `absorbNewMessages` reads as its
+    // high-water mark.
+    messages.push(await store.appendMessage(userId, chatId, toolMessage));
   }
 
   /**
@@ -741,8 +747,23 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
    * waiting for the run to finish.
    */
   async function absorbNewMessages() {
+    /**
+     * Ask only for what is newer than the highest turn already in hand.
+     *
+     * This used to re-read the whole conversation — every message body, tool
+     * result included — once per step, purely to discover whether one new user
+     * message had arrived, and then throw all but that away. On a thirty-step
+     * turn that moved the entire transcript thirty times.
+     *
+     * Messages appended in this process carry a `seq` from `appendMessage`, so
+     * the high-water mark is simply the largest one seen. A message with no
+     * `seq` cannot move the mark (`|| 0`), and a mark of 0 asks for everything —
+     * which is the correct answer for a conversation nothing has been stored in
+     * yet.
+     */
     const known = new Set(messages.map((m) => m.id));
-    const fresh = await store.listMessages(userId, chatId);
+    const highWater = messages.reduce((n, m) => Math.max(n, Number(m.seq) || 0), 0);
+    const fresh = await store.messagesSince(userId, chatId, highWater);
     const added = fresh.filter((m) => m.role === 'user' && !known.has(m.id));
     if (!added.length) return false;
 
@@ -788,6 +809,8 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
 
     const assistant = { id: newId(), role: 'assistant', text: '', thinking: '', toolCalls: [] };
     let done = null;
+    /** What to book once the reply itself is safely stored. See below. */
+    let pendingUsage = null;
 
     /**
      * Say when the provider has not started answering yet.
@@ -893,23 +916,78 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       assistant.usage = done.usage;
       totals.input += done.usage.input || 0;
       totals.output += done.usage.output || 0;
-      const cost = estimateCost(entry, done.usage);
-      if (cost != null) totals.cost += cost;
-      // Recorded per model call rather than per turn, so the usage page can
-      // break spending down by model.
-      await recordUsage(userId, { chatId, model: entry.id, usage: done.usage, costUsd: cost || 0, role: 'turn' });
+      totals.cacheRead += done.usage.cacheRead || 0;
+      // The provider's own figure where it gave one — OpenRouter and OrcaRouter
+      // both do — and our price table where it did not. See `priceTurn`.
+      const priced = priceTurn(entry, done.usage);
+      if (priced) {
+        totals.cost += priced.usd;
+        if (priced.source === 'estimate') totals.estimated = true;
+      }
+      /**
+       * Booked *after* the reply is safely stored — see the append below.
+       *
+       * This used to be awaited here, before `appendMessage`, and uncaught. A
+       * connection-pool blip on the usage write threw out of the step loop, the
+       * route emitted `error`, and the reply the user had just watched being
+       * written was never persisted: gone on reload, and the next turn re-sent
+       * their question so the model answered — and charged — a second time.
+       * Losing the accounting for one turn is a far smaller harm than losing
+       * the turn itself, so the order now reflects that.
+       */
+      pendingUsage = { chatId, model: entry.id, usage: done.usage, costUsd: priced?.usd || 0, role: 'turn' };
     }
     assistant.model = entry.id;
 
-    await store.appendMessage(userId, chatId, assistant);
+    // `seq` comes back on the stored copy; see `absorbNewMessages`.
+    const stored = await store.appendMessage(userId, chatId, assistant);
+    assistant.seq = stored.seq;
+
+    /**
+     * Never fatal, but never silent either.
+     *
+     * `checkQuota` enforces the shared-key monthly limit against this table, so
+     * a write that keeps failing is unmetered spend on the deployment's key —
+     * swallowing it without a word is how that goes unnoticed for a month.
+     */
+    if (pendingUsage) {
+      await recordUsage(userId, pendingUsage).catch((err) =>
+        log.error('usage not recorded', err, { role: pendingUsage.role, model: pendingUsage.model }),
+      );
+      pendingUsage = null;
+    }
     messages.push(assistant);
     emit('message', { message: assistant });
-    emit('usage', { ...totals, priced: entry.price != null });
+    // Priced when we have a rate card *or* the provider invoiced us. The second
+    // half is what makes a cost appear at all for the large part of the library
+    // whose price was never verified.
+    emit('usage', { ...totals, priced: entry.price != null || totals.cost > 0 });
 
     if (!assistant.toolCalls.length) {
-      emit('done', { stopReason: done?.stopReason || 'end_turn' });
+      /**
+       * Say why it stopped, not merely that it did.
+       *
+       * `stop` is the normalised form, and its `message` is non-null exactly
+       * when the reply in front of the user is *not* a finished answer — cut
+       * off at the output cap, declined by a safety classifier, blocked by a
+       * content filter. All three used to end the turn looking identical to a
+       * complete one, which is the whole reason this travels.
+       */
+      const stop = done?.stop || { kind: done?.stopReason ? 'unknown' : 'end_turn', raw: done?.stopReason ?? null, message: null };
+      emit('done', { stopReason: done?.stopReason || 'end_turn', stop });
       return;
     }
+
+    /**
+     * A turn can stop badly *and* still have asked for tools.
+     *
+     * The commonest is truncation: the model hit its output cap part-way
+     * through writing a tool call, so the arguments are cut off and the call
+     * that follows will fail on an argument nobody mangled deliberately. Said
+     * here rather than only on the `done` path, because on this path the loop
+     * carries on and the reason would otherwise never be seen at all.
+     */
+    if (done?.stop?.message) emit('status', { message: done.stop.message, stop: done.stop.kind });
 
     const pending = needsApproval(assistant.toolCalls, policy);
     if (pending.length) {
@@ -925,9 +1003,8 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       return; // The client resumes by calling back with a decision.
     }
 
-    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate });
-    await store.appendMessage(userId, chatId, toolMessage);
-    messages.push(toolMessage);
+    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
+    messages.push(await store.appendMessage(userId, chatId, toolMessage));
   }
 
   emit('status', {

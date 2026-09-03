@@ -27,6 +27,7 @@ import { emailBackend } from './email.js';
 import { summary as usageSummary, limitFor } from './usage.js';
 import { getPrefs, setPrefs, setApiKey, addApiKey, removeApiKey, providerStatus } from './settings.js';
 import { getStore, initStore, isServerless } from './store/index.js';
+import { RUN_LEASE_STALE_MS } from './store/pg.js';
 import { workerStatus, usesInProcessTools, handleIndexPayload } from './localTools.js';
 import { publish, subscribe, poll, forget as forgetScreen } from './screenHub.js';
 import { PROVIDERS } from './providers/catalog.js';
@@ -55,7 +56,7 @@ import { runDueWorkflows, runWorkflowNow, normaliseSteps } from './workflows.js'
 import { connectedServices, connect, disconnect } from './connectors.js';
 import { redactSecrets } from './redact.js';
 import { withTrace, newTraceId, annotate, log, mark, since } from './util/trace.js';
-import { mcpStatus, probeMcpServer, sealConfig, forgetMcp } from './mcp/registry.js';
+import { mcpStatus, probeMcpServer, sealConfig, forgetMcp, slugify } from './mcp/registry.js';
 import {
   withStorageShim,
   listArtifactStorage,
@@ -76,7 +77,7 @@ import {
   previewEnrolment,
   redeemEnrolment,
 } from './devices.js';
-import { pendingAnnouncement, decideAnnouncement } from './modelNews.js';
+import { pendingAnnouncement, decideAnnouncement, markAnnouncementShown } from './modelNews.js';
 import {
   saveUpload,
   verifyOwned,
@@ -221,6 +222,17 @@ export function createApp() {
 
   const wrap = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
+  /**
+   * Whether a turn is live in this conversation right now.
+   *
+   * Measured against the same staleness the lease itself uses, so a route that
+   * refuses mid-run and the claim that decides who is running can never
+   * disagree — they did, by 45 seconds, and in that window a chat could be
+   * claimed by a new run while still refusing message edits.
+   */
+  const isRunning = (chat) =>
+    !!chat?.run_lock_at && Date.now() - new Date(chat.run_lock_at).getTime() < RUN_LEASE_STALE_MS;
+
   /** `req.body` is undefined in Express 5 when no JSON arrived — never assume it. */
   const body = (req) => req.body || {};
 
@@ -358,7 +370,11 @@ export function createApp() {
       const remaining = () => Math.max(0, 240_000 - (Date.now() - started));
 
       await sweep().catch(() => {});
-      const ran = await runDueTasks();
+      // Tasks get a budget too. Without one they ran until the invocation was
+      // killed, which both left a task marked mid-run and guaranteed workflows
+      // inherited nothing — the very thing `remaining()` was written to prevent.
+      // Two thirds to tasks, so a long queue cannot starve the workflows below.
+      const ran = await runDueTasks({ budgetMs: Math.floor(remaining() * 0.66) });
 
       // Workflows share this heartbeat rather than adding a second cron: the
       // free tier allows one a day, and spending it twice is not an option. A
@@ -620,6 +636,21 @@ export function createApp() {
     wrap(async (req, res) => {
       const store = getStore();
       const prefs = await getPrefs(req.user.id);
+
+      /**
+       * Remember which clock this person keeps.
+       *
+       * `schedule_task` and `workflow_write` run inside an agent turn, where
+       * there is no request carrying a zone, so they fell back to the server's —
+       * UTC on a deployment, and seven hours wrong for anyone in Vietnam.
+       * Written only when it has actually changed, so the common case is a read.
+       */
+      const zone = validZone(req.query?.tz) ? String(req.query.tz) : null;
+      if (zone && zone !== prefs.timezone) {
+        prefs.timezone = zone;
+        await setPrefs(req.user.id, { timezone: zone }).catch(() => {});
+      }
+
       const [providers, worker, usage, library] = await Promise.all([
         providerStatus(req.user.id),
         workerStatus(req.user, prefs),
@@ -734,7 +765,11 @@ export function createApp() {
     wrap(async (req, res) => {
       try {
         // The interface counts from one, the store counts from zero.
-        await removeApiKey(req.user.id, req.params.provider, Number(req.params.position) - 1);
+        // `Number.parseInt`, not `Number`: `Number('undefined') - 1` is NaN, and
+        // NaN passes every range check below it before `splice(NaN, 1)` coerces
+        // to `splice(0, 1)` — silently destroying the account's *first* key and
+        // answering 200. See the matching guard in `removeApiKey`.
+        await removeApiKey(req.user.id, req.params.provider, Number.parseInt(req.params.position, 10) - 1);
         res.json(await providerStatus(req.user.id));
       } catch (err) {
         res.status(400).json({ error: err.message });
@@ -828,6 +863,17 @@ export function createApp() {
     '/models/news',
     wrap(async (req, res) => {
       try {
+        /**
+         * "It is on their screen now" — not a decision, just an acknowledgement.
+         *
+         * The quiet period used to start when the announcement was *fetched*, so
+         * a response nobody saw spent it and the account was never told. The
+         * browser reports back once the dialog is actually up.
+         */
+        if (req.body?.action === 'shown') {
+          await markAnnouncementShown(req.user.id);
+          return res.json({ ok: true, shown: true });
+        }
         const outcome = await decideAnnouncement(req.user.id, req.body?.id, req.body?.action);
         // Taking it means using it — being told about a model and then having to
         // go and find it in a picker is a half-finished feature.
@@ -1583,6 +1629,31 @@ export function createApp() {
     wrap(async (req, res) => {
       const name = String(req.body?.name || '').trim();
       if (!name) return res.status(400).json({ error: 'Give the server a name.' });
+
+      /**
+       * Two servers must not slug to the same prefix.
+       *
+       * Tools are advertised as `mcp__<slug>__<tool>`, so "Figma" and "Figma!"
+       * both become `figma` — and the registry connects both, stores both under
+       * one key, and pushes both sets of tools with identical names. A tool list
+       * containing duplicate names is rejected outright by Anthropic and OpenAI,
+       * so **every message in every conversation** then failed until one server
+       * was removed. `callMcpTool` routes by the same slug, so whichever
+       * connection survived also received calls meant for the other.
+       *
+       * Checked here because this is where a person can still be told why.
+       */
+      const slug = slugify(name);
+      if (!slug) {
+        return res.status(400).json({ error: 'That name has no letters or digits in it — give it a plain name.' });
+      }
+      const existing = await getStore().listMcpServers(req.user.id);
+      const clash = existing.find((row) => slugify(row.name) === slug);
+      if (clash) {
+        return res.status(400).json({
+          error: `"${name}" and the server you already have called "${clash.name}" would both be addressed as "${slug}", and their tools would collide. Pick a name that differs by more than punctuation.`,
+        });
+      }
 
       const transport = req.body?.transport === 'http' ? 'http' : 'stdio';
       const config = { transport };
@@ -2397,7 +2468,7 @@ export function createApp() {
       const store = getStore();
       const chat = await store.getChat(req.user.id, req.params.id);
       if (!chat) return res.status(404).json({ error: 'Chat not found' });
-      if (chat.run_lock_at && Date.now() - new Date(chat.run_lock_at).getTime() < 120_000) {
+      if (isRunning(chat)) {
         return res.status(409).json({ error: 'This conversation is running. Stop it first.' });
       }
 
@@ -2428,6 +2499,18 @@ export function createApp() {
       const chatId = req.params.id;
       const chat = await store.getChat(req.user.id, chatId);
       if (!chat) return res.status(404).json({ error: 'Chat not found' });
+      /**
+       * Not while a turn is running.
+       *
+       * The message-edit route has always refused mid-run, for exactly the
+       * reason this one needed to and did not: writing a summary between an
+       * assistant turn and the tool message answering it means the next turn's
+       * `activeTranscript` slices from the summary, and that assistant turn plus
+       * its results vanish from what the model sees.
+       */
+      if (isRunning(chat)) {
+        return res.status(409).json({ error: 'This conversation is running. Stop it first.' });
+      }
 
       const prefs = await getPrefs(req.user.id);
       const messages = await store.listMessages(req.user.id, chatId);
@@ -2516,7 +2599,17 @@ export function createApp() {
         ? req.body.runId
         : crypto.randomUUID();
 
-      if (!(await store.claimChatRun(req.user.id, chatId, runId))) {
+      /**
+       * Which holding of the lease this invocation is.
+       *
+       * A reconnection with the same `runId` is allowed back in — that is what
+       * makes resuming work — but it now *supersedes* the invocation it is
+       * replacing rather than joining it. The one it replaced fails its next
+       * heartbeat and aborts, so only one loop is ever appending to the
+       * transcript. See `claimChatRun`.
+       */
+      const runSeq = await store.claimChatRun(req.user.id, chatId, runId);
+      if (!runSeq) {
         return res.status(409).json({
           error: 'This conversation is already running somewhere else. Wait for it, or stop it there.',
           code: 'already_running',
@@ -2557,7 +2650,7 @@ export function createApp() {
       const ping = setInterval(() => {
         emit('ping', { t: Date.now() });
         store
-          .touchChatRun(req.user.id, chatId, runId)
+          .touchChatRun(req.user.id, chatId, runId, runSeq)
           .then((held) => {
             if (held === false) controller.abort();
           })
@@ -2595,7 +2688,9 @@ export function createApp() {
         clearInterval(ping);
         // Released whatever happened, including an abort — holding the lock
         // after the loop has stopped would lock the user out of their own chat.
-        await store.releaseChatRun(req.user.id, chatId, runId).catch(() => {});
+        // With the sequence, so a superseded invocation finishing late cannot
+        // release the lease the reconnection that replaced it now holds.
+        await store.releaseChatRun(req.user.id, chatId, runId, runSeq).catch(() => {});
         if (!res.writableEnded) res.end();
       }
     }),

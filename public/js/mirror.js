@@ -38,15 +38,63 @@ const open = () => {
  * reloads at the end anyway, and making the owner wait on its audience would put
  * the interface of a tab nobody is watching in the path of the one they are.
  */
-export function narrate(chatId, event, data) {
-  const bus = open();
-  if (!bus || !chatId) return;
+/**
+ * Prose waiting to be narrated, coalesced.
+ *
+ * `narrate` is called for every frame of the stream, and a `text` frame is four
+ * or five characters — so the owning tab was paying a structured clone and a
+ * cross-context dispatch per token, on the hot path, for a feature that helps
+ * only the minority with a second tab open. BroadcastChannel offers no way to
+ * ask whether anyone is listening, so the cost cannot be skipped outright; it
+ * can be made proportionate.
+ *
+ * Deltas are concatenated and posted at most once a frame. A follower appends
+ * what it is given, so one message carrying ten tokens renders identically to
+ * ten carrying one. Anything that is not prose flushes the buffer first and goes
+ * immediately, because ordering is the one thing a follower cannot repair: a
+ * `retry` or a `done` overtaking the text it applies to would leave the wrong
+ * words on screen.
+ */
+let pendingText = null;
+let flushQueued = false;
+
+function post(bus, message) {
   try {
-    bus.postMessage({ chatId, event, data });
+    bus.postMessage(message);
   } catch {
     // A payload that will not structured-clone — a DOM node caught in a closure,
     // say. Losing one frame of narration is not worth breaking the run for.
   }
+}
+
+function flushText(bus) {
+  if (!pendingText) return;
+  const buffered = pendingText;
+  pendingText = null;
+  post(bus, { chatId: buffered.chatId, event: 'text', data: { delta: buffered.delta } });
+}
+
+export function narrate(chatId, event, data) {
+  const bus = open();
+  if (!bus || !chatId) return;
+
+  if (event === 'text' && typeof data?.delta === 'string') {
+    // A different conversation's text must not be glued onto this one's.
+    if (pendingText && pendingText.chatId !== chatId) flushText(bus);
+    pendingText = { chatId, delta: (pendingText?.delta || '') + data.delta };
+    if (flushQueued) return;
+    flushQueued = true;
+    const run = () => {
+      flushQueued = false;
+      flushText(bus);
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+    return;
+  }
+
+  flushText(bus);
+  post(bus, { chatId, event, data });
 }
 
 /**

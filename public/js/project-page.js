@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { t } from './i18n.js';
 import { escapeHtml } from './markdown.js';
 import { openMenu } from './menu.js';
 import { toast } from './render.js';
@@ -19,20 +20,34 @@ import { toast } from './render.js';
 
 const $ = (id) => document.getElementById(id);
 
-const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/**
+ * A count and its noun, as a whole phrase — the same helper `pages.js` uses.
+ *
+ * The English pluralisation rule this replaced could not be translated, only
+ * replaced: Vietnamese does not inflect the noun, so the translation has to own
+ * the entire phrase rather than a stem the formatter adds an `s` to.
+ */
+const counted = (n, key) => (n === 1 ? t(`${key}One`) : t(key)).replace('{n}', String(n));
 
-const fmtChars = (n) =>
-  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M chars` : n >= 1000 ? `${Math.round(n / 1000)}K chars` : `${n} chars`;
+const fmtChars = (n) => {
+  const say = (key, value) => t(key).replace('{n}', String(value));
+  if (n >= 1_000_000) return say('count.charsM', (n / 1_000_000).toFixed(1));
+  if (n >= 1000) return say('count.charsK', Math.round(n / 1000));
+  return say('count.chars', n);
+};
 
 const ago = (value) => {
   if (!value) return '';
   const then = new Date(value).getTime();
   if (!Number.isFinite(then)) return '';
+  const n = (key, count) => t(key).replace('{n}', String(count));
   const seconds = Math.round((Date.now() - then) / 1000);
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.round(seconds / 60)} minutes ago`;
-  if (seconds < 172800) return seconds < 86400 ? `${Math.round(seconds / 3600)} hours ago` : 'yesterday';
-  if (seconds < 2592000) return `${Math.round(seconds / 86400)} days ago`;
+  if (seconds < 60) return t('when.justNow');
+  if (seconds < 3600) return n('when.minutes', Math.round(seconds / 60));
+  if (seconds < 172800) {
+    return seconds < 86400 ? n('when.hours', Math.round(seconds / 3600)) : t('when.yesterday');
+  }
+  if (seconds < 2592000) return n('when.days', Math.round(seconds / 86400));
   return new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
@@ -81,37 +96,34 @@ export function projectMenuItems(project, { after, onGone, onEdit }) {
 
   return [
     {
-      label: pinned ? 'Unpin' : 'Pin',
+      label: pinned ? t('proj.unpin') : t('proj.pin'),
       icon: '📌',
-      run: () => patch({ pinned: !pinned }, pinned ? 'Unpinned.' : 'Pinned to the top.'),
+      run: () => patch({ pinned: !pinned }, pinned ? t('proj.unpinned') : t('proj.pinned')),
     },
-    { label: 'Edit details', icon: '✎', run: () => onEdit(project) },
+    { label: t('proj.editDetails'), icon: '✎', run: () => onEdit(project) },
     {
-      label: archived ? 'Restore' : 'Archive',
+      label: archived ? t('proj.restore') : t('proj.archive'),
       icon: '🗄',
       run: () =>
         patch(
           { archived: !archived },
-          archived ? 'Back on the shelf.' : 'Archived. It is on the archived shelf, with everything still in it.',
+          archived ? t('proj.restored') : t('proj.archived'),
         ),
     },
     null,
     {
-      label: 'Delete',
+      label: t('proj.delete'),
       icon: '🗑',
       danger: true,
       run: async () => {
         // A real confirm, not a two-press button: this one is permanent, and
         // the menu it was chosen from has already closed, so there is nothing
         // left on screen to arm.
-        const sure = window.confirm(
-          `Delete "${project.name}"?\n\nIts sources go with it. The conversations started in it are kept — ` +
-            'they return to the ordinary list.',
-        );
+        const sure = window.confirm(t('proj.deleteConfirm').replace('{name}', project.name));
         if (!sure) return;
         try {
           await api.deleteProject(project.id);
-          toast('Deleted.');
+          toast(t('proj.deleted'));
           await onGone?.();
         } catch (err) {
           toast(err.message, 'error');
@@ -150,7 +162,7 @@ export function editProjectDetails(project) {
     async function onSave() {
       const value = name.value.trim();
       if (!value) {
-        error.textContent = 'A project needs a name.';
+        error.textContent = t('proj.needName');
         return;
       }
       save.disabled = true;
@@ -209,11 +221,14 @@ export function createProjectPage({ openChat, startChat, onBack }) {
 
     pinButton.classList.toggle('is-on', !!project.pinned);
     pinButton.setAttribute('aria-pressed', String(!!project.pinned));
-    pinButton.setAttribute('aria-label', project.pinned ? 'Unpin project' : 'Pin project');
+    pinButton.setAttribute('aria-label', project.pinned ? t('proj.unpinAria') : t('proj.pinAria'));
 
     chip.textContent = files.length
-      ? `${project.grounded ? 'Answers from' : 'Answers first from'} ${plural(files.length, 'source')}`
-      : 'No sources yet — answers like any other chat';
+      ? t(project.grounded ? 'proj.answersFrom' : 'proj.answersFirstFrom').replace(
+          '{sources}',
+          counted(files.length, 'count.sources'),
+        )
+      : t('proj.noSources');
 
     drawChats(chats);
     drawSide(project, files, memory);
@@ -235,14 +250,14 @@ export function createProjectPage({ openChat, startChat, onBack }) {
 
     chatList.innerHTML =
       `<h2 class="panel-card__name" style="margin:26px 0 12px">${escapeHtml(
-        plural(chats.length, 'conversation'),
+        counted(chats.length, 'count.conversations'),
       )}</h2>` +
       chats
         .map(
           (chat) => `
         <button class="chatline" type="button" data-chat="${escapeHtml(chat.id)}">
-          <span class="chatline__name">${escapeHtml(chat.title || 'Untitled')}</span>
-          <span class="chatline__when">${escapeHtml(plural(chat.message_count, 'message'))}</span>
+          <span class="chatline__name">${escapeHtml(chat.title || t('proj.untitled'))}</span>
+          <span class="chatline__when">${escapeHtml(counted(chat.message_count, 'count.messages'))}</span>
         </button>`,
         )
         .join('');
@@ -258,7 +273,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
         <div class="panel-card__head">
           <span class="panel-card__name">Instructions</span>
           <button class="panel-card__add" id="pp-edit-instructions" type="button"
-                  aria-label="${editingInstructions ? 'Cancel' : 'Edit instructions'}">${
+                  aria-label="${escapeHtml(editingInstructions ? t('action.cancel') : t('proj.editInstructions'))}">${
                     editingInstructions ? '✕' : '✎'
                   }</button>
         </div>
@@ -279,7 +294,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
       <section class="panel-card">
         <div class="panel-card__head">
           <span class="panel-card__name">Memory</span>
-          <span class="panel-card__tag" title="Memory is stored per account, not per project.">account-wide</span>
+          <span class="panel-card__tag" title="${escapeHtml(t('proj.memoryScope'))}">${escapeHtml(t('proj.accountWide'))}</span>
         </div>
         ${
           memory.length
@@ -310,7 +325,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
         <div class="panel-card__head">
           <span class="panel-card__name">Context</span>
           <button class="panel-card__add" id="pp-add-source" type="button"
-                  aria-haspopup="menu" aria-label="Add context">+</button>
+                  aria-haspopup="menu" aria-label="${escapeHtml(t('proj.addContext'))}">+</button>
         </div>
         ${
           files.length
@@ -320,11 +335,11 @@ export function createProjectPage({ openChat, startChat, onBack }) {
               <div class="source">
                 <span class="source__name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
                 <span class="source__size">${escapeHtml(
-                  [file.pages ? plural(file.pages, 'page') : null, fmtChars(file.chars)].filter(Boolean).join(' · '),
+                  [file.pages ? counted(file.pages, 'count.pages') : null, fmtChars(file.chars)].filter(Boolean).join(' · '),
                 )}</span>
                 <button class="source__drop" type="button" data-drop="${escapeHtml(
                   file.id,
-                )}" aria-label="Remove ${escapeHtml(file.name)}">✕</button>
+                )}" aria-label="${escapeHtml(t('proj.removeAria').replace('{name}', file.name))}">✕</button>
               </div>`,
                 )
                 .join('')
@@ -360,7 +375,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
         data.project = project;
         editingInstructions = false;
         draw();
-        toast('Instructions saved.');
+        toast(t('proj.instructionsSaved'));
       } catch (err) {
         toast(err.message, 'error');
         button.disabled = false;
@@ -390,8 +405,8 @@ export function createProjectPage({ openChat, startChat, onBack }) {
     $('pp-add-source').addEventListener('click', (event) => {
       event.stopPropagation();
       openMenu($('pp-add-source'), [
-        { label: 'Upload from device', icon: '⤒', run: () => pick() },
-        { label: 'Add text content', icon: '¶', run: () => addTextSource() },
+        { label: t('proj.uploadFromDevice'), icon: '⤒', run: () => pick() },
+        { label: t('proj.addTextContent'), icon: '¶', run: () => addTextSource() },
       ]);
     });
 
@@ -451,7 +466,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
       }
     }
 
-    if (added) toast(`Added ${plural(added, 'source')}.`);
+    if (added) toast(t('proj.addedSources').replace('{sources}', counted(added, 'count.sources')));
     await reload();
   }
 
@@ -475,10 +490,10 @@ export function createProjectPage({ openChat, startChat, onBack }) {
     async function onSave() {
       const text = body.value.trim();
       if (!text) {
-        error.textContent = 'There is nothing to add.';
+        error.textContent = t('proj.nothingToAdd');
         return;
       }
-      const label = name.value.trim() || 'Pasted text';
+      const label = name.value.trim() || t('proj.pastedText');
       save.disabled = true;
       try {
         await api.addProjectFile(data.project.id, {
@@ -487,7 +502,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
           data: textToBase64(text),
         });
         done();
-        toast('Added.');
+        toast(t('proj.added'));
         await reload();
       } catch (err) {
         error.textContent = err.message;
@@ -600,7 +615,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
         draw();
       } catch (err) {
         crumb.textContent = '';
-        nameEl.textContent = 'Project';
+        nameEl.textContent = t('proj.fallbackName');
         side.innerHTML = `<p class="hint" style="padding:18px 20px">${escapeHtml(err.message)}</p>`;
       }
     },

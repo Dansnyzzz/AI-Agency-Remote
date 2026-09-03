@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { t } from './i18n.js';
 import { escapeHtml } from './markdown.js';
 import { toast, revealInStrip } from './render.js';
 import { parseQuery, familyLabel } from './search.js';
@@ -138,7 +139,7 @@ export function createModelBrowser({ onPick }) {
       .map((f) => {
         const label =
           f.family === 'all'
-            ? 'All vendors'
+            ? t('models.allVendors')
             : `${familyLabel(f.family)}${f.count ? ` <span class="muted">${f.count}</span>` : ''}`;
         return `<button class="chip-btn ${f.family === active ? 'is-active' : ''}"
                         data-family="${escapeHtml(f.family)}" type="button">${label}</button>`;
@@ -184,7 +185,7 @@ export function createModelBrowser({ onPick }) {
     }
     statusLabel.textContent = status.total
       ? `${status.total.toLocaleString()} models · ${status.free.toLocaleString()} free · updated ${relative(status.refreshedAt)}`
-      : 'Library is empty — press Refresh to pull it from OpenRouter.';
+      : t('models.empty');
   }
 
   function card(model, isBuiltin) {
@@ -224,12 +225,11 @@ export function createModelBrowser({ onPick }) {
    */
   function autoCardHtml() {
     return (
-      `<div class="model-group__label">Automatic</div>` +
+      `<div class="model-group__label">${escapeHtml(t('models.automatic'))}</div>` +
       `<button class="model-card ${state.current === 'auto' ? 'is-current' : ''}" data-model="auto" type="button">` +
       `<span class="model-card__main">` +
-      `<span class="model-card__name">Auto — best free model</span>` +
-      `<span class="model-card__meta">Picks the strongest free model you can run right now. ` +
-      `Image support is a toggle in Settings → Behaviour.</span>` +
+      `<span class="model-card__name">${escapeHtml(t('models.autoName'))}</span>` +
+      `<span class="model-card__meta">${escapeHtml(t('models.autoMeta'))}</span>` +
       `</span></button>`
     );
   }
@@ -244,7 +244,7 @@ export function createModelBrowser({ onPick }) {
       const why =
         tier === 'free' && provider && !isLibrary(provider)
           ? `${PROVIDER_LABEL[provider]} has no free models — they bill to your own key. Try the Free tier under OpenRouter or OrcaRouter.`
-          : 'Nothing matched. Try fewer words, or add the model by id in Settings → Models.';
+          : t('models.noMatch');
       results.innerHTML = sections.join('') + `<p class="hint">${escapeHtml(why)}</p>`;
       return;
     }
@@ -252,8 +252,8 @@ export function createModelBrowser({ onPick }) {
     if (builtin.length) {
       const heading =
         provider && provider !== 'all'
-          ? `${PROVIDER_LABEL[provider]} — on your own key`
-          : 'Built in — your own provider keys';
+          ? t('models.onYourKey').replace('{provider}', PROVIDER_LABEL[provider])
+          : t('models.builtIn');
       sections.push(
         `<div class="model-group__label">${escapeHtml(heading)}</div>` +
           builtin.map((m) => card(m, true)).join(''),
@@ -343,7 +343,7 @@ export function createModelBrowser({ onPick }) {
   document.getElementById('refresh-library').addEventListener('click', async (event) => {
     const btn = event.currentTarget;
     btn.disabled = true;
-    btn.textContent = 'Refreshing…';
+    btn.textContent = t('models.refreshing');
     try {
       const status = await api.refreshModels();
       toast(`Library updated — ${status.total.toLocaleString()} models.`);
@@ -352,7 +352,7 @@ export function createModelBrowser({ onPick }) {
       toast(err.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Refresh now';
+      btn.textContent = t('models.refreshNow');
     }
   });
 

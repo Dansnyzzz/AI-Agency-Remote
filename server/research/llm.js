@@ -1,5 +1,5 @@
 import { streamCompletion } from '../providers/index.js';
-import { estimateCost } from '../providers/catalog.js';
+import { priceTurn } from '../providers/catalog.js';
 import { record as recordUsage } from '../usage.js';
 
 /**
@@ -69,7 +69,7 @@ export async function askModel({
       chatId,
       model: entry?.id,
       usage: spent,
-      costUsd: estimateCost(entry, spent) || 0,
+      costUsd: priceTurn(entry, spent)?.usd || 0,
       role,
     }).catch(() => {});
   }

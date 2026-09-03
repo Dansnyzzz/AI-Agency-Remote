@@ -52,6 +52,315 @@ export const en = {
   // moves is what separates waiting from wondering.
   'status.waiting': 'Waiting for {model} to start — {n}s',
   'status.waitingFree': 'Waiting for {model} — free models queue when busy ({n}s). Switch model if this drags.',
+
+  /* ── why a reply stopped ─────────────────────────────────────────
+   *
+   * Only ever shown when the reply is *not* a finished answer. Three of these
+   * used to end a turn looking exactly like a complete one: the stream stops,
+   * the spinner clears, and the last paragraph simply has no end. Saying which
+   * of them happened is the difference between "the assistant answered" and
+   * "the assistant was cut off" — and only one of those is worth acting on.
+   */
+  'stop.truncated':
+    'Cut off — the reply hit this model’s maximum output length. Ask it to continue, or pick a model with a larger output limit.',
+  'stop.refused':
+    'The provider’s safety system declined this request, so the model produced nothing. Rephrasing, or a different model, is the way on.',
+  'stop.filtered':
+    'The provider’s content filter blocked this reply. What you can see is only the part that got through.',
+  'stop.recitation':
+    'Stopped because the answer was reproducing source material too closely. Ask for it in your own words and it will usually go through.',
+  'stop.unknown': 'The provider ended this reply for a reason it did not explain.',
+
+  // The run has stopped and is waiting on a person — see the alertdialog in
+  // index.html. It was the one heading in the composer never translated.
+  'approval.title': 'Approve these actions?',
+  // The accessible name of the main composer. Not a placeholder — see index.html.
+  'composer.label': 'Message',
+
+  /* ── the transcript itself ───────────────────────────────────────
+   *
+   * These are on the path a user walks every single turn — the reasoning fold,
+   * a tool card's output, the buttons on a document — and every one of them was
+   * hard-coded English while the language switch sat in Settings claiming
+   * otherwise.
+   */
+  'chat.reasoning': 'Reasoning',
+  'chat.noOutput': '(no output)',
+  'chat.noResult': '(no result recorded)',
+  'chat.diagram': 'Diagram',
+  'chat.open': 'Open',
+  'chat.download': 'Download',
+  'chat.openNamed': 'Open {name}',
+  'chat.copy': 'Copy',
+  'chat.edit': 'Edit',
+  'chat.summaryFold': 'Read the summary',
+  'chat.compacted': '{n} earlier messages summarised to free up room',
+  'chat.compactedOne': '1 earlier message summarised to free up room',
+
+  /* ── things said while a turn runs ───────────────────────────── */
+  'status.reconnecting': 'Reconnecting…',
+  'status.restarting': 'Starting that reply again…',
+  'status.paused': 'Paused after many resumes. Send a message to carry on.',
+  'status.streamFailed': 'The stream failed.',
+  'status.queued': 'Sent — it will pick this up at the next step.',
+  'status.pickedUp': 'Picked up: "{text}"',
+  'status.folded': 'Folded {n} earlier messages into a summary to free up room.',
+  'usage.tokens': '{n} tokens',
+  'usage.thisTurn': 'this turn',
+  'usage.cached': '{n}% cached',
+  /* ── the mode chip, beside Send ──────────────────────────────────
+   *
+   * Five modes and the sentence explaining each. This sits next to the send
+   * button — the most-looked-at control in the app — and was English on every
+   * account whatever language they had chosen.
+   */
+  'policy.guarded.label': 'Guarded',
+  'policy.ask.label': 'Ask first',
+  'policy.auto.label': 'Auto-run',
+  'policy.plan.label': 'Plan',
+  'policy.readonly.label': 'Read-only',
+  'policy.guarded.hint':
+    'Reading, editing inside your workspace, driving the browser and everyday commands all run straight away. ' +
+    'Deleting, writing outside the workspace, touching Windows system paths and closing unsaved windows stop and ask. ' +
+    'That check is a list of known-dangerous patterns, not a sandbox — something destructive it does not recognise will run.',
+  'policy.auto.hint': 'Nothing is gated, including destructive actions. Fastest, and the one that can lose work.',
+  'policy.ask.hint': 'Every change waits for you. Safest, and the most interrupting — expect to be asked a lot.',
+  'policy.plan.hint': 'Explores and reads, then hands back a plan instead of doing the work. Nothing on your machine changes.',
+  'policy.readonly.hint': 'The assistant can look at things but the tools that change anything are never even offered to it.',
+
+  /* How hard the model is asked to think, five steps from cheap to careful. */
+  'effort.low': 'Low',
+  'effort.medium': 'Medium',
+  'effort.high': 'High',
+  'effort.xhigh': 'Extra high',
+  'effort.max': 'Max',
+  /* ── the shelves: Projects, Artifacts, Scheduled ─────────────────
+   *
+   * Four whole screens that called t() zero times. The dictionaries were in
+   * sync the entire time, which is exactly why test:i18n never noticed.
+   */
+  'pages.projects.title': 'Projects',
+  'pages.projects.new': 'New project',
+  'pages.sortBy': 'Sort by',
+  'pages.filterBy': 'Filter by',
+  'pages.order.updated': 'Last updated',
+  'pages.order.created': 'Date created',
+  'pages.order.name': 'Name',
+  'pages.order.archived': 'Archived',
+  'pages.projects.noneMatch': 'No project matches that.',
+  'pages.projects.none': 'No projects yet.',
+  'pages.projects.noneHint':
+    'A project keeps its instructions and its documents in one place, and every conversation started inside it answers from those documents.',
+  'pages.projects.archivedNoneMatch': 'No archived project matches that.',
+  'pages.projects.archivedNone': 'Nothing archived.',
+  'pages.pinned': 'Pinned',
+  'pages.optionsFor': 'Options for {name}',
+
+  'pages.artifacts.title': 'Artifacts',
+  'pages.artifacts.new': 'New artifact',
+  'pages.artifacts.none': 'No artifacts yet.',
+  'pages.artifacts.noneMatch': 'Nothing here matches.',
+  'pages.artifacts.newHint': 'Ask for what you want made — a report, a spreadsheet, a small page.',
+  'pages.kind.all': 'All',
+  'pages.kind.page': 'Pages',
+  'pages.kind.code': 'Code',
+  'pages.kind.document': 'Documents',
+  'pages.kind.sheet': 'Spreadsheets',
+  'pages.kind.deck': 'Decks',
+
+  'pages.tasks.title': 'Scheduled tasks',
+  'pages.tasks.new': 'New task',
+  'pages.tasks.none': 'No scheduled tasks yet.',
+  'pages.order.next': 'Next run',
+  'pages.tasks.describe': 'Describe it to the assistant',
+  'pages.tasks.describeHint': 'Tell it what to run and when — "every weekday at 8, search for…"',
+  'pages.tasks.manual': 'Set up manually',
+  'pages.tasks.scheduled': 'Scheduled.',
+  'pages.tasks.openResult': 'Open result',
+  'pages.tasks.pause': 'Pause',
+  'pages.tasks.resume': 'Resume',
+  'pages.tasks.remove': 'Remove',
+  'pages.tasks.removeConfirm': 'Remove?',
+  'pages.tasks.every': 'every {cron}',
+  'pages.tasks.once': 'once',
+  'pages.tasks.next': 'next {when}',
+  'pages.tasks.paused': 'paused',
+  'pages.tasks.last': 'last {status}',
+
+  /* The four starting points offered on an empty Scheduled shelf. */
+  'pages.idea.briefing.name': 'Morning briefing',
+  'pages.idea.briefing.what': 'What changed overnight in the things you follow, searched and summarised.',
+  'pages.idea.briefing.when': 'Weekdays at 08:00',
+  'pages.idea.watch.name': 'Watch a topic',
+  'pages.idea.watch.what': 'Check for news about something, and only speak up when there is any.',
+  'pages.idea.watch.when': 'Daily at 09:00',
+  'pages.idea.report.name': 'Weekly report',
+  'pages.idea.report.what': 'A Word document summarising the week, made and left in the conversation.',
+  'pages.idea.report.when': 'Fridays at 16:00',
+  'pages.idea.tests.name': 'Check the workspace',
+  'pages.idea.tests.what': 'Run the tests on your machine and report what failed.',
+  'pages.idea.tests.when': 'Weekdays at 09:00',
+  /* Relative time, and the two counts on a project card. Vietnamese does not
+     inflect the noun, so these are whole phrases rather than a stem plus an
+     's' — which is also why `plural()` could not simply be translated. */
+  'when.justNow': 'just now',
+  'when.minutes': '{n} minutes ago',
+  'when.hours': '{n} hours ago',
+  'when.yesterday': 'yesterday',
+  'when.days': '{n} days ago',
+  'count.sources': '{n} sources',
+  'count.sourcesOne': '1 source',
+  'count.conversations': '{n} conversations',
+  'count.conversationsOne': '1 conversation',
+  'count.messages': '{n} messages',
+  'count.messagesOne': '1 message',
+  'count.pages': '{n} pages',
+  'count.pagesOne': '1 page',
+  'pages.tasks.localOnly':
+    'Scheduled tasks run while this app is running. On a deployment they run without it.',
+  /* ── workflows ───────────────────────────────────────────────── */
+  'wf.title': 'Workflows',
+  'wf.new': 'New workflow',
+  'wf.order.recent': 'Recently added',
+  'wf.describe': 'Describe it to the assistant',
+  'wf.describeHint':
+    'Say the steps in order — "every Monday: pull the numbers, chart them, email the team".',
+  'wf.manual': 'Set up manually',
+  'wf.none': 'No workflows yet.',
+  'wf.noneHint':
+    'Use one when a job has stages that must happen in order — and when repeating a stage by accident would be a problem. A single instruction is a scheduled task instead.',
+  'wf.pause': 'Pause',
+  'wf.resume': 'Resume',
+  'wf.remove': 'Remove',
+  'wf.removeConfirm': 'Remove?',
+  'wf.runNow': 'Run now',
+  'wf.running': 'Running…',
+  'wf.finished': 'Finished.',
+  'wf.startedBackground': 'Started — it will carry on in the background.',
+  'wf.openResult': 'Open result',
+  'wf.edit': 'Edit',
+  'wf.paused': 'paused',
+  'wf.lastRun': 'last run {status}',
+  'wf.neverRun': 'never run',
+  'wf.formEdit': 'Edit workflow',
+  'wf.formCreate': 'Create workflow',
+  'wf.needStep': 'Give it at least one step — one instruction per line.',
+  'wf.saved': 'Saved.',
+  'wf.created': 'Created.',
+
+  /* ── the model browser ───────────────────────────────────────── */
+  'models.allVendors': 'All vendors',
+  'models.empty': 'Library is empty — press Refresh to pull it from OpenRouter.',
+  'models.noMatch': 'Nothing matched. Try fewer words, or add the model by id in Settings → Models.',
+  'models.builtIn': 'Built in — your own provider keys',
+  'models.onYourKey': '{provider} — on your own key',
+  'models.refreshing': 'Refreshing…',
+  'models.refreshNow': 'Refresh now',
+  'models.automatic': 'Automatic',
+  'models.autoName': 'Auto — best free model',
+  'models.autoMeta':
+    'Picks the strongest free model you can run right now. Image support is a toggle in Settings → Behaviour.',
+
+  /* ── the workspace file list and editor ──────────────────────── */
+  'ws.deleteConfirm': 'Delete?',
+  'ws.renamePrompt': 'Rename or move — edit the path:',
+  'ws.moved': 'Moved.',
+  'ws.deleted': 'Deleted.',
+  'ws.leaveUnsaved': 'Leave without saving?',
+  'ws.saving': 'Saving…',
+  'ws.saved': 'Saved.',
+  'ws.newFilePrompt': 'New file — name it, with a path if you want a folder:',
+  /* ── the project page ────────────────────────────────────────── */
+  'proj.pin': 'Pin',
+  'proj.unpin': 'Unpin',
+  'proj.pinned': 'Pinned to the top.',
+  'proj.unpinned': 'Unpinned.',
+  'proj.pinAria': 'Pin project',
+  'proj.unpinAria': 'Unpin project',
+  'proj.editDetails': 'Edit details',
+  'proj.archive': 'Archive',
+  'proj.restore': 'Restore',
+  'proj.archived': 'Archived. It is on the archived shelf, with everything still in it.',
+  'proj.restored': 'Back on the shelf.',
+  'proj.delete': 'Delete',
+  'proj.deleted': 'Deleted.',
+  'proj.answersFrom': 'Answers from {sources}',
+  'proj.answersFirstFrom': 'Answers first from {sources}',
+  'proj.noSources': 'No sources yet — answers like any other chat',
+  'proj.untitled': 'Untitled',
+  'proj.editInstructions': 'Edit instructions',
+  'proj.instructionsSaved': 'Instructions saved.',
+  'proj.uploadFromDevice': 'Upload from device',
+  'proj.addTextContent': 'Add text content',
+  'proj.nothingToAdd': 'There is nothing to add.',
+  'proj.pastedText': 'Pasted text',
+  'proj.added': 'Added.',
+  'proj.addedSources': 'Added {sources}.',
+  'proj.fallbackName': 'Project',
+
+  /* ── the artifact viewer ─────────────────────────────────────── */
+  'viewer.noStorage': 'This frame has no storage.',
+  'viewer.markdownNote': 'Markdown for documents, the file itself for code.',
+  'viewer.versionNote': 'An earlier version, shown as it was. Restore it to edit.',
+  'viewer.unreadable': 'This file could not be read.',
+  'viewer.tab.preview': 'Preview',
+  'viewer.tab.code': 'Code',
+  'viewer.tab.source': 'Source',
+  'viewer.kind.sheets': 'Sheets',
+  'viewer.kind.slides': 'Slides',
+  'viewer.kind.pages': 'Pages',
+  'viewer.kind.document': 'Document',
+  'viewer.open': 'Open',
+  'viewer.openIn': 'Open in {app}',
+  'viewer.openInDefault': 'Open in the default app',
+  'viewer.copy': 'Copy',
+  'viewer.download': 'Download',
+  'viewer.showInFolder': 'Show in folder',
+  'viewer.copyPicture': 'Copy picture',
+  'viewer.copyFormatted': 'Copy with formatting',
+  'viewer.print': 'Print — or save as PDF',
+  'viewer.noComputer': 'No computer connected',
+  'viewer.noComputerHint':
+    'Pair a computer to open files in Word, Excel or a folder. The header chip does it.',
+  'viewer.nothingToCopy': 'There is nothing in this one to copy.',
+  'viewer.copiedRich': 'Copied — paste into Word and it keeps its formatting.',
+  'viewer.copied': 'Copied.',
+  'viewer.copyRefused': 'The browser would not allow copying. Press Ctrl/⌘+C instead.',
+  'viewer.pictureCopied': 'Picture copied.',
+  'viewer.pictureCopyRefused': 'The browser would not allow copying the picture. Download it instead.',
+  'viewer.saving': 'Saving…',
+  'viewer.backToPanel': 'Back to the panel',
+  'viewer.fullSize': 'Full size',
+  'viewer.opening': 'Opening…',
+  'viewer.couldNotOpen': 'That file could not be opened.',
+
+  /* ── the live screen panel ───────────────────────────────────── */
+  'screen.title': 'Screen',
+  'screen.wholeMachine': 'The whole screen of the machine running the worker.',
+  'screen.sandboxClosed': 'Sandbox closed.',
+  'screen.driveOn': 'Stop controlling the page',
+  'screen.driveOff': 'Take control — click and type into the page yourself',
+  'ws.renameAria': 'Rename {name}',
+  'ws.deleteAria': 'Delete {name}',
+  'ws.renameTitle': 'Rename or move',
+  'proj.memoryScope': 'Memory is stored per account, not per project.',
+  'proj.accountWide': 'account-wide',
+  'proj.addContext': 'Add context',
+  'proj.removeAria': 'Remove {name}',
+  'proj.needName': 'A project needs a name.',
+  // `\n` as an escape, not a real line break: this goes into `window.confirm`,
+  // where the blank line is what separates the question from its consequence.
+  'proj.deleteConfirm':
+    'Delete “{name}”?\n\nIts sources go with it. The conversations started in it are kept — they return to the ordinary list.',
+  'count.chars': '{n} chars',
+  'count.charsK': '{n}K chars',
+  'count.charsM': '{n}M chars',
+  'screen.sandboxNote': 'The assistant’s own browser window — separate from the browser you are using.',
+
+
+
+
+
   // The checklist drawn inside a message by `update_plan`, and the count beside
   // the same steps in the progress rail.
   'chat.plan': 'Plan',

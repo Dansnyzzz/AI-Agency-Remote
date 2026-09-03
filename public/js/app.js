@@ -9,6 +9,7 @@ import {
   summariseToolInput,
   revealInStrip,
   summaryDivider,
+  stopNote,
 } from './render.js';
 import { createModelBrowser } from './models.js';
 import { createScreen } from './screen.js';
@@ -123,6 +124,18 @@ const state = {
    */
   sealed: false,
   toolHandles: new Map(),
+  /**
+   * The last "why this reply stopped" notice drawn, so one outcome is not
+   * announced twice.
+   *
+   * A truncated turn can report itself twice in one run — once on the path that
+   * still has tool calls to make, and again on the way out — and two identical
+   * warnings side by side read as two separate failures. Cleared when a run
+   * ends, because the *next* turn being truncated as well is news, not a
+   * repeat: suppressing that would silently hide exactly the thing this whole
+   * mechanism exists to surface.
+   */
+  lastStopNote: null,
 };
 
 /**
@@ -132,24 +145,17 @@ const state = {
  */
 const POLICIES = ['guarded', 'auto', 'ask', 'plan', 'readonly'];
 
-const POLICY_LABEL = {
-  guarded: 'Guarded',
-  ask: 'Ask first',
-  auto: 'Auto-run',
-  plan: 'Plan',
-  readonly: 'Read-only',
-};
-
-const POLICY_HINT = {
-  guarded:
-    'Reading, editing inside your workspace, driving the browser and everyday commands all run straight away. ' +
-    'Deleting, writing outside the workspace, touching Windows system paths and closing unsaved windows stop and ask. ' +
-    'That check is a list of known-dangerous patterns, not a sandbox — something destructive it does not recognise will run.',
-  auto: 'Nothing is gated, including destructive actions. Fastest, and the one that can lose work.',
-  ask: 'Every change waits for you. Safest, and the most interrupting — expect to be asked a lot.',
-  plan: 'Explores and reads, then hands back a plan instead of doing the work. Nothing on your machine changes.',
-  readonly: 'The assistant can look at things but the tools that change anything are never even offered to it.',
-};
+/**
+ * Looked up when drawn, not built at import.
+ *
+ * These were plain objects of English, which meant two things: the mode chip
+ * sitting beside Send was untranslated on a Vietnamese account, and — had they
+ * simply been wrapped in `t()` where they stand — they would have been resolved
+ * at module load, before `bootstrap` reports the account's language, and then
+ * never updated when it did. Functions, so every read is current.
+ */
+const POLICY_LABEL = (policy) => t(`policy.${policy}.label`);
+const POLICY_HINT = (policy) => t(`policy.${policy}.hint`);
 
 /**
  * A picture for each mode, on the chip and beside its row in the menu.
@@ -188,13 +194,9 @@ const POLICY_ICON = {
  * thought it puts into doing it. Reaching one and not the other meant opening a
  * settings sheet to change a number you were already thinking about.
  */
-const EFFORTS = [
-  ['low', 'Low'],
-  ['medium', 'Medium'],
-  ['high', 'High'],
-  ['xhigh', 'Extra high'],
-  ['max', 'Max'],
-];
+const EFFORT_IDS = ['low', 'medium', 'high', 'xhigh', 'max'];
+/** `[id, label]` pairs, translated on every read — see POLICY_LABEL above. */
+const efforts = () => EFFORT_IDS.map((id) => [id, t(`effort.${id}`)]);
 
 const SUGGESTIONS = [
   'Show me what is in my workspace and summarise the project.',
@@ -494,8 +496,21 @@ async function start() {
 
   await refreshChats();
 
-  // Keep the worker indicator honest without a websocket.
-  setInterval(refreshWorker, 20_000);
+  /**
+   * Keep the worker indicator honest without a websocket.
+   *
+   * Skipped while the tab is hidden. This fired every twenty seconds for the
+   * life of every open tab, foreground or not, to decide the colour of one dot —
+   * so a browser left with five background tabs made a request every four
+   * seconds to tell nobody anything. Refreshed immediately on return, so the
+   * dot is correct by the time it can be looked at.
+   */
+  setInterval(() => {
+    if (!document.hidden) refreshWorker();
+  }, 20_000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshWorker();
+  });
 
   /**
    * Nudge overdue scheduled tasks along, on a deployment only.
@@ -813,7 +828,28 @@ function gotoShelf(which) {
   pages.show(which);
 }
 
+/**
+ * Stop listening to the run before leaving the conversation it belongs to.
+ *
+ * Navigating away used to leave the stream running while `state.chatId` moved
+ * underneath it, and the handlers append to `$('messages')` by name rather than
+ * to the transcript they came from. So the old run's prose, its stop notes, its
+ * compaction dividers and its tool cards were grafted into whichever
+ * conversation was now on screen — and `noteFile` lit the wrong file chip and
+ * auto-opened a document from a chat the user had left. `beginEdit` already
+ * guards on `state.running`; navigation never did.
+ *
+ * Deliberately *not* `api.stopChat`. The run holds a lease and every turn is
+ * persisted server-side, so the work carries on and is waiting, complete, when
+ * they come back. Only this tab's attention moves.
+ */
+function detachRun() {
+  if (!state.running) return;
+  state.abort?.abort();
+}
+
 async function openChat(id) {
+  detachRun();
   closeSidebar();
   // A conversation replaces whichever shelf was on screen.
   leavePages();
@@ -830,6 +866,9 @@ async function openChat(id) {
   state.files = files || [];
   renderFilesChip();
   clearQueue();
+  // Belt to the run-detach braces: a stop note left over from another
+  // conversation must never dedupe away the first one in this conversation.
+  state.lastStopNote = null;
   // Opening a stored conversation abandons the blank one you were sitting in.
   state.pendingProject = null;
   refreshModelFacts();
@@ -888,6 +927,9 @@ async function openChat(id) {
  * so this is the same road for every one after it.
  */
 function startBlankChat(project = null) {
+  // Same reason as `openChat`: the run keeps going server-side, but its events
+  // must not be drawn into the blank conversation now on screen.
+  detachRun();
   leavePages();
   clearStaged();
   state.chatId = null;
@@ -898,6 +940,7 @@ function startBlankChat(project = null) {
   renderProjectChip();
   renderFilesChip();
   clearQueue();
+  state.lastStopNote = null;
 
   /**
    * Everything that described the last conversation, cleared.
@@ -975,6 +1018,32 @@ function renderFilesChip() {
 }
 
 /** Remember a file the run just produced, replacing an earlier version of it. */
+/**
+ * Hand the sent bubble over to the server's copy, and let the blobs go.
+ *
+ * The optimistic bubble is drawn from local `blob:` previews, because the
+ * server copy is not fetchable until the message exists — that part is
+ * deliberate and stays. What was missing is the other half: once the send
+ * succeeds those previews are never needed again, and nothing revoked them.
+ * `clearStaged`, `clearQueue` and the queue-drop handler all revoke correctly;
+ * the *sent* bubble simply kept its URLs, and `openChat` then dropped the nodes
+ * with `innerHTML = ''` without touching them. A pasted screenshot is several
+ * megabytes pinned for the lifetime of the tab, per message.
+ *
+ * The images are repointed rather than left blank, so the bubble keeps showing
+ * the picture — it is now reading the same bytes back from the server.
+ */
+function settleAttachments(node, previews, ids) {
+  const images = node.querySelectorAll('img.bubble__image');
+  previews.forEach((file, i) => {
+    if (!file?.preview) return;
+    const img = images[i];
+    if (img && ids[i]) img.src = `/api/attachments/${ids[i]}`;
+    URL.revokeObjectURL(file.preview);
+    file.preview = null;
+  });
+}
+
 function noteFile(file) {
   if (!file?.id) return;
   state.files = [file, ...(state.files || []).filter((other) => other.id !== file.id)];
@@ -1392,6 +1461,7 @@ $('composer').addEventListener('submit', async (event) => {
 
     const { message } = await api.sendMessage(state.chatId, text, ids);
     if (message?.id) node.dataset.messageId = message.id;
+    settleAttachments(node, sending, ids);
     await refreshChats();
     $('chat-title').textContent = state.chats.find((c) => c.id === state.chatId)?.title || 'Chat';
 
@@ -1500,7 +1570,8 @@ async function deliver(item, { interrupting = false } = {}) {
     // Stamped after the fact: the id only exists once the server has it, and
     // without it the bubble has nothing to edit.
     if (message?.id) node.dataset.messageId = message.id;
-    if (interrupting) toast('Sent — it will pick this up at the next step.');
+    settleAttachments(node, item.files || [], item.ids || []);
+    if (interrupting) toast(t('status.queued'));
     return true;
   } catch (err) {
     node.remove();
@@ -1648,6 +1719,23 @@ async function mirrorRun() {
         turn.finishThinking();
         turn.appendText(data?.delta || '');
         maybeScroll();
+      } else if (event === 'message') {
+        /**
+         * The turn was persisted, so the next prose is a new block.
+         *
+         * Without this `state.sealed` never became true in a following tab and
+         * `nextBlock()` never opened a fresh one — so every step of a
+         * multi-step turn concatenated into a single markdown blob, which then
+         * corrected itself minutes later on the reload below. Cheap to handle,
+         * and the difference between watching a run and watching a smear.
+         */
+        state.turn?.finishThinking();
+        state.sealed = true;
+      } else if (event === 'retry') {
+        // The provider is restarting this reply on another key: what was shown
+        // is being replaced, not continued. A follower that kept the abandoned
+        // half would show a duplicated paragraph with no way to tell.
+        nextBlock().resetText();
       } else if (event === 'status' && data?.phase === 'thinking') {
         setStatus(t('mirror.watching'));
       } else if (event === 'done' || event === 'error') {
@@ -1680,7 +1768,7 @@ async function stream(decision) {
   state.turn = assistantMessage();
   state.sealed = false;
   $('messages').append(state.turn.node);
-  setStatus('Thinking…');
+  setStatus(t('status.thinking'));
   scrollToEnd();
 
   try {
@@ -1691,12 +1779,12 @@ async function stream(decision) {
       if (outcome !== 'cut') break;
 
       if (resume === MAX_RESUMES) {
-        toast('Paused after many resumes. Send a message to keep going.');
+        toast(t('status.paused'));
         break;
       }
       // The host closed the connection mid-run. Every step is already saved,
       // so reconnecting continues from exactly where it stopped.
-      setStatus('Reconnecting…');
+      setStatus(t('status.reconnecting'));
     }
   } catch (err) {
     // 409 means another tab holds this conversation. That is the lock doing its
@@ -1707,7 +1795,7 @@ async function stream(decision) {
       // here. See mirror.js and `mirrorRun`.
       await mirrorRun();
     } else if (err.name !== 'AbortError') {
-      toast(err.message || 'The stream failed.', 'error');
+      toast(err.message || t('status.streamFailed'), 'error');
     }
   } finally {
     state.running = false;
@@ -1717,6 +1805,12 @@ async function stream(decision) {
     if (state.turn && !state.turn.node.querySelector('.prose, .block, .plan')) state.turn.node.remove();
     state.turn = null;
     state.toolHandles.clear();
+    // See the note on `lastStopNote`: the dedupe is per run, not for the life
+    // of the conversation. A second truncated turn has to be able to say so.
+    state.lastStopNote = null;
+    // The assistant has stopped touching the screen, so stop shipping frames of
+    // it. Leaves a panel the user opened, or is driving, alone.
+    screenPanel.restIfIdle();
     await refreshChats();
 
     // Whatever was typed while this was running goes now — including after a
@@ -1739,7 +1833,7 @@ async function streamOnce(decision) {
       runId: state.runId,
       signal: state.abort.signal,
       handlers: {
-        status: ({ phase, name, message, seconds, model, free }) => {
+        status: ({ phase, name, message, seconds, model, free, stop }) => {
           if (phase === 'compacting') setStatus(t('status.compacting'));
           else if (phase === 'thinking') setStatus(t('status.thinking'));
           /**
@@ -1762,6 +1856,11 @@ async function streamOnce(decision) {
                 .replace('{n}', String(seconds ?? 0)),
             );
           } else if (phase === 'tool') setStatus(t('status.tool').replace('{name}', name));
+          // A turn that stopped badly but still asked for tools — truncated
+          // part-way through writing a call, most often. Drawn into the
+          // transcript rather than toasted, because the loop carries on and a
+          // toast would be gone before the consequences arrived.
+          else if (stop) noteStop({ kind: stop, message });
           else if (message) toast(message);
         },
         thinking: ({ delta }) => {
@@ -1780,7 +1879,7 @@ async function streamOnce(decision) {
         retry: ({ reason }) => {
           nextBlock().resetText();
           if (reason) toast(reason);
-          setStatus('Starting that reply again…');
+          setStatus(t('status.restarting'));
           maybeScroll();
         },
         plan: ({ steps }) => {
@@ -1792,7 +1891,7 @@ async function streamOnce(decision) {
           // asked for it, even though that turn is already persisted.
           state.turn.finishThinking();
           state.toolHandles.set(call.id, state.turn.startTool(call));
-          setStatus(`Running ${call.name}…`);
+          setStatus(t('status.tool').replace('{name}', call.name));
           // Show the screen the moment the assistant touches the browser or the
           // desktop, rather than making the user go looking for it.
           if (call.name.startsWith('browser_') || call.name.startsWith('desktop_')) {
@@ -1818,15 +1917,20 @@ async function streamOnce(decision) {
         },
         steer: ({ text }) => {
           setStatus(null);
-          toast(`Picked up: "${text.slice(0, 60)}${text.length > 60 ? '…' : ''}"`);
+          toast(t('status.pickedUp').replace('{text}', `${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`));
         },
         usage: (totals) => renderUsage(totals),
         context: (info) => renderContext(info),
-        compacted: ({ replaced }) => {
+        compacted: ({ replaced, text }) => {
           // Said out loud, because the transcript the model sees has just
           // changed and that is not something to do silently.
-          toast(`Folded ${replaced} earlier messages into a summary to free up room.`);
-          $('messages').append(summaryDivider(replaced));
+          toast(t('status.folded').replace('{n}', String(replaced)));
+          // `text` too: `summaryDivider` renders a "Read the summary"
+          // disclosure when it is given one, and `openChat` already passes it.
+          // Dropping it here made the summary visible after a reload and
+          // invisible at the moment it happened — which is exactly when
+          // somebody wants to check what was folded away.
+          $('messages').append(summaryDivider(replaced, text));
           maybeScroll();
         },
         approval_required: ({ toolCalls }) => {
@@ -1838,16 +1942,62 @@ async function streamOnce(decision) {
           state.turn?.finish();
           toast(message, 'error');
         },
-        done: () => {
+        done: ({ stop }) => {
           outcome = 'done';
           // Collapse any run of steps still drawn as in progress. Without this a
           // finished turn keeps a spinner for the rest of the conversation.
           state.turn?.finish();
+          /**
+           * Say when the reply is not actually an answer.
+           *
+           * `stop.message` is non-null exactly when the turn ended badly — cut
+           * off at the output cap, declined by a safety classifier, blocked by
+           * a content filter. This event carried that all along and this
+           * handler used to drop it, so a truncated reply and a finished one
+           * were indistinguishable on screen, and a refusal (which returns no
+           * content at all) showed as an empty message with no explanation.
+           *
+           * Translated from the stable `kind` rather than shown in the server's
+           * English, and the server's own sentence is the fallback for a kind
+           * this build has no string for yet.
+           */
+          if (stop?.message) noteStop(stop);
         },
       },
     });
 
   return state.abort.signal.aborted ? 'done' : outcome;
+}
+
+/**
+ * Draw the reason a reply stopped short, once.
+ *
+ * Translated from the stable `kind` the server sends rather than from its
+ * English sentence — the app is used in Vietnamese, and a warning nobody can
+ * read is barely better than no warning. The server's own wording is the
+ * fallback for a kind this build has no string for, which is what keeps a newer
+ * provider outcome visible instead of silently blank.
+ *
+ * Guarded against repeats: a truncated turn can report itself on the tool path
+ * and again on the way out, and two identical notices side by side read as two
+ * separate failures.
+ */
+function noteStop({ kind, message, detail }) {
+  // `t` returns the key itself for a string it does not have — see i18n.js,
+  // where that is deliberate so a gap is loud rather than silently English.
+  // Here it is the signal to fall back to what the server wrote.
+  const key = `stop.${kind}`;
+  const translated = t(key);
+  // The provider's own explanation is appended rather than folded into the
+  // fallback, because the translated sentence wins whenever it exists — and on
+  // a refusal, which is where `detail` is populated, it always does. Without
+  // this the refusal category never reached anybody.
+  const sentence = translated === key ? message : translated;
+  const body = sentence && detail ? `${sentence} (${detail})` : sentence;
+  if (!body || state.lastStopNote === `${kind}:${body}`) return;
+  state.lastStopNote = `${kind}:${body}`;
+  $('messages').append(stopNote(kind, body));
+  maybeScroll();
 }
 
 /** The block new prose should go into, starting a fresh one after a save. */
@@ -1888,13 +2038,27 @@ function showApproval(toolCalls) {
   $('approval-list').innerHTML = toolCalls
     .map(
       (c) =>
-        `<div>${c.name} — ${escapeText(summariseToolInput(c.name, c.input))}` +
+        // `c.name` is escaped like every other field on this line. Built-in tool
+        // names are safe, but an MCP tool name is chosen by a third-party server
+        // the user connected — and this is the approval prompt, the one screen
+        // whose whole job is to state accurately what is about to run.
+        `<div>${escapeText(c.name)} — ${escapeText(summariseToolInput(c.name, c.input))}` +
         (c.needsApproval && c.reason ? `<br /><span class="warn-text">${escapeText(c.reason)}</span>` : '') +
         '</div>',
     )
     .join('');
   box.hidden = false;
   scrollToEnd();
+  /**
+   * Put the keyboard where the decision is.
+   *
+   * The run has halted and nothing further happens until somebody answers, but
+   * focus stayed wherever it was — so a keyboard or screen-reader user had to
+   * go looking for a prompt they were never told about. Deny is focused rather
+   * than Allow: the safe half of an irreversible choice should be the one a
+   * stray Return key lands on.
+   */
+  $('deny').focus();
 }
 
 function hideApproval() {
@@ -1955,8 +2119,8 @@ function setEmpty(visible) {
  */
 function renderPolicy() {
   const policy = state.boot.prefs.toolPolicy;
-  $('policy-label').textContent = POLICY_LABEL[policy];
-  $('policy-chip').title = POLICY_HINT[policy] || '';
+  $('policy-label').textContent = POLICY_LABEL(policy);
+  $('policy-chip').title = POLICY_HINT(policy) || '';
   // The glyph changes with the mode. A chip that always showed the same bolt
   // was decoration; one that changes is the fastest way to see where you are.
   $('policy-icon').innerHTML = POLICY_ICON[policy] || '';
@@ -1973,17 +2137,27 @@ function setStatus(text) {
   if (text) host.append(statusLine(text));
 }
 
-function renderUsage({ input, output, cost, priced }) {
+function renderUsage({ input, output, cost, priced, estimated, cacheRead }) {
   // Nothing to report rather than "0 tokens this turn", which reads as a turn
   // that happened and cost nothing.
   if (!input && !output) {
     $('composer-meta').textContent = '';
     return;
   }
-  const tokens = `${(input + output).toLocaleString()} tokens`;
-  $('composer-meta').textContent = priced
-    ? `${tokens} · ~$${cost.toFixed(4)} this turn`
-    : `${tokens} this turn`;
+  const tokens = t('usage.tokens').replace('{n}', (input + output).toLocaleString());
+  // "~$" only when the figure is our own arithmetic. When the provider invoiced
+  // the turn — OpenRouter and OrcaRouter both do — the number is exact and the
+  // tilde would be understating what we actually know.
+  const money = priced
+    ? ` · ${estimated ? '~' : ''}$${cost.toFixed(4)} ${t('usage.thisTurn')}`
+    : ` ${t('usage.thisTurn')}`;
+  // A cache hit is the single biggest lever on an agentic conversation's cost,
+  // and it was invisible. Shown only when it was substantial enough to matter.
+  const cached =
+    cacheRead && input && cacheRead / input >= 0.2
+      ? ` · ${t('usage.cached').replace('{n}', String(Math.round((cacheRead / input) * 100)))}`
+      : '';
+  $('composer-meta').textContent = `${tokens}${money}${cached}`;
 }
 
 function setRunning(running) {
@@ -2425,15 +2599,15 @@ $('policy-chip').addEventListener('click', () => {
     [
       { static: true, label: 'Modes' },
       ...POLICIES.map((policy) => ({
-        label: POLICY_LABEL[policy],
-        hint: POLICY_HINT[policy],
+        label: POLICY_LABEL(policy),
+        hint: POLICY_HINT(policy),
         icon: POLICY_ICON[policy],
         active: policy === current,
         async run() {
           if (policy === current) return;
           state.boot.prefs = await api.savePrefs({ toolPolicy: policy });
           renderPolicy();
-          toast(`${POLICY_LABEL[policy]}.`);
+          toast(`${POLICY_LABEL(policy)}.`);
         },
       })),
       { node: effortRow() },
@@ -2462,7 +2636,7 @@ function effortRow() {
 
   const paint = () => {
     const current = state.boot.prefs.effort;
-    const index = EFFORTS.findIndex(([value]) => value === current);
+    const index = EFFORT_IDS.indexOf(current);
     name.textContent = `Effort (${effortLabel(current)})`;
     for (const [i, dot] of [...dots.children].entries()) {
       dot.classList.toggle('is-on', i === index);
@@ -2471,7 +2645,7 @@ function effortRow() {
     }
   };
 
-  for (const [value, label] of EFFORTS) {
+  for (const [value, label] of efforts()) {
     const dot = document.createElement('button');
     dot.type = 'button';
     dot.className = 'effort-dot';
@@ -2498,7 +2672,7 @@ function effortRow() {
 }
 
 /** Falls back to High, which is what an account with no answer stored gets. */
-const effortLabel = (value) => (EFFORTS.find(([v]) => v === value) || EFFORTS[2])[1];
+const effortLabel = (value) => (efforts().find(([v]) => v === value) || efforts()[2])[1];
 
 /**
  * The chip opens the picker, and only the picker.
@@ -3633,7 +3807,12 @@ function showModelNews(model) {
 async function checkModelNews() {
   try {
     const { model } = await api.modelNews();
-    if (model) showModelNews(model);
+    if (!model) return;
+    showModelNews(model);
+    // Only now is the twenty-hour quiet period spent — see markAnnouncementShown.
+    // Not awaited: the dialog is up either way, and a failed acknowledgement
+    // should mean being told again, not losing the dialog.
+    api.decideModelNews(model.id, 'shown').catch(() => {});
   } catch {
     /* never worth interrupting a session over */
   }
@@ -4198,8 +4377,31 @@ function scrollToEnd() {
   pinned = true;
   requestAnimationFrame(() => thread.scrollTo({ top: thread.scrollHeight }));
 }
+/**
+ * Keep the transcript pinned to the bottom, at most once a frame.
+ *
+ * Called from six stream handlers, so it ran on every `thinking` and every
+ * `text` delta — and reading `scrollHeight` immediately after writing markup
+ * forces a synchronous reflow of the whole transcript. Write, read, write, read,
+ * per token, on the longest DOM in the app: textbook layout thrash, and it
+ * compounded the per-token re-parse in `render.js` rather than merely adding to
+ * it.
+ *
+ * Batched onto the same frame as the repaint, so the measurement happens once,
+ * after the DOM has settled, instead of once per token before it has.
+ */
+let scrollQueued = false;
 function maybeScroll() {
-  if (pinned) thread.scrollTop = thread.scrollHeight;
+  if (!pinned || scrollQueued) return;
+  scrollQueued = true;
+  const run = () => {
+    scrollQueued = false;
+    // Re-checked: the user may have scrolled up in the meantime, and stealing
+    // the view back from somebody reading is worse than not following.
+    if (pinned) thread.scrollTop = thread.scrollHeight;
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, 16);
 }
 
 /* ── the detail rail ───────────────────────────────────────────── */
