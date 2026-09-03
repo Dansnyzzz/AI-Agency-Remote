@@ -759,6 +759,9 @@ function armed(button, warning, run) {
     ready = false;
     button.textContent = original;
     button.classList.remove('is-armed');
+    // Only a live region while it is asking. A button that stays one would
+    // announce its own label every time anything rewrote it.
+    button.removeAttribute('aria-live');
   };
 
   button.addEventListener('click', async () => {
@@ -766,6 +769,20 @@ function armed(button, warning, run) {
       ready = true;
       button.textContent = warning;
       button.classList.add('is-armed');
+      /**
+       * Say that the button changed its mind.
+       *
+       * The label going from "Delete" to "Really delete?" is the whole safety
+       * mechanism, and it was silent: a screen reader had already announced the
+       * button when it was pressed, and changing the text of a control that is
+       * not in a live region announces nothing. So the first press appeared to
+       * do nothing and the second one deleted.
+       *
+       * The button becomes its own polite live region while it is armed, which
+       * announces the new label without moving focus, and stops being one when
+       * it resets so an idle button is not a region for ever.
+       */
+      button.setAttribute('aria-live', 'polite');
       setTimeout(reset, 5000); // an unanswered warning should not linger
       return;
     }
@@ -885,6 +902,21 @@ async function openChat(id) {
   renderTopbar();
 
   const host = $('messages');
+
+  /**
+   * Do not read the whole conversation out again.
+   *
+   * `#messages` is `aria-live="polite"`, which is right for the one thing it is
+   * there for — a reply arriving a token at a time while the person waits. It
+   * is wrong for this, where the entire transcript is torn down and rebuilt:
+   * every message counts as an addition, so opening a chat announced all of it,
+   * from the top, every time.
+   *
+   * `aria-busy` is the mechanism for exactly this. Assistive technology holds
+   * off while it is true and takes the finished result as one change, rather
+   * than narrating the construction.
+   */
+  host.setAttribute('aria-busy', 'true');
   host.innerHTML = '';
 
   // Tool results live in their own message, so index them by call id first.
@@ -898,6 +930,10 @@ async function openChat(id) {
     else if (m.role === 'summary') host.append(summaryDivider(m.replaced || 0, m.text));
     else if (m.role === 'assistant') host.append(assistantMessage().hydrate(m, resultsByCallId).node);
   }
+
+  // Built. Anything appended from here — a streaming reply — is announced
+  // normally, which is what the live region exists for.
+  host.setAttribute('aria-busy', 'false');
 
   // Whether this conversation is actually waiting on a yes is a question about
   // the risk rules and the account's policy, both of which live on the server —
