@@ -1,6 +1,6 @@
 import { api, runAgent } from './api.js';
 import { follow } from './mirror.js';
-import { wireCopyButtons } from './markdown.js';
+import { wireCopyButtons, escapeHtml } from './markdown.js';
 import {
   assistantMessage,
   userMessage,
@@ -642,7 +642,7 @@ function openRowMenu(chat, anchor, titleButton) {
     el.type = 'button';
     el.className = `menu__item${danger ? ' menu__item--danger' : ''}`;
     el.setAttribute('role', 'menuitem');
-    el.innerHTML = `${icon}<span>${escapeText(label)}</span><span class="menu__key">${key}</span>`;
+    el.innerHTML = `${icon}<span>${escapeHtml(label)}</span><span class="menu__key">${key}</span>`;
     el.addEventListener('click', (event) => {
       event.stopPropagation();
       onPick(el);
@@ -1490,22 +1490,22 @@ function renderQueue() {
       <div class="queue__item${item.open ? ' is-open' : ''}">
         <span class="queue__wait" aria-hidden="true"></span>
         <div class="queue__body">
-          <p class="queue__text" id="queue-text-${i}">${escapeText(
+          <p class="queue__text" id="queue-text-${i}">${escapeHtml(
             item.text || `${item.files.length} file${item.files.length === 1 ? '' : 's'}`,
           )}</p>
           <button class="queue__more" data-more="${i}" type="button" hidden
                   aria-expanded="${item.open ? 'true' : 'false'}" aria-controls="queue-text-${i}">${
-                    escapeText(t(item.open ? 'queue.less' : 'queue.more'))
+                    escapeHtml(t(item.open ? 'queue.less' : 'queue.more'))
                   }</button>
         </div>
         <div class="queue__actions">
           ${item.files.length ? `<span class="queue__files">${item.files.length} 📎</span>` : ''}
-          <button class="queue__now" data-now="${i}" type="button" data-i18n-title="queue.nowHint" title="${escapeText(
+          <button class="queue__now" data-now="${i}" type="button" data-i18n-title="queue.nowHint" title="${escapeHtml(
             t('queue.nowHint'),
-          )}">${escapeText(t('queue.now'))}</button>
-          <button class="queue__drop" data-drop="${i}" type="button" aria-label="${escapeText(
+          )}">${escapeHtml(t('queue.now'))}</button>
+          <button class="queue__drop" data-drop="${i}" type="button" aria-label="${escapeHtml(
             t('queue.remove'),
-          )}" title="${escapeText(t('queue.remove'))}">✕</button>
+          )}" title="${escapeHtml(t('queue.remove'))}">✕</button>
         </div>
       </div>`,
     )
@@ -2042,8 +2042,8 @@ function showApproval(toolCalls) {
         // names are safe, but an MCP tool name is chosen by a third-party server
         // the user connected — and this is the approval prompt, the one screen
         // whose whole job is to state accurately what is about to run.
-        `<div>${escapeText(c.name)} — ${escapeText(summariseToolInput(c.name, c.input))}` +
-        (c.needsApproval && c.reason ? `<br /><span class="warn-text">${escapeText(c.reason)}</span>` : '') +
+        `<div>${escapeHtml(c.name)} — ${escapeHtml(summariseToolInput(c.name, c.input))}` +
+        (c.needsApproval && c.reason ? `<br /><span class="warn-text">${escapeHtml(c.reason)}</span>` : '') +
         '</div>',
     )
     .join('');
@@ -2068,11 +2068,6 @@ function hideApproval() {
 $('allow').addEventListener('click', () => stream('allow'));
 $('deny').addEventListener('click', () => stream('deny'));
 
-function escapeText(value) {
-  const div = document.createElement('div');
-  div.textContent = value;
-  return div.innerHTML;
-}
 
 /* ── topbar, status, worker ────────────────────────────────────── */
 
@@ -2210,13 +2205,13 @@ function renderConnectSteps() {
   const command = remote && url ? `npm run connect -- ${url}` : 'npm start';
 
   const step = (html) => `<li>${html}</li>`;
-  const code = `<code class="connect__cmd">${escapeText(command)}</code>`;
+  const code = `<code class="connect__cmd">${escapeHtml(command)}</code>`;
 
   host.innerHTML = [
     step(`On that computer: clone this repo, then <code>npm install</code>.`),
     step(
       `Run ${code} <button class="btn btn--ghost btn--tiny" id="copy-connect" type="button" ` +
-        `data-command="${escapeText(command)}">${escapeText(t('worker.copy'))}</button>`,
+        `data-command="${escapeHtml(command)}">${escapeHtml(t('worker.copy'))}</button>`,
     ),
     step(
       remote
@@ -2253,19 +2248,19 @@ async function renderSetupLink(button, host) {
   try {
     const link = await api.enrolmentLink();
     const minutes = Math.max(1, Math.round((link.expiresInSec || 600) / 60));
-    const windows = escapeText(link.windows);
-    const unix = escapeText(link.unix);
+    const windows = escapeHtml(link.windows);
+    const unix = escapeHtml(link.unix);
 
     host.hidden = false;
     host.innerHTML =
-      `<p class="hint warn-text">${escapeText(t('setup.warning'))}</p>` +
+      `<p class="hint warn-text">${escapeHtml(t('setup.warning'))}</p>` +
       `<label class="device__label">Windows (PowerShell)</label>` +
       `<pre class="setup__cmd" data-copy="${windows}">${windows}</pre>` +
-      `<button class="btn btn--ghost btn--tiny" data-copy-setup="windows">${escapeText(t('worker.copy'))}</button>` +
+      `<button class="btn btn--ghost btn--tiny" data-copy-setup="windows">${escapeHtml(t('worker.copy'))}</button>` +
       `<label class="device__label">macOS / Linux</label>` +
       `<pre class="setup__cmd" data-copy="${unix}">${unix}</pre>` +
-      `<button class="btn btn--ghost btn--tiny" data-copy-setup="unix">${escapeText(t('worker.copy'))}</button>` +
-      `<p class="hint">${escapeText(t('setup.expires').replace('{n}', String(minutes)))}</p>`;
+      `<button class="btn btn--ghost btn--tiny" data-copy-setup="unix">${escapeHtml(t('worker.copy'))}</button>` +
+      `<p class="hint">${escapeHtml(t('setup.expires').replace('{n}', String(minutes)))}</p>`;
   } catch (err) {
     toast(err.message, 'error');
   } finally {
@@ -2335,8 +2330,8 @@ function renderWorker() {
     card.innerHTML = worker.online
       ? `<div class="provider"><div class="provider__head"><span class="provider__name">Connected</span>
            <span class="badge badge--ok">online</span></div>
-           <div class="hint">${escapeText(worker.info?.platform || '')} · Node ${escapeText(worker.info?.node || '')}<br />
-           Workspace: <code>${escapeText(worker.info?.workspace || '')}</code><br />${reach}</div></div>`
+           <div class="hint">${escapeHtml(worker.info?.platform || '')} · Node ${escapeHtml(worker.info?.node || '')}<br />
+           Workspace: <code>${escapeHtml(worker.info?.workspace || '')}</code><br />${reach}</div></div>`
       : `<div class="provider"><div class="provider__head"><span class="provider__name">Not connected</span>
            <span class="badge">offline</span></div>
            <div class="hint">${
@@ -2414,7 +2409,7 @@ function parseHeaders(text) {
 function renderMcp({ servers, status }) {
   const host = $('mcp-list');
   if (!servers.length) {
-    host.innerHTML = `<p class="hint">${escapeText(t('mcp.none'))}</p>`;
+    host.innerHTML = `<p class="hint">${escapeHtml(t('mcp.none'))}</p>`;
     return;
   }
 
@@ -2424,11 +2419,11 @@ function renderMcp({ servers, status }) {
     .map((server) => {
       const state = live.get(slugForMcp(server.name));
       const reach = server.enabled === false
-        ? `<span class="tag">${escapeText(t('mcp.off'))}</span>`
+        ? `<span class="tag">${escapeHtml(t('mcp.off'))}</span>`
         : state?.error
-          ? `<span class="tag tag--warn">${escapeText(t('mcp.broken'))}</span>`
+          ? `<span class="tag tag--warn">${escapeHtml(t('mcp.broken'))}</span>`
           : state
-            ? `<span class="tag tag--free">${escapeText(t('mcp.tools', { n: state.tools }))}</span>`
+            ? `<span class="tag tag--free">${escapeHtml(t('mcp.tools', { n: state.tools }))}</span>`
             : '';
 
       const where = server.transport === 'http'
@@ -2438,16 +2433,16 @@ function renderMcp({ servers, status }) {
       return `
         <div class="provider">
           <div class="provider__head">
-            <strong>${escapeText(server.name)}</strong> ${reach}
+            <strong>${escapeHtml(server.name)}</strong> ${reach}
           </div>
-          <div class="hint" style="word-break:break-all">${escapeText(where || '')}</div>
-          ${state?.error ? `<div class="hint" style="color:var(--warn)">${escapeText(state.error)}</div>` : ''}
+          <div class="hint" style="word-break:break-all">${escapeHtml(where || '')}</div>
+          ${state?.error ? `<div class="hint" style="color:var(--warn)">${escapeHtml(state.error)}</div>` : ''}
           <div class="row">
-            <button class="btn btn--ghost" data-mcp-toggle="${escapeText(server.id)}" type="button">
-              ${escapeText(server.enabled === false ? t('mcp.enable') : t('mcp.disable'))}
+            <button class="btn btn--ghost" data-mcp-toggle="${escapeHtml(server.id)}" type="button">
+              ${escapeHtml(server.enabled === false ? t('mcp.enable') : t('mcp.disable'))}
             </button>
-            <button class="btn btn--ghost" data-mcp-remove="${escapeText(server.id)}" type="button">
-              ${escapeText(t('mcp.remove'))}
+            <button class="btn btn--ghost" data-mcp-remove="${escapeHtml(server.id)}" type="button">
+              ${escapeHtml(t('mcp.remove'))}
             </button>
           </div>
         </div>`;
@@ -2499,10 +2494,10 @@ async function loadMcpCatalogue() {
     host.innerHTML = servers
       .map(
         (s) => `
-        <button class="mcp-cat__item" type="button" data-mcp-preset="${escapeText(s.id)}">
-          <span class="mcp-cat__name">${escapeText(s.label)}</span>
-          <span class="mcp-cat__blurb">${escapeText(s.blurb)}</span>
-          ${s.needs ? `<span class="mcp-cat__needs">${escapeText(t('mcp.needs'))}</span>` : ''}
+        <button class="mcp-cat__item" type="button" data-mcp-preset="${escapeHtml(s.id)}">
+          <span class="mcp-cat__name">${escapeHtml(s.label)}</span>
+          <span class="mcp-cat__blurb">${escapeHtml(s.blurb)}</span>
+          ${s.needs ? `<span class="mcp-cat__needs">${escapeHtml(t('mcp.needs'))}</span>` : ''}
         </button>`,
       )
       .join('');
@@ -2536,7 +2531,7 @@ async function loadMcp() {
   try {
     renderMcp(await api.mcpServers());
   } catch (err) {
-    $('mcp-list').innerHTML = `<p class="hint">${escapeText(err.message)}</p>`;
+    $('mcp-list').innerHTML = `<p class="hint">${escapeHtml(err.message)}</p>`;
   }
 }
 
@@ -2741,10 +2736,10 @@ function fillSettings() {
   const keyRow = (provider, entry, spare) => `
     <div class="keyrow">
       <span class="keyrow__no">${entry.position}</span>
-      <span class="keyrow__hint">${escapeText(entry.hint || 'saved key')}</span>
-      <span class="keyrow__when">${entry.addedAt ? escapeText(relativeWhen(entry.addedAt)) : ''}</span>
+      <span class="keyrow__hint">${escapeHtml(entry.hint || 'saved key')}</span>
+      <span class="keyrow__when">${entry.addedAt ? escapeHtml(relativeWhen(entry.addedAt)) : ''}</span>
       ${entry.position === 1 && spare ? '<span class="keyrow__badge">in use</span>' : ''}
-      <button class="keyrow__drop" data-drop-key="${escapeText(provider)}" data-position="${entry.position}"
+      <button class="keyrow__drop" data-drop-key="${escapeHtml(provider)}" data-position="${entry.position}"
               type="button" aria-label="Remove key ${entry.position}">✕</button>
     </div>`;
 
@@ -2763,13 +2758,13 @@ function fillSettings() {
       return `
         <div class="provider">
           <div class="provider__head">
-            <span class="provider__name">${escapeText(meta.label)}</span>
-            <span class="badge ${status.own ? 'badge--ok' : ''}">${escapeText(label)}</span>
+            <span class="provider__name">${escapeHtml(meta.label)}</span>
+            <span class="badge ${status.own ? 'badge--ok' : ''}">${escapeHtml(label)}</span>
           </div>
           ${
             status.shared
               ? `<div class="hint">
-                   Falling back to this deployment's <code>${escapeText(status.envVar || '')}</code>, so the
+                   Falling back to this deployment's <code>${escapeHtml(status.envVar || '')}</code>, so the
                    usage is billed to whoever set it up — and your monthly token limit applies.
                    Save your own key below to remove both.
                  </div>`
@@ -2777,13 +2772,13 @@ function fillSettings() {
           }
           ${keys.length ? `<div class="keylist">${keys.map((entry) => keyRow(key, entry, keys.length > 1)).join('')}</div>` : ''}
           <div class="provider__row">
-            <input type="password" placeholder="${escapeText(meta.keyHint)}" data-key="${escapeText(key)}" autocomplete="off" />
-            <button class="btn btn--ghost" data-save-key="${escapeText(key)}" type="button">
+            <input type="password" placeholder="${escapeHtml(meta.keyHint)}" data-key="${escapeHtml(key)}" autocomplete="off" />
+            <button class="btn btn--ghost" data-save-key="${escapeHtml(key)}" type="button">
               ${keys.length ? 'Add' : 'Save'}
             </button>
           </div>
           <div class="hint">
-            <a href="${escapeText(meta.console)}" target="_blank" rel="noopener">Get a key →</a>
+            <a href="${escapeHtml(meta.console)}" target="_blank" rel="noopener">Get a key →</a>
             ${
               keys.length > 1
                 ? ` · tried in order — if key 1 is refused, key 2 answers`
@@ -2867,10 +2862,10 @@ function fillSettings() {
   $('account-card').innerHTML = `
     <div class="provider">
       <div class="provider__head">
-        <span class="provider__name">${escapeText(me.name || me.email)}</span>
-        <span class="badge ${me.role === 'admin' ? 'badge--ok' : ''}">${escapeText(me.role)}</span>
+        <span class="provider__name">${escapeHtml(me.name || me.email)}</span>
+        <span class="badge ${me.role === 'admin' ? 'badge--ok' : ''}">${escapeHtml(me.role)}</span>
       </div>
-      <div class="hint">${escapeText(me.email)}</div>
+      <div class="hint">${escapeHtml(me.email)}</div>
     </div>`;
   $('account-name').value = me.name || '';
   renderTwoFactor();
@@ -2905,15 +2900,15 @@ async function loadSkills() {
     ? `<div class="rows">${skills
         .map(
           (s) => `<div class="rows__item">
-            <span class="grow">${escapeText(s.name)}
-              <span class="muted">· ${escapeText(s.description)}${
+            <span class="grow">${escapeHtml(s.name)}
+              <span class="muted">· ${escapeHtml(s.description)}${
                 s.used_count ? ` · used ${s.used_count}×` : ''
               }</span>
             </span>
-            <button data-skill-toggle="${escapeText(s.id)}" data-on="${!!s.enabled}">${
+            <button data-skill-toggle="${escapeHtml(s.id)}" data-on="${!!s.enabled}">${
               s.enabled ? 'Disable' : 'Enable'
             }</button>
-            <button data-skill-del="${escapeText(s.id)}">Remove</button>
+            <button data-skill-del="${escapeHtml(s.id)}">Remove</button>
           </div>`,
         )
         .join('')}</div>`
@@ -2956,19 +2951,19 @@ async function loadTasks() {
   $('task-list').innerHTML = tasks.length
     ? `<div class="rows">${tasks
         .map((t) => {
-          const when = t.cron ? `every ${escapeText(t.cron)}` : 'once';
-          const last = t.last_status ? ` · last: ${escapeText(t.last_status).slice(0, 40)}` : '';
+          const when = t.cron ? `every ${escapeHtml(t.cron)}` : 'once';
+          const last = t.last_status ? ` · last: ${escapeHtml(t.last_status).slice(0, 40)}` : '';
           return `<div class="rows__item">
-            <span class="grow">${escapeText(t.title)}
+            <span class="grow">${escapeHtml(t.title)}
               <span class="muted">· ${when} · ${
-                t.enabled ? `next ${escapeText(relativeWhen(t.next_run_at))}` : 'paused'
+                t.enabled ? `next ${escapeHtml(relativeWhen(t.next_run_at))}` : 'paused'
               }${last}</span>
             </span>
-            ${t.last_chat ? `<button data-task-open="${escapeText(t.last_chat)}">Open result</button>` : ''}
-            <button data-task-toggle="${escapeText(t.id)}" data-on="${!!t.enabled}">${
+            ${t.last_chat ? `<button data-task-open="${escapeHtml(t.last_chat)}">Open result</button>` : ''}
+            <button data-task-toggle="${escapeHtml(t.id)}" data-on="${!!t.enabled}">${
               t.enabled ? 'Pause' : 'Resume'
             }</button>
-            <button data-task-del="${escapeText(t.id)}">Remove</button>
+            <button data-task-del="${escapeHtml(t.id)}">Remove</button>
           </div>`;
         })
         .join('')}</div>`
@@ -3018,16 +3013,16 @@ async function loadConnectors() {
     .map(
       (c) => `<div class="provider">
         <div class="provider__head">
-          <span class="provider__name">${escapeText(c.label)}</span>
+          <span class="provider__name">${escapeHtml(c.label)}</span>
           <span class="badge ${c.connected ? 'badge--ok' : ''}">${
-            c.connected ? escapeText(c.account || 'connected') : 'not connected'
+            c.connected ? escapeHtml(c.account || 'connected') : 'not connected'
           }</span>
         </div>
-        <div class="hint">${escapeText(c.help)}</div>
+        <div class="hint">${escapeHtml(c.help)}</div>
         <div class="provider__row">
-          <input type="password" data-token="${escapeText(c.id)}" placeholder="${escapeText(c.placeholder)}" autocomplete="off" />
-          <button data-connect="${escapeText(c.id)}">${c.connected ? 'Replace' : 'Connect'}</button>
-          ${c.connected ? `<button data-disconnect="${escapeText(c.id)}">Disconnect</button>` : ''}
+          <input type="password" data-token="${escapeHtml(c.id)}" placeholder="${escapeHtml(c.placeholder)}" autocomplete="off" />
+          <button data-connect="${escapeHtml(c.id)}">${c.connected ? 'Replace' : 'Connect'}</button>
+          ${c.connected ? `<button data-disconnect="${escapeHtml(c.id)}">Disconnect</button>` : ''}
         </div>
       </div>`,
     )
@@ -3082,7 +3077,7 @@ function renderUsagePanel(host, usage) {
       ? `<div class="rows">${byModel
           .map(
             (m) => `<div class="rows__item">
-              <span class="grow">${escapeText(m.model)}
+              <span class="grow">${escapeHtml(m.model)}
                 <span class="muted">· ${m.calls} calls</span>
               </span>
               <span class="muted">${(
@@ -3162,8 +3157,8 @@ function renderTwoFactor() {
           <div class="qr">${qr}</div>
           <div class="hint">
             Can't scan? Enter this key by hand:<br />
-            <span class="secret" style="display:inline-block;margin-top:6px">${escapeText(secret)}</span><br />
-            On a phone, <a href="${escapeText(uri)}">tap here</a> to open your authenticator directly.
+            <span class="secret" style="display:inline-block;margin-top:6px">${escapeHtml(secret)}</span><br />
+            On a phone, <a href="${escapeHtml(uri)}">tap here</a> to open your authenticator directly.
           </div>
           <div class="provider__row">
             <input type="text" id="twofa-verify" placeholder="Enter the 6-digit code" inputmode="numeric" autocomplete="one-time-code" />
@@ -3185,7 +3180,7 @@ function renderTwoFactor() {
                 <strong>Save these recovery codes now.</strong> Each works once, and they are the only
                 way back in if you lose your phone. They will not be shown again.
               </div>
-              <div class="codes">${recoveryCodes.map((c) => escapeText(c)).join('')}</div>
+              <div class="codes">${recoveryCodes.map((c) => escapeHtml(c)).join('')}</div>
               <button class="btn btn--ghost" id="twofa-done" type="button">I have saved them</button>
             </div>`;
           $('twofa-done').addEventListener('click', async () => {
@@ -3243,17 +3238,17 @@ async function loadAdmin() {
 
         const self = u.id === state.boot.user.id;
         return `<div class="rows__item">
-          <span class="grow">${escapeText(u.name || u.email)}
-            <span class="muted">· ${escapeText(u.email)} · ${tags.join(' · ')}</span>
+          <span class="grow">${escapeHtml(u.name || u.email)}
+            <span class="muted">· ${escapeHtml(u.email)} · ${tags.join(' · ')}</span>
           </span>
           ${
             self
               ? '<span class="muted">you</span>'
-              : `<button data-limit-user="${escapeText(u.id)}">Limit</button>
-                 <button data-suspend-user="${escapeText(u.id)}" data-suspended="${!!u.suspended_at}">
+              : `<button data-limit-user="${escapeHtml(u.id)}">Limit</button>
+                 <button data-suspend-user="${escapeHtml(u.id)}" data-suspended="${!!u.suspended_at}">
                    ${u.suspended_at ? 'Unsuspend' : 'Suspend'}
                  </button>
-                 <button data-del-user="${escapeText(u.id)}">Remove</button>`
+                 <button data-del-user="${escapeHtml(u.id)}">Remove</button>`
           }
         </div>`;
       })
@@ -3422,9 +3417,9 @@ $('audit-models').addEventListener('click', async () => {
         const [cls, label] = badge[model.state] || ['', model.state];
         return `
           <div class="audit">
-            <span class="audit__id">${escapeText(model.id)}</span>
-            <span class="badge ${cls}">${escapeText(label)}</span>
-            ${model.reason ? `<span class="audit__why">${escapeText(model.reason)}</span>` : ''}
+            <span class="audit__id">${escapeHtml(model.id)}</span>
+            <span class="badge ${cls}">${escapeHtml(label)}</span>
+            ${model.reason ? `<span class="audit__why">${escapeHtml(model.reason)}</span>` : ''}
           </div>`;
       })
       .join('');
@@ -3553,7 +3548,7 @@ async function loadDevices() {
         d.online ? null : `last seen ${d.lastSeen ? relativeAgo(d.lastSeen) : 'never'}`,
       ]
         .filter(Boolean)
-        .map(escapeText)
+        .map(escapeHtml)
         .join(' · ');
 
       // Asked for but not adopted: either the machine has not checked in yet, or
@@ -3561,41 +3556,41 @@ async function loadDevices() {
       // quietly not in use.
       const pending = d.wanted && d.workspace && d.wanted !== d.workspace;
 
-      return `<div class="provider" data-device="${escapeText(d.id)}">
+      return `<div class="provider" data-device="${escapeHtml(d.id)}">
         <div class="provider__head">
           <span class="provider__name">
             <span class="dot ${d.online ? 'is-online' : 'is-offline'}"></span>
-            ${escapeText(d.name)}
+            ${escapeHtml(d.name)}
             ${d.id === activeId ? '<span class="tag">in use</span>' : ''}
           </span>
           <span class="badge ${d.online ? 'badge--ok' : ''}">${d.online ? 'online' : 'offline'}</span>
         </div>
         <div class="hint">${facts}</div>
 
-        <label class="device__label" for="ws-${escapeText(d.id)}">Working folder</label>
+        <label class="device__label" for="ws-${escapeHtml(d.id)}">Working folder</label>
         <div class="provider__row">
-          <input id="ws-${escapeText(d.id)}" type="text" spellcheck="false"
-                 value="${escapeText(d.wanted || d.workspace || '')}"
-                 placeholder="D:\\projects" data-ws="${escapeText(d.id)}" />
-          <button class="btn btn--ghost" data-ws-save="${escapeText(d.id)}" type="button">Save</button>
+          <input id="ws-${escapeHtml(d.id)}" type="text" spellcheck="false"
+                 value="${escapeHtml(d.wanted || d.workspace || '')}"
+                 placeholder="D:\\projects" data-ws="${escapeHtml(d.id)}" />
+          <button class="btn btn--ghost" data-ws-save="${escapeHtml(d.id)}" type="button">Save</button>
         </div>
-        <p class="hint" data-ws-status="${escapeText(d.id)}">${
+        <p class="hint" data-ws-status="${escapeHtml(d.id)}">${
           d.workspaceError
-            ? `<span class="warn-text">${escapeText(d.workspaceError)}</span>`
+            ? `<span class="warn-text">${escapeHtml(d.workspaceError)}</span>`
             : pending
-              ? `Currently working in <code>${escapeText(d.workspace)}</code> — waiting for it to pick up the change.`
+              ? `Currently working in <code>${escapeHtml(d.workspace)}</code> — waiting for it to pick up the change.`
               : d.workspace
-                ? `Currently working in <code>${escapeText(d.workspace)}</code>. Clear the box to hand it back to the machine's own setting.`
+                ? `Currently working in <code>${escapeHtml(d.workspace)}</code>. Clear the box to hand it back to the machine's own setting.`
                 : 'It will report where it is working once it connects.'
         }</p>
 
         <div class="row">
           ${
             d.online && d.id !== activeId
-              ? `<button class="btn btn--ghost" data-use-device="${escapeText(d.id)}" type="button">Work on this one</button>`
+              ? `<button class="btn btn--ghost" data-use-device="${escapeHtml(d.id)}" type="button">Work on this one</button>`
               : ''
           }
-          <button class="btn btn--ghost" data-unpair="${escapeText(d.id)}" type="button">Unpair</button>
+          <button class="btn btn--ghost" data-unpair="${escapeHtml(d.id)}" type="button">Unpair</button>
         </div>
       </div>`;
     })
@@ -3611,10 +3606,10 @@ async function loadDevices() {
        * and clearing it is one button.
        */
       state.boot.prefs?.activeDevice
-        ? `<p class="hint">${escapeText(t('devices.pinned'))}
-             <button class="btn btn--ghost btn--tiny" id="unpin-device" type="button">${escapeText(t('devices.unpin'))}</button></p>`
+        ? `<p class="hint">${escapeHtml(t('devices.pinned'))}
+             <button class="btn btn--ghost btn--tiny" id="unpin-device" type="button">${escapeHtml(t('devices.unpin'))}</button></p>`
         : devices.filter((d) => d.online).length > 1
-          ? `<p class="hint">${escapeText(t('devices.followsYou'))}</p>`
+          ? `<p class="hint">${escapeHtml(t('devices.followsYou'))}</p>`
           : ''
     }`;
 
@@ -3759,7 +3754,7 @@ function showModelNews(model) {
   ];
 
   $('news-facts').innerHTML = facts
-    .map(([term, value]) => `<dt>${escapeText(term)}</dt><dd>${escapeText(String(value))}</dd>`)
+    .map(([term, value]) => `<dt>${escapeHtml(term)}</dt><dd>${escapeHtml(String(value))}</dd>`)
     .join('');
 
   $('news-description').textContent = model.description || '';
@@ -3862,8 +3857,8 @@ function openMenu(host, anchor, items) {
     button.innerHTML =
       // `item.icon` is our own markup, never anything typed by a person.
       (item.icon ? `<span class="menu__icon">${item.icon}</span>` : '') +
-      `<span class="menu__body"><span>${escapeText(item.label)}</span>` +
-      (item.hint ? `<span class="menu__hint">${escapeText(item.hint)}</span>` : '') +
+      `<span class="menu__body"><span>${escapeHtml(item.label)}</span>` +
+      (item.hint ? `<span class="menu__hint">${escapeHtml(item.hint)}</span>` : '') +
       '</span>' +
       (item.active ? '<span class="menu__check" aria-hidden="true">✓</span>' : '');
 
@@ -4021,12 +4016,12 @@ function renderStaged() {
             : `<span class="attachment__icon">${file.name.split('.').pop().slice(0, 4).toUpperCase()}</span>`
         }
         <span class="attachment__body">
-          <span class="attachment__name" title="${escapeText(file.name)}">${escapeText(file.name)}</span>
+          <span class="attachment__name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
           <span class="attachment__meta">${
-            file.failed ? escapeText(file.failed) : file.id ? escapeText(humanSize(file.size)) : 'Uploading…'
+            file.failed ? escapeHtml(file.failed) : file.id ? escapeHtml(humanSize(file.size)) : 'Uploading…'
           }</span>
         </span>
-        <button class="attachment__remove" data-drop="${i}" type="button" aria-label="Remove ${escapeText(file.name)}">✕</button>
+        <button class="attachment__remove" data-drop="${i}" type="button" aria-label="Remove ${escapeHtml(file.name)}">✕</button>
       </div>`,
     )
     .join('');
@@ -4461,7 +4456,7 @@ function renderProgress(steps) {
       // aloud the glyph is just a shape.
       return (
         `<li class="${cls}"${s.status === 'in_progress' ? ' aria-current="step"' : ''}>` +
-        `<span aria-hidden="true">${mark}</span><span>${escapeText(s.title)}</span></li>`
+        `<span aria-hidden="true">${mark}</span><span>${escapeHtml(s.title)}</span></li>`
       );
     })
     .join('');
@@ -4576,22 +4571,22 @@ async function runSearch() {
   try {
     ({ chats } = await api.searchChats(query));
   } catch (err) {
-    results.innerHTML = `<p class="hint">${escapeText(err.message)}</p>`;
+    results.innerHTML = `<p class="hint">${escapeHtml(err.message)}</p>`;
     return;
   }
 
   if (!chats.length) {
-    results.innerHTML = `<p class="hint">Nothing matched “${escapeText(query)}”.</p>`;
+    results.innerHTML = `<p class="hint">Nothing matched “${escapeHtml(query)}”.</p>`;
     return;
   }
 
   results.innerHTML = chats
     .map((c) => {
       const snippet = snippetAround(c.snippet, query);
-      return `<button class="model-card" data-chat="${escapeText(c.id)}" type="button">
+      return `<button class="model-card" data-chat="${escapeHtml(c.id)}" type="button">
         <span class="model-card__main">
-          <span class="model-card__name">${escapeText(c.title || 'Untitled')}</span>
-          ${snippet ? `<span class="model-card__meta">${escapeText(snippet)}</span>` : ''}
+          <span class="model-card__name">${escapeHtml(c.title || 'Untitled')}</span>
+          ${snippet ? `<span class="model-card__meta">${escapeHtml(snippet)}</span>` : ''}
         </span>
       </button>`;
     })

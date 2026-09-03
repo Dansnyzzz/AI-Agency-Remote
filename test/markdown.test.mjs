@@ -117,6 +117,38 @@ section('nothing a model writes becomes markup');
   check('escapeHtml is what does it', escapeHtml('<b>&"\'') === '&lt;b&gt;&amp;&quot;&#39;');
 }
 
+/* ── attribute position, which is where the real bug was ──────── */
+
+section('escaping is safe in an attribute, not only in text');
+{
+  // The bug this pins: app.js and onboarding.js each had their own escaper,
+  // written as "set textContent on a div, read innerHTML back". That
+  // serialisation escapes & < > and *not* quotes — which is correct between
+  // tags, and an attribute injection everywhere else. Both files build HTML
+  // strings with values in
+  // double-quoted attributes: an attachment's filename, a paired machine's
+  // hostname, a workspace path the user typed. A filename ending the title=
+  // attribute early put a live event handler on the element, running with the
+  // full authority of the session.
+  //
+  // Verified in Chromium at the time of the fix: with the old escaper the
+  // rendered span carried an onmouseover attribute; with this one it does not.
+  const payload = 'invoice" onmouseover="PWNED';
+  const escaped = escapeHtml(payload);
+
+  check('a double quote cannot close the attribute', !escaped.includes('"'), escaped);
+  check('it becomes an entity instead', escaped.includes('&quot;'));
+  check('a single quote is escaped too', escapeHtml("it's") === 'it&#39;s');
+  check('so the payload is inert', escapeHtml(payload) === 'invoice&quot; onmouseover=&quot;PWNED');
+  // The round trip has to still be right, or the fix would break every filename.
+  check('and the text still reads back unchanged', escaped.replaceAll('&quot;', '"') === payload);
+
+  // Null and undefined reach this from optional fields; the old div-based
+  // version turned them into the strings 'null' and 'undefined'.
+  check('null becomes empty, not the word null', escapeHtml(null) === '');
+  check('undefined too', escapeHtml(undefined) === '');
+}
+
 console.log(
   failures ? `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n` : '\n\x1b[32mAll markdown checks passed.\x1b[0m\n',
 );
