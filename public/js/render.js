@@ -364,8 +364,28 @@ export function widgetFrame(widget) {
 
   // A document rather than a fragment, so the picture is not styled by this page
   // and cannot reach out of its box.
+  /**
+   * Nothing in a widget may reach the network.
+   *
+   * The sandbox stops the markup *running* anything, and that was read as the
+   * whole story. It is not: a picture needs no script to phone home. The model
+   * writes this markup, and `<img src="https://somewhere/?id=…">` fires the
+   * moment the frame renders — confirming delivery and handing a third party an
+   * IP address, a user-agent and a timestamp, from an app whose entire promise
+   * is that your things stay on your machine. A model can be talked into
+   * emitting that by a page it read a moment earlier.
+   *
+   * A widget is a finished picture drawn from what the model already knows, so
+   * it has nothing legitimate to fetch. `default-src 'none'` says exactly that,
+   * and inline styles are re-permitted because the block below is one.
+   *
+   * In the document rather than as the frame's `csp` attribute: that attribute
+   * is not in Safari or Firefox, and this has to hold everywhere.
+   */
   frame.srcdoc =
     '<!doctype html><meta charset="utf-8">' +
+    '<meta http-equiv="Content-Security-Policy" ' +
+    "content=\"default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:\">" +
     '<style>' +
     'html,body{margin:0;padding:0;background:transparent;' +
     "font:13px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;color:#c8d3de}" +
