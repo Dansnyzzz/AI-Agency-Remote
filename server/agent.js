@@ -18,6 +18,7 @@ import { loadForTranscript, toParts } from './attachments.js';
 import { projectPrompt } from './projects.js';
 import { compact, shouldCompact, measure, activeTranscript } from './compact.js';
 import { log } from './util/trace.js';
+import { mapWithLimit, MAX_PARALLEL_TOOLS } from './util/parallel.js';
 
 /**
  * There is one mode.
@@ -419,42 +420,7 @@ export function needsApproval(toolCalls, policy) {
   });
 }
 
-/**
- * How many tool calls may be in flight at once.
- *
- * There was no ceiling: every call the model made in one turn started at the
- * same instant. That is fine for three `web_fetch`es and genuinely dangerous for
- * fifteen `run_command`s, which is fifteen shells starting together on somebody
- * else's laptop — and there is no backpressure anywhere else in the chain to
- * catch it. Parallelism is still most of why a turn feels fast, so this is a
- * limit rather than a queue: four is comfortably more than a model asks for in
- * the ordinary case, and it holds the pathological one to something a machine
- * can survive.
- */
-const MAX_PARALLEL_TOOLS = 4;
-
-/**
- * Run every call, at most `MAX_PARALLEL_TOOLS` at a time, and return the results
- * in the order they were requested.
- *
- * Order matters more than it looks: a tool result has to line up with the call
- * it answers, and every provider rejects a batch where they do not.
- */
-async function mapWithLimit(items, limit, worker) {
-  const out = new Array(items.length);
-  let next = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next;
-      next += 1;
-      out[i] = await worker(items[i], i);
-    }
-  });
-  await Promise.all(runners);
-  return out;
-}
-
-async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools }) {
+async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable }) {
   const results = await mapWithLimit(
     toolCalls,
     MAX_PARALLEL_TOOLS,
@@ -468,6 +434,9 @@ async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint,
         chatId,
         signal,
         deviceHint,
+        // So `load_tools` can refuse to promise a tool this account cannot be
+        // given, instead of reporting it loaded and never delivering it.
+        deliverable,
       });
       const result = {
         toolCallId: call.id,
@@ -690,6 +659,36 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
   };
 
   /**
+   * Every tool this account could actually be given this turn.
+   *
+   * `load_tools` used to check only that a name was a real tool, so it happily
+   * answered "Loaded send_email — you will have it from your next step onward"
+   * for a connector that was never linked, and the tool then never appeared.
+   * The model planned around a capability it could not receive.
+   *
+   * Derived by asking `availableTools` with everything activated, so it is
+   * filtered by the *same* worker, connector, provider and policy rules that
+   * decide the real catalogue — the two cannot drift, because there is one
+   * function deciding both. `context: 0` means "nobody said", which switches off
+   * the window-based trimming: this is a question about eligibility, not about
+   * what fits.
+   */
+  const loadable = () =>
+    new Set(
+      availableTools({
+        workerOnline,
+        desktopOnline: !!worker?.info?.desktop,
+        policy,
+        connected: connectors.ids,
+        providers: Object.entries(providerKeys)
+          .filter(([, status]) => status?.configured)
+          .map(([provider]) => provider),
+        context: 0,
+        extra: mcp.tools,
+      }).map((t) => t.name),
+    );
+
+  /**
    * `priced` says whether the running cost is worth showing at all, and
    * `estimated` whether it is our arithmetic or the provider's own invoice.
    * Both travel to the browser so the usage line can say which it is rather
@@ -732,7 +731,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       };
       for (const r of toolMessage.results) emit('tool_result', r);
     } else {
-      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate });
+      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
     }
     // The stored copy, which carries the `seq` `absorbNewMessages` reads as its
     // high-water mark.
@@ -1004,7 +1003,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       return; // The client resumes by calling back with a decision.
     }
 
-    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate });
+    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
     messages.push(await store.appendMessage(userId, chatId, toolMessage));
   }
 

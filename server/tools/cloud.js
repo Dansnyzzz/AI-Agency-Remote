@@ -438,24 +438,49 @@ async function extractTool({ url, what, fields }, { userId, chatId, signal }) {
  * rather than silently accepted, because the alternative is a model that
  * believes it now has something it will never be given and plans around it.
  */
-async function loadToolsTool({ names }) {
+async function loadToolsTool({ names }, { deliverable = null } = {}) {
   const asked = (Array.isArray(names) ? names : []).map((n) => String(n || '').trim()).filter(Boolean);
   if (!asked.length) throw new Error('Give the `names` of the tools to load.');
 
-  const known = asked.filter((n) => TOOLS_BY_NAME[n]);
+  /**
+   * A name has to be *deliverable*, not merely real.
+   *
+   * This checked `TOOLS_BY_NAME` alone, so a genuine tool that `availableTools`
+   * withholds for this account — a connector that is not linked, a local tool
+   * with no worker online, a desktop tool on a machine that has not opted in —
+   * was answered "Loaded send_email, you will have it from your next step
+   * onward" and then never appeared. The model planned around a capability it
+   * was never going to receive, which is exactly what the note on the deferred
+   * list says must not happen.
+   *
+   * `deliverable` is the set the loop is willing to activate, passed in by the
+   * caller because only the loop knows this account's worker, connectors and
+   * keys. Absent, the old behaviour stands — a caller that cannot say must not
+   * have its answers silently narrowed.
+   */
+  const real = asked.filter((n) => TOOLS_BY_NAME[n]);
   const unknown = asked.filter((n) => !TOOLS_BY_NAME[n]);
+  const known = deliverable ? real.filter((n) => deliverable.has(n)) : real;
+  const withheld = real.filter((n) => !known.includes(n));
+
+  const notes = [
+    unknown.length ? `Not tools, and ignored: ${unknown.join(', ')}.` : '',
+    withheld.length
+      ? `Not available on this account and not loaded: ${withheld.join(', ')} — the service is not connected, or the computer that runs them is not online. Do not plan around them; say so if the user asks.`
+      : '',
+  ].filter(Boolean);
 
   if (!known.length) {
     return (
-      `None of those are tools: ${unknown.join(', ')}. ` +
+      `Nothing was loaded. ${notes.join(' ')} ` +
       'Use the names exactly as they appear in the list on this tool, or carry on with what you have.'
-    );
+    ).trim();
   }
 
   return (
     `Loaded ${known.join(', ')} — you will have ${known.length === 1 ? 'it' : 'them'} from your next step onward, ` +
     'so make that call then rather than now.' +
-    (unknown.length ? ` (Not tools, and ignored: ${unknown.join(', ')}.)` : '')
+    (notes.length ? ` (${notes.join(' ')})` : '')
   );
 }
 
@@ -489,7 +514,11 @@ async function memoryAppend({ key, content }, { userId }) {
     content: existing ? `${existing.replace(/\s+$/, '')}\n\n${text}` : text,
     updatedAt: new Date().toISOString(),
   };
-  await store.setUserSetting(userId, MEMORY_KEY, memory);
+  // Merged, not overwritten: the agent runs up to four tool calls at once, so
+  // two memory writes in one step both read the same object and a whole-value
+  // write meant the second silently erased the first — while both reported
+  // success, so the model told the user two notes were saved when one was gone.
+  await store.mergeUserSetting(userId, MEMORY_KEY, { [key]: memory[key] });
 
   const created = existing ? '' : ' (the note did not exist, so it was created)';
   if (!found.length) return `Appended to "${key}"${created}.`;
@@ -533,7 +562,8 @@ async function memoryEdit({ key, old_string: oldString, new_string: newString },
 
   const { text, found } = redactSecrets(String(newString ?? ''));
   memory[key] = { content: note.content.replace(find, text), updatedAt: new Date().toISOString() };
-  await store.setUserSetting(userId, MEMORY_KEY, memory);
+  // Only this note, so a concurrent write to a different one is not undone.
+  await store.mergeUserSetting(userId, MEMORY_KEY, { [key]: memory[key] });
 
   return found.length
     ? `Updated "${key}", with ${found.join(' and ')} removed from the replacement. Say so.`
@@ -552,8 +582,9 @@ async function memoryDelete({ key }, { userId }) {
     );
   }
 
-  delete memory[key];
-  await store.setUserSetting(userId, MEMORY_KEY, memory);
+  // Removes the one entry in SQL rather than writing back a copy of the object
+  // that happens to be missing it — which would undo anything saved meanwhile.
+  await store.removeUserSettingKey(userId, MEMORY_KEY, key);
   return `Deleted the note "${key}". It will not be read into future conversations any more.`;
 }
 
@@ -653,9 +684,23 @@ async function deepResearchTool({ question }, { userId, user, chatId, signal }) 
   return content;
 }
 
+/**
+ * "17:00" means the user's five o'clock, not the server's.
+ *
+ * The HTTP routes have always taken the zone from the browser. This tool had
+ * no way to, so `parseSchedule` fell back to the server clock — UTC on a
+ * deployment — and a task set for five in the afternoon in Vietnam fired at
+ * midnight, silently, for ever. The zone is recorded on the account at
+ * bootstrap now, so the tool path and the route path finally agree.
+ *
+ * The confirmation is rendered in that same zone. It previously used the
+ * server's, so it stated a time that was not the one that would fire — which is
+ * worse than saying nothing, because it looks like it has been checked.
+ */
 async function scheduleTaskTool({ title, prompt, when, repeat = true }, { userId }) {
-  const { cron, nextRunAt } = parseSchedule(when, { once: repeat === false });
   const prefs = await getPrefs(userId);
+  const tz = prefs.timezone || null;
+  const { cron, nextRunAt } = parseSchedule(when, { once: repeat === false, tz });
 
   const task = await getStore().createTask(userId, {
     id: crypto.randomUUID(),
@@ -664,12 +709,14 @@ async function scheduleTaskTool({ title, prompt, when, repeat = true }, { userId
     model: prefs.defaultModel,
     cron,
     nextRunAt,
+    tz,
   });
 
-  const at = new Date(task.next_run_at).toLocaleString();
+  const at = new Date(task.next_run_at).toLocaleString('en-GB', tz ? { timeZone: tz } : undefined);
+  const where = tz ? ` (${tz})` : ' — server time, because this account has not told us its timezone';
   return cron
-    ? `Scheduled "${title}" for ${cron}. First run: ${at}.`
-    : `Scheduled "${title}" to run once at ${at}.`;
+    ? `Scheduled "${title}" for ${cron}. First run: ${at}${where}.`
+    : `Scheduled "${title}" to run once at ${at}${where}.`;
 }
 
 async function listTasksTool(_input, { userId }) {
@@ -754,7 +801,11 @@ async function workflowWriteTool({ action, id, title, steps, when, repeat, enabl
 
   const ordered = normaliseSteps(steps);
   const prefs = await getPrefs(userId);
-  const schedule = when ? parseSchedule(when, { once: repeat === false }) : { cron: null, nextRunAt: null };
+  // The account's own zone, for the same reason as `schedule_task` above.
+  const tz = prefs.timezone || null;
+  const schedule = when
+    ? parseSchedule(when, { once: repeat === false, tz })
+    : { cron: null, nextRunAt: null };
 
   const workflow = await store.createWorkflow(userId, {
     id: crypto.randomUUID(),
@@ -763,9 +814,12 @@ async function workflowWriteTool({ action, id, title, steps, when, repeat, enabl
     model: prefs.defaultModel,
     cron: schedule.cron,
     nextRunAt: schedule.nextRunAt,
+    tz,
   });
 
-  const first = workflow.next_run_at ? new Date(workflow.next_run_at).toLocaleString() : null;
+  const first = workflow.next_run_at
+    ? new Date(workflow.next_run_at).toLocaleString('en-GB', tz ? { timeZone: tz } : undefined)
+    : null;
   return [
     `Created the workflow "${workflow.title}" with ${ordered.length} step(s). Id ${workflow.id}.`,
     first ? `First run: ${first}${schedule.cron ? ` (repeats ${schedule.cron})` : ''}.` : 'It runs when asked, not on a clock.',

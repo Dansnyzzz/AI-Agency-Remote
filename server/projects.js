@@ -166,7 +166,20 @@ function passages(file, size = PASSAGE_CHARS) {
       const cut = paragraph > at + size / 2 ? paragraph : line > at + size / 2 ? line : end;
       end = cut;
     }
-    out.push({ file: file.name, at, end, text: body.slice(at, end).trim() });
+    /**
+     * Carry the file's **id**, not just its name.
+     *
+     * Nothing stops a project holding two sources called `Contract.pdf` — a v1
+     * and a v2, or invoices from two clients — and grouping by name spliced
+     * them into one document: passages from both, interleaved by character
+     * offset, which means nothing across two files, then emitted twice, once
+     * under each file's heading, with the `[…]` markers computed from the other
+     * file's offsets. A clause from v1 appeared under a heading naming v2 and
+     * read as continuous prose. This feature exists so every claim can be
+     * traced to the file it came from; a wrong citation is the one failure it
+     * must not have.
+     */
+    out.push({ fileId: file.id, file: file.name, at, end, text: body.slice(at, end).trim() });
     if (end >= body.length) break;
     at = Math.max(end - overlap, at + 1);
   }
@@ -264,7 +277,8 @@ export function selectSources(files, question, budget = CONTEXT_CHARS) {
 
   const sources = [];
   for (const file of files) {
-    const mine = keep.filter((p) => p.file === file.name).sort((a, b) => a.at - b.at);
+    // By id. Two sources may share a name — see the note where passages are cut.
+    const mine = keep.filter((p) => p.fileId === file.id).sort((a, b) => a.at - b.at);
     if (!mine.length) continue;
 
     // `[…]` wherever something was skipped, including at the ends. A model

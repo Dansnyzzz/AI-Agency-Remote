@@ -6,6 +6,7 @@ import { initStore } from './store/index.js';
 import { ensureLocalSecrets, assertSecrets } from './secrets.js';
 import { startScheduler } from './scheduler.js';
 import { lanAddresses } from './util/net.js';
+import { closeAllMcp } from './mcp/registry.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +50,30 @@ const store = await initStore();
 // Scheduled work needs something ticking. A local run has a process that stays
 // up, so it polls for itself; a deployment has none, and uses the cron endpoint.
 startScheduler();
+
+/**
+ * Reap the MCP child processes on the way out.
+ *
+ * `closeAllMcp` was written and never called — verified by grep across the
+ * whole repo. Every stdio MCP server is a child process held in a module-level
+ * map keyed by user, and nothing but a settings edit ever removed one. On a
+ * local server with `ALLOW_MCP_STDIO=1`, every account that had ever taken a
+ * turn left children running until the machine was rebooted, and Ctrl-C
+ * orphaned all of them.
+ *
+ * Registered once, and it lets the default signal behaviour proceed afterwards:
+ * this is cleanup, not a reason to refuse to exit.
+ */
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    try {
+      closeAllMcp();
+    } catch {
+      // Going down anyway; a failure to tidy must not stop the exit.
+    }
+    process.exit(0);
+  });
+}
 
 createApp().listen(port, '0.0.0.0', () => {
   console.log('\n  AI Remote is running.\n');

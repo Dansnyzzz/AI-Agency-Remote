@@ -6,6 +6,7 @@ import { getPrefs } from './settings.js';
 import { record as recordUsage } from './usage.js';
 import { workerStatus } from './localTools.js';
 import { priceTurn } from './providers/catalog.js';
+import { mapWithLimit, MAX_PARALLEL_TOOLS } from './util/parallel.js';
 
 /**
  * Sub-agents — several independent investigations at once.
@@ -115,8 +116,19 @@ async function runOne({ userId, user, entry, prefs, tools, task, signal, stream 
 
     if (!assistant.toolCalls.length) break;
 
-    const results = await Promise.all(
-      assistant.toolCalls.map(async (call) => {
+    /**
+     * The same ceiling the main loop has, for the same reason.
+     *
+     * This was a bare `Promise.all` over every call the model made, and
+     * `run_parallel` runs six sub-agents at once — so six sub-agents × however
+     * many calls each all landed on one worker's job queue at the same instant,
+     * with no backpressure anywhere in the chain. The main loop caps this at
+     * four and says why; a fan-out is where the cap matters most.
+     */
+    const results = await mapWithLimit(
+      assistant.toolCalls,
+      MAX_PARALLEL_TOOLS,
+      async (call) => {
         // Belt and braces: the tool list is already read-only, so anything else
         // arriving here means the model invented a name.
         if (assessRisk(call.name, call.input) !== 'safe') {
@@ -129,7 +141,7 @@ async function runOne({ userId, user, entry, prefs, tools, task, signal, stream 
         }
         const out = await executeTool({ user, name: call.name, input: call.input, chatId: null, signal });
         return { toolCallId: call.id, name: call.name, content: out.content, isError: out.isError };
-      }),
+      },
     );
     messages.push({ id: `sub-t-${step}`, role: 'tool', results });
   }

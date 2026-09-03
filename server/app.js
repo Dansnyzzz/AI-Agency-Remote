@@ -55,7 +55,7 @@ import { runDueWorkflows, runWorkflowNow, normaliseSteps } from './workflows.js'
 import { connectedServices, connect, disconnect } from './connectors.js';
 import { redactSecrets } from './redact.js';
 import { withTrace, newTraceId, annotate, log, mark, since } from './util/trace.js';
-import { mcpStatus, probeMcpServer, sealConfig, forgetMcp } from './mcp/registry.js';
+import { mcpStatus, probeMcpServer, sealConfig, forgetMcp, slugify } from './mcp/registry.js';
 import {
   withStorageShim,
   listArtifactStorage,
@@ -624,6 +624,21 @@ export function createApp() {
     wrap(async (req, res) => {
       const store = getStore();
       const prefs = await getPrefs(req.user.id);
+
+      /**
+       * Remember which clock this person keeps.
+       *
+       * `schedule_task` and `workflow_write` run inside an agent turn, where
+       * there is no request carrying a zone, so they fell back to the server's —
+       * UTC on a deployment, and seven hours wrong for anyone in Vietnam.
+       * Written only when it has actually changed, so the common case is a read.
+       */
+      const zone = validZone(req.query?.tz) ? String(req.query.tz) : null;
+      if (zone && zone !== prefs.timezone) {
+        prefs.timezone = zone;
+        await setPrefs(req.user.id, { timezone: zone }).catch(() => {});
+      }
+
       const [providers, worker, usage, library] = await Promise.all([
         providerStatus(req.user.id),
         workerStatus(req.user, prefs),
@@ -1591,6 +1606,31 @@ export function createApp() {
     wrap(async (req, res) => {
       const name = String(req.body?.name || '').trim();
       if (!name) return res.status(400).json({ error: 'Give the server a name.' });
+
+      /**
+       * Two servers must not slug to the same prefix.
+       *
+       * Tools are advertised as `mcp__<slug>__<tool>`, so "Figma" and "Figma!"
+       * both become `figma` — and the registry connects both, stores both under
+       * one key, and pushes both sets of tools with identical names. A tool list
+       * containing duplicate names is rejected outright by Anthropic and OpenAI,
+       * so **every message in every conversation** then failed until one server
+       * was removed. `callMcpTool` routes by the same slug, so whichever
+       * connection survived also received calls meant for the other.
+       *
+       * Checked here because this is where a person can still be told why.
+       */
+      const slug = slugify(name);
+      if (!slug) {
+        return res.status(400).json({ error: 'That name has no letters or digits in it — give it a plain name.' });
+      }
+      const existing = await getStore().listMcpServers(req.user.id);
+      const clash = existing.find((row) => slugify(row.name) === slug);
+      if (clash) {
+        return res.status(400).json({
+          error: `"${name}" and the server you already have called "${clash.name}" would both be addressed as "${slug}", and their tools would collide. Pick a name that differs by more than punctuation.`,
+        });
+      }
 
       const transport = req.body?.transport === 'http' ? 'http' : 'stdio';
       const config = { transport };

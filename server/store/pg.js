@@ -498,6 +498,45 @@ export function createPgStore(connectionString) {
       );
       return value;
     },
+    /**
+     * Merge top-level entries into a setting, without reading it first.
+     *
+     * `setUserSetting` is an unconditional whole-value overwrite, so anything
+     * built as read-modify-write on top of it loses concurrent changes. The
+     * agent runs up to four tool calls at once, so two `memory_append` calls in
+     * a single step both read the same notes object and the second write erased
+     * the first — while *both* reported success, so the model told the user two
+     * notes had been saved when one had silently vanished.
+     *
+     * `||` is jsonb concatenation: a top-level merge, right-hand side wins.
+     * Two calls touching different keys now compose instead of racing.
+     */
+    async mergeUserSetting(userId, key, patch) {
+      const rows = await q(
+        `INSERT INTO user_settings (user_id, key, value) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, key)
+         DO UPDATE SET value = COALESCE(user_settings.value, '{}'::jsonb) || EXCLUDED.value
+      RETURNING value`,
+        [userId, key, JSON.stringify(patch)],
+      );
+      return rows[0]?.value ?? patch;
+    },
+    /**
+     * Remove one top-level entry from a setting, leaving the rest alone.
+     *
+     * The counterpart to `mergeUserSetting`, and needed for the same reason: a
+     * delete written as read-modify-write would undo whatever else had been
+     * saved in between.
+     */
+    async removeUserSettingKey(userId, key, entry) {
+      const rows = await q(
+        `UPDATE user_settings SET value = value - $3
+          WHERE user_id = $1 AND key = $2
+      RETURNING value`,
+        [userId, key, String(entry)],
+      );
+      return rows[0]?.value ?? null;
+    },
 
     // ── deployment-wide settings ────────────────────────────────────
     async getSetting(key) {
@@ -1107,11 +1146,19 @@ export function createPgStore(connectionString) {
       );
       return rows[0]?.created_at ? new Date(rows[0].created_at) : null;
     },
-    async completeJob(userId, id, { status, result }) {
+    /**
+     * @param onlyIfOpen  do not overwrite a job that has already finished.
+     *   The server's own timeout path uses this: the worker may have completed
+     *   the command and be mid-round-trip with the answer, and stamping "Timed
+     *   out." over a real result loses work that actually succeeded — and tells
+     *   the model to run it again.
+     */
+    async completeJob(userId, id, { status, result, onlyIfOpen = false }) {
       await q(
         `UPDATE tool_jobs SET status = $3, result = $4, done_at = NOW()
-          WHERE id = $1 AND user_id = $2`,
-        [id, userId, status, JSON.stringify(result ?? null)],
+          WHERE id = $1 AND user_id = $2
+            AND ($5::boolean IS NOT TRUE OR status IN ('pending', 'running'))`,
+        [id, userId, status, JSON.stringify(result ?? null), onlyIfOpen],
       );
     },
     /**
@@ -1512,13 +1559,20 @@ export function createPgStore(connectionString) {
      * search is — but a full scan that streams is a different proposition from
      * one that accumulates.
      */
-    async docVectorPage(userId, model, { after = null, limit = 2000 } = {}) {
+    /**
+     * @param source  narrow the scan to folders whose name contains this.
+     *   Applied here rather than to the results, because filtering afterwards
+     *   filters a shortlist that was already chosen from the whole corpus — see
+     *   the note in `rag.js`.
+     */
+    async docVectorPage(userId, model, { after = null, limit = 2000, source = null } = {}) {
       return q(
-        `SELECT id, path, embedding FROM doc_chunks
+        `SELECT id, path, source, embedding FROM doc_chunks
           WHERE user_id = $1 AND model = $2 AND ($3::text IS NULL OR id > $3)
+            AND ($5::text IS NULL OR source ILIKE '%' || $5 || '%')
           ORDER BY id
           LIMIT $4`,
-        [userId, model, after, Math.max(1, Math.min(Number(limit) || 2000, 10_000))],
+        [userId, model, after, Math.max(1, Math.min(Number(limit) || 2000, 10_000)), source],
       );
     },
 

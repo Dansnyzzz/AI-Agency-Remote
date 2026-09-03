@@ -18,6 +18,19 @@ const DEFAULT_PREFS = {
   // letting a long conversation quietly stop working. Off is a real choice —
   // some work wants every word kept — but it means hitting the ceiling.
   autoCompact: true,
+  /**
+   * The user's own timezone, as an IANA name — "Asia/Ho_Chi_Minh".
+   *
+   * Recorded because a scheduled task has to mean *their* five o'clock. The
+   * HTTP routes have always taken it from the browser per request, but
+   * `schedule_task` and `workflow_write` are tools: they run inside an agent
+   * turn with no request to read it from, so they fell back to the server
+   * clock, which on a deployment is UTC. Seven hours out for anyone in Vietnam,
+   * silently, for ever — the exact failure scheduler.js's own header describes.
+   *
+   * Null means nobody has told us, and the tools say so rather than guessing.
+   */
+  timezone: null,
   // Which paired computer the assistant acts on, when more than one is online.
   // Null means "whichever answered most recently", which is the right answer for
   // the overwhelmingly common case of owning one computer.
@@ -147,6 +160,24 @@ export async function setPrefs(userId, patch) {
   }
   if ('onboarded' in patch) next.onboarded = !!patch.onboarded;
   if ('autoVision' in patch) next.autoVision = !!patch.autoVision;
+  /**
+   * A zone that Intl does not recognise is worse than none at all.
+   *
+   * With no zone the schedulers say so and fall back visibly; with a bad one
+   * every `toLocaleString` that touches it throws a RangeError, from inside a
+   * scheduled run nobody is watching. Checked here because this is the only way
+   * into the stored object — the same reason `language` is checked here.
+   *
+   * Validated inline rather than by importing `validZone` from scheduler.js,
+   * which imports this module.
+   */
+  if ('timezone' in patch && patch.timezone != null) {
+    try {
+      new Intl.DateTimeFormat('en-GB', { timeZone: String(patch.timezone) });
+    } catch {
+      throw new Error(`"${patch.timezone}" is not a timezone this system recognises.`);
+    }
+  }
 
   await getStore().setUserSetting(userId, PREFS_KEY, next);
   return next;
