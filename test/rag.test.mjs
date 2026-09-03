@@ -71,7 +71,7 @@ globalThis.fetch = async (url, options) => {
 const { initStore, getStore } = await import('../server/store/index.js');
 await initStore();
 const { ingestBatch, searchDocs, listSources, forgetSource, knownStamps } = await import('../server/rag.js');
-const { chunk } = await import('../worker/indexer.js');
+const { chunk, isSecretFile } = await import('../worker/indexer.js');
 
 const store = getStore();
 const alice = await store.createUser({ id: 'u-alice', email: 'alice@example.com', passwordHash: 'x', role: 'admin' });
@@ -423,6 +423,39 @@ section('hybrid reranking');
     lexicalScore(['deposit'], 'the deposit is 10%') >
       lexicalScore(['deposit'], `the deposit is 10%. ${'padding text. '.repeat(400)}`),
   );
+}
+
+// ── credentials are never indexed ─────────────────────────────────────
+
+section('secrets are skipped before they are read');
+{
+  // index_folder reads a folder the model chose and ships the contents to an
+  // embedding API, where search_docs can retrieve it afterwards. Pointed at a
+  // project root, that used to include env files.
+  //
+  // A bare `.env` was in fact already skipped — but only because
+  // path.extname('.env') is '' rather than '.env', so it never matched the
+  // extension list that named it. What `.env` in that list actually matched was
+  // `config.env` and `settings.env`, which hold the same things. Protection by
+  // accident stops working the day somebody fixes the accident, so the rule is
+  // written down by name and pinned here.
+  for (const f of [
+    '.env', '.env.local', '.env.production.local', 'worker/.env',
+    'config.env', 'settings.env', 'a/b/.env.vercel-paste.local',
+    'id_rsa', 'id_ed25519', 'server.key', 'cert.pem', 'store.pfx',
+    '.npmrc', '.netrc', '.pgpass', 'secrets.json',
+  ]) {
+    check(`skipped: ${f}`, isSecretFile(f) === true);
+  }
+
+  // The other half matters as much: a filter that skips everything would make
+  // "I searched your documents" a lie in the other direction.
+  for (const f of [
+    'README.md', 'app.js', 'notes.txt', 'data.csv', 'package.json', 'schema.sql',
+    'environment.md', 'envelope.md',
+  ]) {
+    check(`still indexed: ${f}`, isSecretFile(f) === false);
+  }
 }
 
 await store.close?.();
