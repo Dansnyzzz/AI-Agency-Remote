@@ -991,6 +991,21 @@ async function revealFile({ name, data, how = 'open' }) {
   const filename = safeName(name);
   const extension = path.extname(filename).replace('.', '').toLowerCase();
 
+  /**
+   * Only `open` is refused, and that is deliberate rather than an oversight.
+   *
+   * Revealing an executable does write it to disk and put it under the user's
+   * cursor, which is most of the distance to running it — a fair objection. But
+   * blocking reveal as well would leave a file the assistant produced with no
+   * way to reach it at all, and would contradict the sentence below, which
+   * offers "Show in folder" as the way through. A refusal with no alternative
+   * is how people learn to work around a guard rather than with it.
+   *
+   * The line held here is the one the operating system draws: this will not
+   * hand a program to the shell to execute. Opening it is then a deliberate act
+   * by the person sitting at the machine, about a file they asked to see, with
+   * the extension visible in front of them.
+   */
   if (how === 'open' && NEVER_LAUNCH.has(extension)) {
     throw new Error(
       `.${extension} files are programs, or are opened by something that runs them. ` +
@@ -1040,7 +1055,26 @@ async function revealFile({ name, data, how = 'open' }) {
     child.on('spawn', () => {
       // It outlives this call: Word stays open after the tool returns.
       child.unref();
-      resolve(JSON.stringify({ path: target, folder, app, how }));
+      /**
+       * Say so when what was just revealed is a program.
+       *
+       * `open` refuses these outright. `folder` does not, and should not — the
+       * file has to be reachable somehow — but it does write the thing to disk
+       * and highlight it under the cursor, which is far enough that the person
+       * deserves to be told what they are looking at rather than left to read
+       * the extension off the filename.
+       */
+      resolve(
+        JSON.stringify({
+          path: target,
+          folder,
+          app,
+          how,
+          ...(NEVER_LAUNCH.has(extension)
+            ? { warning: `This is a .${extension} file — a program. Opening it runs it. Only do that if you know where it came from.` }
+            : {}),
+        }),
+      );
     });
   });
   // `explorer.exe /select` exits 1 even when it worked, so the exit code is
