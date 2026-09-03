@@ -734,7 +734,11 @@ export function createApp() {
     wrap(async (req, res) => {
       try {
         // The interface counts from one, the store counts from zero.
-        await removeApiKey(req.user.id, req.params.provider, Number(req.params.position) - 1);
+        // `Number.parseInt`, not `Number`: `Number('undefined') - 1` is NaN, and
+        // NaN passes every range check below it before `splice(NaN, 1)` coerces
+        // to `splice(0, 1)` — silently destroying the account's *first* key and
+        // answering 200. See the matching guard in `removeApiKey`.
+        await removeApiKey(req.user.id, req.params.provider, Number.parseInt(req.params.position, 10) - 1);
         res.json(await providerStatus(req.user.id));
       } catch (err) {
         res.status(400).json({ error: err.message });

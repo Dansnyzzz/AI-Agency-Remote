@@ -794,6 +794,8 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
 
     const assistant = { id: newId(), role: 'assistant', text: '', thinking: '', toolCalls: [] };
     let done = null;
+    /** What to book once the reply itself is safely stored. See below. */
+    let pendingUsage = null;
 
     /**
      * Say when the provider has not started answering yet.
@@ -907,19 +909,36 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
         totals.cost += priced.usd;
         if (priced.source === 'estimate') totals.estimated = true;
       }
-      // Recorded per model call rather than per turn, so the usage page can
-      // break spending down by model.
-      await recordUsage(userId, {
-        chatId,
-        model: entry.id,
-        usage: done.usage,
-        costUsd: priced?.usd || 0,
-        role: 'turn',
-      });
+      /**
+       * Booked *after* the reply is safely stored — see the append below.
+       *
+       * This used to be awaited here, before `appendMessage`, and uncaught. A
+       * connection-pool blip on the usage write threw out of the step loop, the
+       * route emitted `error`, and the reply the user had just watched being
+       * written was never persisted: gone on reload, and the next turn re-sent
+       * their question so the model answered — and charged — a second time.
+       * Losing the accounting for one turn is a far smaller harm than losing
+       * the turn itself, so the order now reflects that.
+       */
+      pendingUsage = { chatId, model: entry.id, usage: done.usage, costUsd: priced?.usd || 0, role: 'turn' };
     }
     assistant.model = entry.id;
 
     await store.appendMessage(userId, chatId, assistant);
+
+    /**
+     * Never fatal, but never silent either.
+     *
+     * `checkQuota` enforces the shared-key monthly limit against this table, so
+     * a write that keeps failing is unmetered spend on the deployment's key —
+     * swallowing it without a word is how that goes unnoticed for a month.
+     */
+    if (pendingUsage) {
+      await recordUsage(userId, pendingUsage).catch((err) =>
+        log.error('usage not recorded', err, { role: pendingUsage.role, model: pendingUsage.model }),
+      );
+      pendingUsage = null;
+    }
     messages.push(assistant);
     emit('message', { message: assistant });
     // Priced when we have a rate card *or* the provider invoiced us. The second

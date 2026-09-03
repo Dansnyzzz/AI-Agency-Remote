@@ -14,7 +14,7 @@
  *   node test/stop.test.mjs
  */
 import { normaliseStop, refusalDetail, isComplete, STOP_KINDS } from '../server/providers/stop.js';
-import { priceTurn, estimateCost } from '../server/providers/catalog.js';
+import { priceTurn, estimateCost, CATALOG } from '../server/providers/catalog.js';
 import { __testing as openai } from '../server/providers/openaiCompatible.js';
 import { __testing as google } from '../server/providers/google.js';
 
@@ -102,6 +102,34 @@ section('cached tokens are billed at the cached rate, not the full one');
   check('a cached turn costs less than the same turn uncached', withCache < noCache);
   // 100 fresh @ full + 900 read @ 0.1 = 100 + 90 = 190 units.
   check('the cached portion is a tenth of the price', Math.abs(withCache - (190 / 1e6 * 10)) < 1e-12);
+}
+
+section('the catalogue states what the models actually allow');
+{
+  const byId = Object.fromEntries(CATALOG.map((m) => [m.id, m]));
+
+  // Understating an output cap is not the safe direction: Haiku is the model
+  // compaction routes to, and a summary cut off half way loses the decisions
+  // the rest of the conversation rests on.
+  check('Haiku 4.5 allows 64k output, not 32k', byId['anthropic/claude-haiku-4-5'].maxOutput === 64_000);
+  check('and it still opts out of adaptive thinking and effort', byId['anthropic/claude-haiku-4-5'].effort === false);
+
+  const fable = byId['anthropic/claude-fable-5-1'];
+  check('Fable 5.1 is in the catalogue', !!fable);
+  check('with a 1M window and 128k output', fable.context === 1_000_000 && fable.maxOutput === 128_000);
+  check('and its verified price', fable.price.in === 10 && fable.price.out === 50);
+
+  /*
+   * The reason Fable needs a per-entry override at all: it reads a cached
+   * prompt at 2.5% of the input rate rather than the usual 10%. Charging it the
+   * default would overstate a well-cached agentic conversation four-fold on the
+   * cached portion — on a $10/MTok model, real money.
+   */
+  const whollyCached = { input: 1e6, output: 0, cacheRead: 1e6 };
+  const fableCost = estimateCost(fable, whollyCached);
+  // 1M tokens × $10/MTok × 0.025 = $0.25. At the 0.1 default it would be $1.00.
+  check('a fully cached 1M prompt costs $0.25, not the $1.00 the default rate gives', Math.abs(fableCost - 0.25) < 1e-9);
+  check('and the override is what does it', fable.cacheRead === 0.025);
 }
 
 section('the OpenAI-shaped usage reader keeps cached and cost apart');

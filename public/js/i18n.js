@@ -110,6 +110,17 @@ export function applyI18n(root = document) {
     // that in English would translate the tooltip and not the screen reader.
     if (node.hasAttribute('aria-label')) node.setAttribute('aria-label', text);
   }
+  /**
+   * An accessible name with no visible tooltip to hang it on.
+   *
+   * The loop above only reaches controls that carry a `title`, which is right
+   * for icon buttons and useless for a text field: the composer needs a real
+   * accessible name (a placeholder is neither exposed as one nor survives the
+   * first keystroke) and must not sprout a tooltip to get one.
+   */
+  for (const node of root.querySelectorAll('[data-i18n-aria-label]')) {
+    node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
+  }
   document.documentElement.lang = current;
 }
 

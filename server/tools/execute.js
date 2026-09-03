@@ -156,7 +156,28 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
        * else still returns a string and is untouched.
        */
       if (result && typeof result === 'object' && 'content' in result) {
-        return { isError: false, content: String(result.content ?? ''), file: result.file };
+        /**
+         * `widget` travels too, and forgetting it made two whole tools inert.
+         *
+         * `chart` and `show_widget` both return `{ content, widget }` (see
+         * cloud.js), the agent loop already attaches `widget` to the tool result
+         * (agent.js), and the browser already draws `result.widget.markup`
+         * (render.js). The plumbing existed at both ends and was cut exactly
+         * here — the local branch below learned to forward `shot`, and this one
+         * never learned about `widget`.
+         *
+         * The failure was invisible from the model's side, which is what made
+         * it survive: `chart` answered "Drew the bar chart in the conversation.
+         * The user can see it, so say what it shows rather than listing the
+         * numbers again", so the model confidently described a picture that was
+         * never drawn — not live, and not on reload.
+         */
+        return {
+          isError: false,
+          content: String(result.content ?? ''),
+          file: result.file,
+          widget: result.widget,
+        };
       }
       return { isError: false, content: String(result ?? '') };
     }

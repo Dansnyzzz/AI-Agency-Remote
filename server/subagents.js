@@ -64,7 +64,17 @@ const SYSTEM = [
 async function runOne({ userId, user, entry, prefs, tools, task, signal, stream }) {
   const messages = [{ id: `sub-${Date.now()}`, role: 'user', text: String(task) }];
   let answer = '';
-  const usage = { input: 0, output: 0 };
+  /**
+   * Cached reads and the provider's own invoice ride along with the totals.
+   *
+   * Summing only input and output charged every sub-agent's cached prompt at
+   * the full input rate — and a fan-out is the *most* cacheable shape in the
+   * app, since six sub-agents share one system prompt and one tool catalogue.
+   * Dropping the provider's stated cost had the same effect in the other
+   * direction: on OpenRouter the real figure was there and was replaced by an
+   * estimate, or by nothing at all for a model with no price on file.
+   */
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 };
 
   for (let step = 0; step < MAX_STEPS; step += 1) {
     if (signal?.aborted) break;
@@ -96,6 +106,9 @@ async function runOne({ userId, user, entry, prefs, tools, task, signal, stream 
     if (done?.usage) {
       usage.input += done.usage.input || 0;
       usage.output += done.usage.output || 0;
+      usage.cacheRead += done.usage.cacheRead || 0;
+      usage.cacheWrite += done.usage.cacheWrite || 0;
+      usage.costUsd += done.usage.costUsd || 0;
     }
     answer = assistant.text.trim() || answer;
     messages.push(assistant);
@@ -176,9 +189,26 @@ export async function runParallel({
   );
 
   const usage = results.reduce(
-    (total, r) => ({ input: total.input + r.usage.input, output: total.output + r.usage.output }),
-    { input: 0, output: 0 },
+    (total, r) => ({
+      input: total.input + r.usage.input,
+      output: total.output + r.usage.output,
+      cacheRead: total.cacheRead + (r.usage.cacheRead || 0),
+      cacheWrite: total.cacheWrite + (r.usage.cacheWrite || 0),
+      costUsd: total.costUsd + (r.usage.costUsd || 0),
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 },
   );
+  /**
+   * A zero here means "no provider told us", not "this was free".
+   *
+   * `priceTurn` reads any finite `costUsd` as the provider's own invoice and
+   * stops estimating — correct when a provider really did bill zero, and badly
+   * wrong as a default, which would make every fan-out on a provider that
+   * reports no cost show up as costing nothing at all. So the field is dropped
+   * unless something actually stated it.
+   */
+  if (!usage.costUsd) delete usage.costUsd;
+
   if (usage.input || usage.output) {
     // Six sub-agents on a flagship model is real money. Booking it at zero made
     // fan-out look free on the usage page, which is the one place it should not.

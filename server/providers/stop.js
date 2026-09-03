@@ -149,6 +149,18 @@ export function normaliseStop(raw, detail = null) {
     kind,
     raw: String(raw),
     message: extra ? `${base} The provider said: ${extra}` : base,
+    /**
+     * The provider's own words, kept as their own field.
+     *
+     * Folding this into `message` alone loses it. The browser translates from
+     * `kind` and uses `message` only as a fallback for a kind it has no string
+     * for — so on a refusal, where `stop.refused` exists in both locales, the
+     * translation always won and the category and explanation were discarded.
+     * That is the single most actionable part of a refusal and the only part
+     * not already implied by `kind`, so it travels separately and the
+     * interface appends it to whichever sentence it ends up showing.
+     */
+    detail: extra || null,
   };
 }
 

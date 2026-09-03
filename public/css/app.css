@@ -13,7 +13,11 @@
 
   --text: #e8eef4;
   --text-dim: #9aa8b5;
-  --text-faint: #64727f;
+  /* 5.2:1 on --bg. Was #64727f — 3.9:1, under the 4.5 WCAG asks for, on a token
+     used 119 times at 11.5–12.5px: timestamps, hints, tool durations, the
+     disabled send button. Small faint text is the worst case for contrast, not
+     the one that earns an exemption. Still clearly fainter than --text-dim. */
+  --text-faint: #78868f;
 
   --accent: #5ee6a8;
   --accent-dim: #2f7f5f;
@@ -101,12 +105,14 @@
 
   --text: #101820;
   --text-dim: #4a5866;
-  --text-faint: #74828f;
+  /* 4.7:1 on --bg. Was #74828f — 3.7:1. See the note in the dark palette. */
+  --text-faint: #66727e;
 
   --accent: #10855a;
   --accent-dim: #7fd3ae;
   --accent-glow: rgba(16, 133, 90, 0.12);
-  --warn: #b06a00;
+  /* 5.1:1 on --bg. Was #b06a00 — 4.05:1, and it carries warnings. */
+  --warn: #9a5d00;
   --danger: #c3352f;
   --info: #1b6fc4;
 
@@ -145,12 +151,14 @@
 
     --text: #101820;
     --text-dim: #4a5866;
-    --text-faint: #74828f;
+    /* 4.7:1 on --bg. Was #74828f — 3.7:1. See the note in the dark palette. */
+  --text-faint: #66727e;
 
     --accent: #10855a;
     --accent-dim: #7fd3ae;
     --accent-glow: rgba(16, 133, 90, 0.12);
-    --warn: #b06a00;
+    /* 5.1:1 on --bg. Was #b06a00 — 4.05:1, and it carries warnings. */
+  --warn: #9a5d00;
     --danger: #c3352f;
     --info: #1b6fc4;
 
@@ -2794,9 +2802,22 @@ details.block pre {
     background: var(--bg-elev);
     box-shadow: var(--shadow);
     transform: translateX(-102%);
-    transition: transform 0.22s ease;
+    /* `visibility` as well as the transform, and this is not decoration.
+       A transform moves a panel off screen and leaves every control inside it
+       in the tab order and in the accessibility tree — so with the drawer shut
+       on a phone, tabbing out of the header walked through New chat, Search,
+       Projects, Artifacts, Scheduled, Workflows, Workspace, Settings and every
+       conversation row plus its ⋯ button, all invisible. The right-hand rail
+       already does exactly this; the drawer was simply missed.
+       Delayed on close so it does not blank mid-slide, immediate on open. */
+    visibility: hidden;
+    transition: transform 0.22s ease, visibility 0s linear 0.22s;
   }
-  .app.is-open .sidebar { transform: none; }
+  .app.is-open .sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.22s ease, visibility 0s;
+  }
 
   /* No room for a third column on a phone, so the rail slides over from the
      right the way the sidebar slides in from the left. */
@@ -5607,4 +5628,30 @@ details.block pre {
 @media print {
   body.is-printing .doc .figure { break-inside: avoid; }
   body.is-printing .doc .figure img { max-height: none; }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Focus is never invisible.
+
+   The base rule near the top of this file gives every control a
+   `:focus-visible` ring, and seventeen later declarations of
+   `outline: none` — the API-key fields, the workspace editor, the
+   project composer, the find box, the inline message editor —
+   quietly took it back without offering a substitute. Where one
+   *was* offered it failed anyway: `.field input:focus` tints the
+   border to --accent-dim, which is 1.77:1 against white, well
+   under the 3:1 WCAG asks of a focus indicator.
+
+   So the guarantee lives here, last and `!important`. This is the
+   case that justifies it: a keyboard user who cannot see where
+   they are cannot use the application at all, and no individual
+   component's styling preference outranks that.
+
+   `:focus-visible` and not `:focus`, so a mouse click still
+   leaves no ring — the reason those rules were written in the
+   first place.
+   ───────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
 }

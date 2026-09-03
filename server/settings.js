@@ -397,7 +397,18 @@ export async function removeApiKey(userId, provider, index) {
   if (!(provider in ENV_KEYS)) throw new Error(`Unknown provider "${provider}"`);
   const keys = await storedKeys(userId);
   const list = keyList(keys, provider);
-  if (index < 0 || index >= list.length) throw new Error('There is no key in that position.');
+  /**
+   * `Number.isInteger` first, because every comparison against NaN is false.
+   *
+   * A non-numeric position walked straight through `index < 0 || index >= len`
+   * and reached `splice(NaN, 1)`, which coerces the index to 0 — so a malformed
+   * request deleted the account's first API key and reported success. Belt to
+   * the route's braces: this is the layer that must not be talked into it,
+   * whatever the caller passes.
+   */
+  if (!Number.isInteger(index) || index < 0 || index >= list.length) {
+    throw new Error('There is no key in that position.');
+  }
 
   list.splice(index, 1);
   if (list.length) keys[provider] = list;

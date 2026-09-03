@@ -135,6 +135,9 @@ export const vi = {
     'Dừng lại vì câu trả lời đang chép lại tài liệu nguồn quá sát. Hỏi lại bằng lời của bạn thì thường sẽ qua.',
   'stop.unknown': 'Nhà cung cấp kết thúc câu trả lời này mà không nói lý do.',
 
+  'approval.title': 'Duyệt các hành động này?',
+  'composer.label': 'Tin nhắn',
+
   'empty.title': 'Hôm nay bạn muốn làm gì?',
   'empty.body':
     'Chọn model rồi hỏi bất cứ điều gì. Khi máy tính của bạn đã kết nối, trợ lý có thể đọc tệp, sửa code và chạy lệnh ngay trên máy đó.',

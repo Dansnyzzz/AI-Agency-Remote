@@ -52,6 +52,23 @@ export async function initStore({ driver } = {}) {
     return store;
   })();
 
+  /**
+   * A failed attempt must not poison the process.
+   *
+   * `pending` was cached and never cleared, and every request awaits this in
+   * middleware — so one transient cold-start failure (Neon waking up, a PGlite
+   * data directory momentarily locked) left a rejected promise in place for the
+   * life of the instance. Every later request answered 500 with the original
+   * error long after the database had recovered, and only a redeploy fixed it.
+   *
+   * Clearing it on rejection makes the next request retry. `store` is only
+   * assigned on the success path, so there is nothing half-built to undo.
+   */
+  pending = pending.catch((err) => {
+    pending = null;
+    throw err;
+  });
+
   return pending;
 }
 

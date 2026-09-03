@@ -124,6 +124,18 @@ const state = {
    */
   sealed: false,
   toolHandles: new Map(),
+  /**
+   * The last "why this reply stopped" notice drawn, so one outcome is not
+   * announced twice.
+   *
+   * A truncated turn can report itself twice in one run — once on the path that
+   * still has tool calls to make, and again on the way out — and two identical
+   * warnings side by side read as two separate failures. Cleared when a run
+   * ends, because the *next* turn being truncated as well is news, not a
+   * repeat: suppressing that would silently hide exactly the thing this whole
+   * mechanism exists to surface.
+   */
+  lastStopNote: null,
 };
 
 /**
@@ -814,7 +826,28 @@ function gotoShelf(which) {
   pages.show(which);
 }
 
+/**
+ * Stop listening to the run before leaving the conversation it belongs to.
+ *
+ * Navigating away used to leave the stream running while `state.chatId` moved
+ * underneath it, and the handlers append to `$('messages')` by name rather than
+ * to the transcript they came from. So the old run's prose, its stop notes, its
+ * compaction dividers and its tool cards were grafted into whichever
+ * conversation was now on screen — and `noteFile` lit the wrong file chip and
+ * auto-opened a document from a chat the user had left. `beginEdit` already
+ * guards on `state.running`; navigation never did.
+ *
+ * Deliberately *not* `api.stopChat`. The run holds a lease and every turn is
+ * persisted server-side, so the work carries on and is waiting, complete, when
+ * they come back. Only this tab's attention moves.
+ */
+function detachRun() {
+  if (!state.running) return;
+  state.abort?.abort();
+}
+
 async function openChat(id) {
+  detachRun();
   closeSidebar();
   // A conversation replaces whichever shelf was on screen.
   leavePages();
@@ -831,6 +864,9 @@ async function openChat(id) {
   state.files = files || [];
   renderFilesChip();
   clearQueue();
+  // Belt to the run-detach braces: a stop note left over from another
+  // conversation must never dedupe away the first one in this conversation.
+  state.lastStopNote = null;
   // Opening a stored conversation abandons the blank one you were sitting in.
   state.pendingProject = null;
   refreshModelFacts();
@@ -889,6 +925,9 @@ async function openChat(id) {
  * so this is the same road for every one after it.
  */
 function startBlankChat(project = null) {
+  // Same reason as `openChat`: the run keeps going server-side, but its events
+  // must not be drawn into the blank conversation now on screen.
+  detachRun();
   leavePages();
   clearStaged();
   state.chatId = null;
@@ -899,6 +938,7 @@ function startBlankChat(project = null) {
   renderProjectChip();
   renderFilesChip();
   clearQueue();
+  state.lastStopNote = null;
 
   /**
    * Everything that described the last conversation, cleared.
@@ -1718,6 +1758,9 @@ async function stream(decision) {
     if (state.turn && !state.turn.node.querySelector('.prose, .block, .plan')) state.turn.node.remove();
     state.turn = null;
     state.toolHandles.clear();
+    // See the note on `lastStopNote`: the dedupe is per run, not for the life
+    // of the conversation. A second truncated turn has to be able to say so.
+    state.lastStopNote = null;
     await refreshChats();
 
     // Whatever was typed while this was running goes now — including after a
@@ -1828,11 +1871,16 @@ async function streamOnce(decision) {
         },
         usage: (totals) => renderUsage(totals),
         context: (info) => renderContext(info),
-        compacted: ({ replaced }) => {
+        compacted: ({ replaced, text }) => {
           // Said out loud, because the transcript the model sees has just
           // changed and that is not something to do silently.
           toast(`Folded ${replaced} earlier messages into a summary to free up room.`);
-          $('messages').append(summaryDivider(replaced));
+          // `text` too: `summaryDivider` renders a "Read the summary"
+          // disclosure when it is given one, and `openChat` already passes it.
+          // Dropping it here made the summary visible after a reload and
+          // invisible at the moment it happened — which is exactly when
+          // somebody wants to check what was folded away.
+          $('messages').append(summaryDivider(replaced, text));
           maybeScroll();
         },
         approval_required: ({ toolCalls }) => {
@@ -1884,13 +1932,18 @@ async function streamOnce(decision) {
  * and again on the way out, and two identical notices side by side read as two
  * separate failures.
  */
-function noteStop({ kind, message }) {
+function noteStop({ kind, message, detail }) {
   // `t` returns the key itself for a string it does not have — see i18n.js,
   // where that is deliberate so a gap is loud rather than silently English.
   // Here it is the signal to fall back to what the server wrote.
   const key = `stop.${kind}`;
   const translated = t(key);
-  const body = translated === key ? message : translated;
+  // The provider's own explanation is appended rather than folded into the
+  // fallback, because the translated sentence wins whenever it exists — and on
+  // a refusal, which is where `detail` is populated, it always does. Without
+  // this the refusal category never reached anybody.
+  const sentence = translated === key ? message : translated;
+  const body = sentence && detail ? `${sentence} (${detail})` : sentence;
   if (!body || state.lastStopNote === `${kind}:${body}`) return;
   state.lastStopNote = `${kind}:${body}`;
   $('messages').append(stopNote(kind, body));
@@ -1935,13 +1988,27 @@ function showApproval(toolCalls) {
   $('approval-list').innerHTML = toolCalls
     .map(
       (c) =>
-        `<div>${c.name} — ${escapeText(summariseToolInput(c.name, c.input))}` +
+        // `c.name` is escaped like every other field on this line. Built-in tool
+        // names are safe, but an MCP tool name is chosen by a third-party server
+        // the user connected — and this is the approval prompt, the one screen
+        // whose whole job is to state accurately what is about to run.
+        `<div>${escapeText(c.name)} — ${escapeText(summariseToolInput(c.name, c.input))}` +
         (c.needsApproval && c.reason ? `<br /><span class="warn-text">${escapeText(c.reason)}</span>` : '') +
         '</div>',
     )
     .join('');
   box.hidden = false;
   scrollToEnd();
+  /**
+   * Put the keyboard where the decision is.
+   *
+   * The run has halted and nothing further happens until somebody answers, but
+   * focus stayed wherever it was — so a keyboard or screen-reader user had to
+   * go looking for a prompt they were never told about. Deny is focused rather
+   * than Allow: the safe half of an irreversible choice should be the one a
+   * stray Return key lands on.
+   */
+  $('deny').focus();
 }
 
 function hideApproval() {

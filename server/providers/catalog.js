@@ -9,6 +9,34 @@
 export const CATALOG = [
   // ---- Anthropic ------------------------------------------------------------
   {
+    /**
+     * The one to reach for on demanding reasoning and long-horizon agentic work
+     * — which is most of what this app is for.
+     *
+     * `cacheRead` is the reason this entry carries an override at all. Fable
+     * 5.1 reads a cached prompt at **2.5%** of the input rate rather than the
+     * usual 10%, and the note on `cacheRates` below always said adding one of
+     * these should be a data change rather than a code change. This is that
+     * change. Getting it wrong in the other direction would overstate a
+     * well-cached agentic conversation by four times on the cached portion,
+     * which on a $10/MTok model is not a rounding error.
+     *
+     * Thinking is adaptive and always on here, so there is nothing to opt out
+     * of; `effort` defaults to `high` exactly as the adapter already sends.
+     * Verified against platform.claude.com/docs models overview, 2026-09-03.
+     */
+    id: 'anthropic/claude-fable-5-1',
+    provider: 'anthropic',
+    model: 'claude-fable-5-1',
+    label: 'Claude Fable 5.1',
+    context: 1_000_000,
+    maxOutput: 128_000,
+    thinking: true,
+    price: { in: 10, out: 50 },
+    cacheRead: 0.025,
+    tags: ['flagship', 'agentic', 'reasoning'],
+  },
+  {
     id: 'anthropic/claude-opus-5',
     provider: 'anthropic',
     model: 'claude-opus-5',
@@ -54,7 +82,18 @@ export const CATALOG = [
     model: 'claude-haiku-4-5',
     label: 'Claude Haiku 4.5',
     context: 200_000,
-    maxOutput: 32_000,
+    /**
+     * 64k, not the 32k this said.
+     *
+     * Understating a model's output cap is not the safe direction it looks
+     * like: this is the model `roleModel.js` routes compaction to, and
+     * compaction is the largest prompt the app sends. A summary of a long
+     * conversation was being cut off at half the length the model would have
+     * allowed — and a truncated summary silently loses the decisions the rest
+     * of the conversation rests on. Checked against platform.claude.com/docs
+     * models overview, 2026-09-03.
+     */
+    maxOutput: 64_000,
     // Haiku 4.5 predates adaptive thinking and rejects `output_config.effort`.
     thinking: false,
     effort: false,

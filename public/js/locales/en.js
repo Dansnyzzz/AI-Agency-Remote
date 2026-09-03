@@ -71,6 +71,12 @@ export const en = {
     'Stopped because the answer was reproducing source material too closely. Ask for it in your own words and it will usually go through.',
   'stop.unknown': 'The provider ended this reply for a reason it did not explain.',
 
+  // The run has stopped and is waiting on a person — see the alertdialog in
+  // index.html. It was the one heading in the composer never translated.
+  'approval.title': 'Approve these actions?',
+  // The accessible name of the main composer. Not a placeholder — see index.html.
+  'composer.label': 'Message',
+
   // The checklist drawn inside a message by `update_plan`, and the count beside
   // the same steps in the progress rail.
   'chat.plan': 'Plan',
