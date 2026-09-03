@@ -2693,10 +2693,25 @@ const effortLabel = (value) => (efforts().find(([v]) => v === value) || efforts(
  * settings belong.
  */
 
+/** Every settings tab, typed as what it is: a button, not a bare Element. */
+const settingsTabs = () =>
+  /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('.tab'));
+
 function selectTab(name) {
-  for (const tab of document.querySelectorAll('.tab')) {
+  for (const tab of settingsTabs()) {
     const active = tab.dataset.tab === name;
     tab.classList.toggle('is-active', active);
+    /**
+     * The state a screen reader reads, alongside the class the eye reads.
+     *
+     * These carried `role="tab"` and nothing else — no aria-selected, so ten
+     * tabs were announced and none of them said which one you were on. The
+     * roving tabindex is the other half: only the selected tab is in the tab
+     * order, so Tab moves past the whole strip rather than through ten stops,
+     * which is what the arrow keys below are for.
+     */
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
     if (active) revealInStrip(tab);
   }
   for (const panel of document.querySelectorAll('.panel')) {
@@ -2704,7 +2719,38 @@ function selectTab(name) {
   }
 }
 
-for (const tab of document.querySelectorAll('.tab')) {
+/**
+ * Left and right move between tabs, Home and End jump to the ends.
+ *
+ * This is the half of the tab pattern that cannot be expressed in markup, and
+ * without it `role="tablist"` promises a keyboard behaviour that is not there.
+ */
+function moveTab(from, step) {
+  const tabs = /** @type {HTMLButtonElement[]} */ ([...document.querySelectorAll('.sheet__tabs .tab')]);
+  if (!tabs.length) return;
+  const at = tabs.indexOf(from);
+  const next =
+    step === 'home' ? tabs[0]
+    : step === 'end' ? tabs[tabs.length - 1]
+    : tabs[(at + step + tabs.length) % tabs.length];
+  if (!next) return;
+  selectTab(next.dataset.tab);
+  next.focus();
+}
+
+for (const tab of settingsTabs()) {
+  tab.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+    const step =
+      event.key === 'ArrowRight' ? 1
+      : event.key === 'ArrowLeft' ? -1
+      : event.key === 'Home' ? 'home'
+      : event.key === 'End' ? 'end'
+      : null;
+    if (step === null) return;
+    event.preventDefault();
+    moveTab(tab, step);
+  });
+
   tab.addEventListener('click', () => {
     selectTab(tab.dataset.tab);
     // Reaching a server takes a moment, so this is done when the tab is opened

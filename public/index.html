@@ -791,19 +791,22 @@
         </div>
 
         <!-- Which API the model runs on, and therefore which key pays for it. -->
-        <div class="seg seg--scroll" role="tablist" id="provider-filter">
-          <button class="seg__btn is-active" data-provider="all" type="button">All</button>
-          <button class="seg__btn" data-provider="anthropic" type="button">Anthropic</button>
-          <button class="seg__btn" data-provider="openai" type="button">OpenAI</button>
-          <button class="seg__btn" data-provider="google" type="button">Google</button>
-          <button class="seg__btn" data-provider="openrouter" type="button">OpenRouter</button>
-          <button class="seg__btn" data-provider="orcarouter" type="button">OrcaRouter</button>
+        <!-- A group of filters, not tabs: these switch what the list below shows
+             rather than swapping panels, and the children were never role="tab".
+             aria-pressed is the state that matches what they actually do. -->
+        <div class="seg seg--scroll" role="group" aria-label="Filter by provider" id="provider-filter">
+          <button class="seg__btn is-active" data-provider="all" type="button" aria-pressed="true">All</button>
+          <button class="seg__btn" data-provider="anthropic" type="button" aria-pressed="false">Anthropic</button>
+          <button class="seg__btn" data-provider="openai" type="button" aria-pressed="false">OpenAI</button>
+          <button class="seg__btn" data-provider="google" type="button" aria-pressed="false">Google</button>
+          <button class="seg__btn" data-provider="openrouter" type="button" aria-pressed="false">OpenRouter</button>
+          <button class="seg__btn" data-provider="orcarouter" type="button" aria-pressed="false">OrcaRouter</button>
         </div>
 
-        <div class="seg" role="tablist" id="tier-filter">
-          <button class="seg__btn is-active" data-tier="all" type="button">All</button>
-          <button class="seg__btn" data-tier="free" type="button">Free</button>
-          <button class="seg__btn" data-tier="paid" type="button">Paid</button>
+        <div class="seg" role="group" aria-label="Filter by price" id="tier-filter">
+          <button class="seg__btn is-active" data-tier="all" type="button" aria-pressed="true">All</button>
+          <button class="seg__btn" data-tier="free" type="button" aria-pressed="false">Free</button>
+          <button class="seg__btn" data-tier="paid" type="button" aria-pressed="false">Paid</button>
         </div>
 
         <div class="browser__row" id="vendor-row">
@@ -1071,20 +1074,20 @@
       </form>
 
       <div class="sheet__tabs" role="tablist">
-        <button class="tab is-active" data-tab="providers" role="tab" data-i18n="settings.tab.providers">Providers</button>
-        <button class="tab" data-tab="models" role="tab" data-i18n="settings.tab.models">Models</button>
-        <button class="tab" data-tab="behaviour" role="tab" data-i18n="settings.tab.behaviour">Behaviour</button>
-        <button class="tab" data-tab="skills" role="tab" data-i18n="settings.tab.skills">Skills</button>
-        <button class="tab" data-tab="tasks" role="tab" data-i18n="settings.tab.tasks">Scheduled</button>
-        <button class="tab" data-tab="connectors" role="tab" data-i18n="settings.tab.connectors">Connectors</button>
-        <button class="tab" data-tab="mcp" role="tab" data-i18n="settings.tab.mcp">MCP servers</button>
-        <button class="tab" data-tab="worker" role="tab" data-i18n="settings.tab.worker">Computers</button>
-        <button class="tab" data-tab="account" role="tab" data-i18n="settings.tab.account">Account</button>
-        <button class="tab" data-tab="admin" role="tab" id="tab-admin" hidden data-i18n="settings.tab.people">People</button>
+        <button class="tab is-active" type="button" data-tab="providers" role="tab" id="tab-providers" aria-controls="panel-providers" aria-selected="true" tabindex="0" data-i18n="settings.tab.providers">Providers</button>
+        <button class="tab" type="button" data-tab="models" role="tab" id="tab-models" aria-controls="panel-models" aria-selected="false" tabindex="-1" data-i18n="settings.tab.models">Models</button>
+        <button class="tab" type="button" data-tab="behaviour" role="tab" id="tab-behaviour" aria-controls="panel-behaviour" aria-selected="false" tabindex="-1" data-i18n="settings.tab.behaviour">Behaviour</button>
+        <button class="tab" type="button" data-tab="skills" role="tab" id="tab-skills" aria-controls="panel-skills" aria-selected="false" tabindex="-1" data-i18n="settings.tab.skills">Skills</button>
+        <button class="tab" type="button" data-tab="tasks" role="tab" id="tab-tasks" aria-controls="panel-tasks" aria-selected="false" tabindex="-1" data-i18n="settings.tab.tasks">Scheduled</button>
+        <button class="tab" type="button" data-tab="connectors" role="tab" id="tab-connectors" aria-controls="panel-connectors" aria-selected="false" tabindex="-1" data-i18n="settings.tab.connectors">Connectors</button>
+        <button class="tab" type="button" data-tab="mcp" role="tab" id="tab-mcp" aria-controls="panel-mcp" aria-selected="false" tabindex="-1" data-i18n="settings.tab.mcp">MCP servers</button>
+        <button class="tab" type="button" data-tab="worker" role="tab" id="tab-worker" aria-controls="panel-worker" aria-selected="false" tabindex="-1" data-i18n="settings.tab.worker">Computers</button>
+        <button class="tab" type="button" data-tab="account" role="tab" id="tab-account" aria-controls="panel-account" aria-selected="false" tabindex="-1" data-i18n="settings.tab.account">Account</button>
+        <button class="tab" type="button" data-tab="admin" role="tab" id="tab-admin" aria-controls="panel-admin" aria-selected="false" tabindex="-1" id="tab-admin" hidden data-i18n="settings.tab.people">People</button>
       </div>
 
       <div class="sheet__body">
-        <section class="panel is-active" data-panel="providers">
+        <section class="panel is-active" data-panel="providers" id="panel-providers" role="tabpanel" aria-labelledby="tab-providers">
           <p class="hint">
             Keys are stored on your server and never sent to the browser. Set them as environment
             variables instead and they become read-only here.
@@ -1092,7 +1095,7 @@
           <div id="provider-list"></div>
         </section>
 
-        <section class="panel" data-panel="models">
+        <section class="panel" data-panel="models" id="panel-models" role="tabpanel" aria-labelledby="tab-models">
           <p class="hint">
             The library refreshes itself from OpenRouter once a day, so free models appear without
             anyone pressing anything. You can also add one by id — it is verified, then becomes
@@ -1129,7 +1132,7 @@
           <div id="audit-results"></div>
         </section>
 
-        <section class="panel" data-panel="behaviour">
+        <section class="panel" data-panel="behaviour" id="panel-behaviour" role="tabpanel" aria-labelledby="tab-behaviour">
           <!-- Mode and effort used to be repeated here as two more dropdowns.
                Two homes for one setting is two places to disagree, and the one
                beside the send button is the one that is read at the moment it
@@ -1212,7 +1215,7 @@
           <span class="hint" id="behaviour-status"></span>
         </section>
 
-        <section class="panel" data-panel="skills">
+        <section class="panel" data-panel="skills" id="panel-skills" role="tabpanel" aria-labelledby="tab-skills">
           <p class="hint">
             A procedure taught once instead of re-explained every conversation. The assistant sees the
             names and descriptions, and reads the full instructions when one applies — so the
@@ -1239,7 +1242,7 @@
           <div id="skill-list"></div>
         </section>
 
-        <section class="panel" data-panel="tasks">
+        <section class="panel" data-panel="tasks" id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks">
           <p class="hint">
             Work that runs without you watching. Each run is a fresh conversation you can open
             afterwards — the result is waiting rather than announced. Write the prompt as if to
@@ -1265,7 +1268,7 @@
           <div id="task-list"></div>
         </section>
 
-        <section class="panel" data-panel="connectors">
+        <section class="panel" data-panel="connectors" id="panel-connectors" role="tabpanel" aria-labelledby="tab-connectors">
           <p class="hint">
             Tokens are encrypted on the server and never sent back to the browser. Each is verified
             with the service before it is stored, so a bad paste fails here rather than mid-task.
@@ -1278,7 +1281,7 @@
           </p>
         </section>
 
-        <section class="panel" data-panel="mcp">
+        <section class="panel" data-panel="mcp" id="panel-mcp" role="tabpanel" aria-labelledby="tab-mcp">
           <p class="hint" data-i18n="mcp.lede">
             MCP servers add tools from outside this app — Figma, Jira, Sentry, a database, hundreds of
             others. Plug one in and the assistant can use it. Nothing here is chosen by the assistant:
@@ -1335,7 +1338,7 @@
           <div id="mcp-list"></div>
         </section>
 
-        <section class="panel" data-panel="worker">
+        <section class="panel" data-panel="worker" id="panel-worker" role="tabpanel" aria-labelledby="tab-worker">
           <div id="worker-status-card"></div>
 
           <h3>Add a computer</h3>
@@ -1361,7 +1364,7 @@
           <button class="btn btn--ghost" id="open-pair" type="button">Enter a pairing code</button>
         </section>
 
-        <section class="panel" data-panel="account">
+        <section class="panel" data-panel="account" id="panel-account" role="tabpanel" aria-labelledby="tab-account">
           <div id="account-card"></div>
 
           <div class="field">
@@ -1398,7 +1401,7 @@
           <button class="btn btn--ghost" id="logout" type="button">Sign out</button>
         </section>
 
-        <section class="panel" data-panel="admin">
+        <section class="panel" data-panel="admin" id="panel-admin" role="tabpanel" aria-labelledby="tab-admin">
           <h3>People</h3>
           <p class="hint">
             Anyone can sign up with an email and a password. Each account brings its own API keys and

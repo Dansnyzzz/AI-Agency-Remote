@@ -314,6 +314,11 @@ export function createModelBrowser({ onPick }) {
       state.tier = btn.dataset.tier;
       for (const other of document.querySelectorAll('#tier-filter .seg__btn')) {
         other.classList.toggle('is-active', other === btn);
+        // The class says which filter is on to the eye; aria-pressed is the
+        // half a screen reader can hear. These are toggles in a group, not
+        // tabs — the markup used to claim role="tablist" over children that
+        // were never role="tab", which announced a pattern nothing implemented.
+        other.setAttribute('aria-pressed', String(other === btn));
       }
       load();
     });
@@ -327,6 +332,11 @@ export function createModelBrowser({ onPick }) {
       state.provider = btn.dataset.provider;
       for (const other of document.querySelectorAll('#provider-filter .seg__btn')) {
         other.classList.toggle('is-active', other === btn);
+        // The class says which filter is on to the eye; aria-pressed is the
+        // half a screen reader can hear. These are toggles in a group, not
+        // tabs — the markup used to claim role="tablist" over children that
+        // were never role="tab", which announced a pattern nothing implemented.
+        other.setAttribute('aria-pressed', String(other === btn));
       }
       // A vendor chip is meaningless outside the library, and leaving a stale
       // one selected would silently filter the next OpenRouter view.
