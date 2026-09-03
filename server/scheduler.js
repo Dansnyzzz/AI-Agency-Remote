@@ -263,6 +263,25 @@ export async function runDueTasks({ limit = 5, userId = null, budgetMs = null } 
  */
 export async function runDueTasksForUser(userId, { limit = 2 } = {}) {
   if (!userId) return [];
+
+  /**
+   * Reap this account's stalled tasks before claiming any more.
+   *
+   * `reapStalledTasks` lived only inside `sweep()`, and on a deployment `sweep`
+   * runs only from the cron — once a day on Vercel's free tier. So a task whose
+   * invocation was killed mid-run stayed marked `running` for up to
+   * twenty-four hours, holding a lease, neither retried nor reported to the
+   * person waiting on it.
+   *
+   * This path already exists to nudge an account's queue when the app is
+   * opened, which is a far better cadence. Scoped to the caller, because the
+   * route above is explicit that a user request must never sweep everybody's
+   * queue — the cron does that, and it has its own secret.
+   *
+   * Never fatal: failing to tidy is not a reason to refuse to run the work.
+   */
+  await getStore().reapStalledTasks(userId).catch(() => {});
+
   return runDueTasks({ limit, userId });
 }
 

@@ -708,11 +708,25 @@ export function createPgStore(connectionString) {
      */
     async listChats(userId) {
       return q(
-        `SELECT c.id, c.title, c.model, c.pinned, c.created_at, c.updated_at,
-                (SELECT COUNT(*)::int FROM messages m WHERE m.chat_id = c.id) AS message_count
+        /**
+         * One pass over the messages index per chat, not two.
+         *
+         * This ran a correlated COUNT *and* a correlated EXISTS for every row,
+         * so the commonest query in the application — the sidebar, on every
+         * load — did up to four hundred index scans to return two hundred rows,
+         * and half of them only to answer a question the count had already
+         * answered.
+         *
+         * LATERAL runs the count once per chat and the outer WHERE reads its
+         * result, which is the same filter for one scan instead of two. Both
+         * are supported by messages_chat_seq_idx either way.
+         */
+        `SELECT c.id, c.title, c.model, c.pinned, c.created_at, c.updated_at, m.message_count
            FROM chats c
+           JOIN LATERAL (
+                SELECT COUNT(*)::int AS message_count FROM messages m WHERE m.chat_id = c.id
+           ) m ON m.message_count > 0
           WHERE c.user_id = $1
-            AND EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id)
           ORDER BY c.pinned DESC, c.updated_at DESC
           LIMIT 200`,
         [userId],
@@ -1969,14 +1983,28 @@ export function createPgStore(connectionString) {
      *
      * @returns the tasks that were stopped, so the caller can say so.
      */
-    async reapStalledTasks() {
+    /**
+     * @param userId scope it to one account, or omit for every account.
+     *
+     * The scoped form exists because this used to run only inside `sweep()`,
+     * and on a deployment `sweep()` runs only from the cron — which on Vercel's
+     * free tier is once a day. A task killed mid-run at nine in the morning sat
+     * marked `running` until the next afternoon, holding its lease, so it was
+     * neither retried nor reported. Opening the app already nudges that
+     * account's queue along; this lets the reap ride with it, and stays scoped
+     * because that route is explicit that a user request must never sweep
+     * everybody's queue.
+     */
+    async reapStalledTasks(userId = null) {
       const rows = await q(
         `UPDATE scheduled_tasks
             SET run_state = 'needs_attention',
                 enabled = FALSE,
                 last_status = 'stopped mid-run — it may or may not have finished, so it was not repeated'
           WHERE run_state = 'running' AND lease_until IS NOT NULL AND lease_until <= NOW()
+            AND ($1::text IS NULL OR user_id = $1)
       RETURNING id, user_id, title`,
+        [userId],
       );
       return rows;
     },
