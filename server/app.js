@@ -1656,6 +1656,33 @@ export function createApp() {
       }
 
       const transport = req.body?.transport === 'http' ? 'http' : 'stdio';
+
+      /**
+       * A stdio server is administrator-only, whatever ALLOW_MCP_STDIO says.
+       *
+       * `api.use(requireAuth)` is the only guard on this router, so this route
+       * was reachable by *any* signed-in account — and a stdio server is not a
+       * URL, it is "spawn this program on the server". The child inherits the
+       * server's whole environment, ENCRYPTION_KEY included, which is the key
+       * every account's stored provider keys are encrypted under. One ordinary
+       * account could therefore read every other account's credentials.
+       *
+       * The env flag was carrying this alone, and it is the wrong shape for it:
+       * it answers "is this machine allowed to spawn things", not "is this
+       * person allowed to decide what". Both questions have to be yes.
+       *
+       * Nothing is lost on the deployment the flag was written for. .env.example
+       * says to set it only on a single-owner machine you trust, and on such a
+       * machine the owner is the administrator. http servers are unaffected:
+       * they are screened for private addresses and spawn nothing.
+       */
+      if (transport === 'stdio' && req.user?.role !== 'admin') {
+        return res.status(403).json({
+          error:
+            'A stdio server runs a program on this server with access to everyone’s stored keys, so only an administrator can add one. An http server works for any account.',
+        });
+      }
+
       const config = { transport };
       if (transport === 'stdio') {
         config.command = String(req.body?.command || '').trim();
@@ -1708,6 +1735,21 @@ export function createApp() {
     wrap(async (req, res) => {
       const existing = await getStore().getMcpServer(req.user.id, req.params.id);
       if (!existing) return res.status(404).json({ error: 'No such MCP server.' });
+
+      /**
+       * Switching a stdio server back on is the same act as adding one — only a
+       * server that is enabled is ever connected (see registry.js) — so it needs
+       * the same check. Without it, a row created before that rule existed could
+       * be disabled and re-enabled straight past it.
+       */
+      const enabling = req.body?.enabled !== false;
+      if (enabling && existing.config?.transport !== 'http' && req.user?.role !== 'admin') {
+        return res.status(403).json({
+          error:
+            'A stdio server runs a program on this server with access to everyone’s stored keys, so only an administrator can switch one on.',
+        });
+      }
+
       const updated = await getStore().setMcpServerEnabled(req.user.id, req.params.id, req.body?.enabled !== false);
       forgetMcp(req.user.id);
       return res.json({ server: { id: updated.id, name: updated.name, enabled: updated.enabled } });

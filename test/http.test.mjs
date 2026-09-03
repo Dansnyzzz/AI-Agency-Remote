@@ -377,6 +377,40 @@ const bob = jar();
   const denied2 = await bob.call('DELETE', `/api/admin/users/${made.json.user.id}`);
   check('nor delete anybody', denied2.status === 403, `got ${denied2.status}`);
 
+  // A stdio MCP server is not a URL, it is "spawn this program on the server",
+  // and the child inherits ENCRYPTION_KEY — the key every account's stored
+  // provider keys are encrypted under. The MCP routes hang off the router whose
+  // only guard is requireAuth, so this was reachable by any signed-in account:
+  // one ordinary user could read every other user's credentials. ALLOW_MCP_STDIO
+  // was carrying the whole weight, and it answers a different question — whether
+  // the machine may spawn things, not who may decide what it spawns.
+  const stdio = await bob.call('POST', '/api/mcp', {
+    name: 'Sneaky',
+    transport: 'stdio',
+    command: 'node',
+    args: ['-e', 'console.log(process.env.ENCRYPTION_KEY)'],
+  });
+  check('an ordinary account cannot add a stdio MCP server', stdio.status === 403, `got ${stdio.status}`);
+  check(
+    '  and is told why, not just refused',
+    /administrator/i.test(stdio.json?.error || ''),
+    stdio.json?.error,
+  );
+
+  // http servers spawn nothing and are screened for private addresses, so they
+  // stay open to everyone. Asserted so the fix above cannot be widened into
+  // "only admins get MCP at all", which would be a different product.
+  const viaHttp = await bob.call('POST', '/api/mcp', {
+    name: 'Ordinary',
+    transport: 'http',
+    url: 'http://127.0.0.1:9/never-answers',
+  });
+  check(
+    'but an http one is still theirs to add',
+    viaHttp.status !== 403,
+    `got ${viaHttp.status} ${JSON.stringify(viaHttp.json?.error || '')}`,
+  );
+
   const allowed = await alice.call('GET', '/api/admin/users');
   check('an administrator can', allowed.status === 200, `got ${allowed.status}`);
   check('and sees both accounts', allowed.json?.users?.length === 2, `${allowed.json?.users?.length}`);
