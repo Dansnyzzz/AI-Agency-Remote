@@ -67,6 +67,7 @@ async function pair() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: DEVICE_NAME, info: workerInfo() }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!start.ok) {
     throw new Error(`the server refused to start pairing (HTTP ${start.status})`);
@@ -95,7 +96,9 @@ async function pair() {
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
 
-    const res = await fetch(`${SERVER_URL}/api/pair/poll?id=${encodeURIComponent(id)}`);
+    const res = await fetch(`${SERVER_URL}/api/pair/poll?id=${encodeURIComponent(id)}`, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (!res.ok) continue;
     const outcome = await res.json();
 
@@ -321,6 +324,9 @@ setFrameSink(async (payload) => {
     method: 'POST',
     headers: authHeaders,
     body: JSON.stringify(payload),
+    // A frame is worth less than the one behind it: if this one cannot be
+    // delivered promptly there is no value in holding the connection for it.
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   return res.ok ? res.json() : { watching: false };
 });
@@ -339,6 +345,7 @@ async function post(pathname, body) {
     method: 'POST',
     headers: authHeaders,
     body: JSON.stringify(body ?? {}),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) {
     // Surface the server's own sentence when it sent one. These reach the model
@@ -501,6 +508,24 @@ async function heartbeat() {
  * six simultaneous `npm install`s is its own kind of rude.
  */
 const MAX_CONCURRENT_JOBS = Math.min(Math.max(Number(process.env.WORKER_CONCURRENCY) || 4, 1), 12);
+
+/**
+ * Ceilings for every request this worker makes.
+ *
+ * There were none, and the poll below is the one that mattered. A socket that
+ * is dropped without an RST — a laptop suspended, a tunnel torn down, a NAT
+ * table forgetting the mapping — leaves `fetch` pending forever. `pollLoop` is
+ * a single `for(;;)` with nothing watching it, so the worker would go deaf and
+ * stay deaf, while `workerStatus` on the server still reported it online from
+ * the last heartbeat. Every tool call then waits out its own timeout instead.
+ *
+ * The poll is deliberately the long one: the server holds each request open for
+ * about 25 seconds, so anything shorter would abort healthy polls and turn a
+ * cheap long-poll into a busy loop. 45s leaves generous headroom and still
+ * bounds the failure.
+ */
+const POLL_TIMEOUT_MS = 45_000;
+const REQUEST_TIMEOUT_MS = 30_000;
 let inFlight = 0;
 
 /**
@@ -520,7 +545,10 @@ async function pollLoop() {
     }
 
     try {
-      const res = await fetch(`${SERVER_URL}/api/worker/jobs`, { headers: authHeaders });
+      const res = await fetch(`${SERVER_URL}/api/worker/jobs`, {
+        headers: authHeaders,
+        signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
+      });
       if (res.status === 401) {
         // A token belongs to one computer on one account, so a rejection means
         // this machine was unpaired in the app. Rather than telling somebody to
@@ -573,6 +601,18 @@ async function pollLoop() {
           });
       }
     } catch (err) {
+      /**
+       * A poll that timed out is the ordinary case, not a fault.
+       *
+       * The server holds the request open and may simply have had nothing to
+       * say; the ceiling is here to stop a dead socket hanging forever, not to
+       * report anything. Treating it like a failure would print a line every
+       * 45 seconds on an idle machine and mark a perfectly healthy worker
+       * offline, so it goes straight back round — which is what the request
+       * would have done had it returned empty.
+       */
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') continue;
+
       if (online) console.log(`  Poll failed: ${err.message}`);
       online = false;
       await new Promise((r) => setTimeout(r, 3000));
