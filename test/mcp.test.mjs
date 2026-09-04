@@ -17,6 +17,7 @@
  * repository must always stop for approval.
  */
 import path from 'node:path';
+import fs from 'node:fs';
 
 let failures = 0;
 const section = (name) => console.log(`\n\x1b[1m${name}\x1b[0m`);
@@ -347,6 +348,43 @@ section('a server plugged in reaches the assistant');
     } catch {
       await new Promise((r) => setTimeout(r, 200));
     }
+  }
+}
+
+/* ── the browser derives the same slug the server does ─────────── */
+{
+  // app.js has its own copy of `slugify`, because it has to work out which
+  // status belongs to which server before the tools have names. The comment
+  // there says "the same slug the server derives tool names from" — and nothing
+  // held the two together. If either drifts, every MCP server in Settings
+  // silently shows no status: no error, no empty state, just a row that never
+  // says how many tools it has.
+  //
+  // Compared by behaviour rather than by text, so reformatting either side is
+  // allowed and changing what either computes is not.
+  const { slugify } = await import('../server/mcp/registry.js');
+  const client = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const body = /const slugForMcp = ([\s\S]*?);\n/.exec(client)?.[1];
+  // Detail only when it is missing: this harness prints the detail either way,
+  // and "slugForMcp not found" beside a tick is the kind of line people learn
+  // to skim past.
+  check('the browser still has its own slug', !!body, body ? '' : 'slugForMcp not found in app.js');
+
+  if (body) {
+    // Reading one arrow function out of a sibling file is the point of the
+    // check: app.js is a browser module with no export for this, so there is no
+    // import path to it and comparing the text would forbid reformatting.
+    const theirs = eval(body);
+    const names = [
+      'Figma', 'My Figma!', 'postgres', 'PostgreSQL 16', '  spaced  out  ',
+      '!!!', '', 'a'.repeat(60), 'Ăn-Uống', 'server_1', '__leading', 'trailing__',
+    ];
+    const differ = names.filter((n) => theirs(n) !== slugify(n));
+    check(
+      'and it agrees with the server on every shape',
+      differ.length === 0,
+      differ.map((n) => `${JSON.stringify(n)}: ${theirs(n)} vs ${slugify(n)}`).join('; '),
+    );
   }
 }
 
