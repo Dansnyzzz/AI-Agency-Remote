@@ -425,6 +425,49 @@ section('hybrid reranking');
   );
 }
 
+// ── the query-vector cache ────────────────────────────────────────────
+
+section('a query is embedded once, not once per search');
+{
+  const { __testing } = await import('../server/rag.js');
+  const { queryVector, QUERY_VECTORS, QUERY_CACHE_TTL_MS, QUERY_CACHE_MAX } = __testing;
+
+  QUERY_VECTORS.clear();
+  let calls = 0;
+  const stub = async () => { calls += 1; return Float32Array.from([1, 0]); };
+  const openai = { provider: 'openai', model: 'text-embedding-3-small' };
+
+  // Every search embedded its query over the network — a round trip with a
+  // 60-second ceiling before a single row is read — and the agent asks the same
+  // question more than once often: a retry after a narrow result, a sub-agent
+  // covering the same ground, someone rephrasing one word.
+  await queryVector('u1', 'the deposit', openai, stub);
+  await queryVector('u1', 'the deposit', openai, stub);
+  await queryVector('u1', 'the deposit', openai, stub);
+  check('the same question embeds once', calls === 1, `${calls} calls`);
+
+  await queryVector('u1', 'the refund', openai, stub);
+  check('a different question embeds again', calls === 2, `${calls} calls`);
+
+  // Vectors from two models are not comparable — the file says so at the top —
+  // so the model has to be part of the key or a change of embedder would serve
+  // answers from the wrong space.
+  await queryVector('u1', 'the deposit', { provider: 'google', model: 'gemini-embedding-001' }, stub);
+  check('another model is a different vector, not a cache hit', calls === 3, `${calls} calls`);
+
+  // Stale entries must not be served, or a re-index would be invisible.
+  const key = 'openai:text-embedding-3-small:the deposit';
+  QUERY_VECTORS.set(key, { vector: Float32Array.from([9, 9]), at: Date.now() - QUERY_CACHE_TTL_MS - 1 });
+  await queryVector('u1', 'the deposit', openai, stub);
+  check('an entry past its TTL is re-embedded', calls === 4, `${calls} calls`);
+
+  // Bounded, or a long-lived process holds every question ever asked.
+  for (let i = 0; i < QUERY_CACHE_MAX + 40; i += 1) {
+    await queryVector('u1', `q${i}`, openai, stub);
+  }
+  check('the cache stays bounded', QUERY_VECTORS.size <= QUERY_CACHE_MAX, String(QUERY_VECTORS.size));
+}
+
 // ── credentials are never indexed ─────────────────────────────────────
 
 section('secrets are skipped before they are read');

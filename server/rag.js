@@ -139,9 +139,16 @@ async function embedGoogle(texts, apiKey, model) {
   return (json.embeddings || []).map((e) => e.values);
 }
 
-/** Embed a list of strings, in batches the provider will accept. */
-async function embed(userId, texts) {
-  const embedder = await embedderFor(userId);
+/**
+ * Embed a list of strings, in batches the provider will accept.
+ *
+ * `embedder` may be passed in by a caller that has already resolved it. Every
+ * search did that work twice — once in `searchDocs` to decide whether embedding
+ * was possible at all, and again in here — and each resolution walks the
+ * provider list asking the store for a key.
+ */
+async function embed(userId, texts, known = null) {
+  const embedder = known || (await embedderFor(userId));
   if (!embedder) throw noEmbedder();
   const apiKey = await getApiKey(userId, embedder.provider);
 
@@ -424,6 +431,45 @@ async function nearest(store, userId, model, needle, shortlist, source = null) {
   return best;
 }
 
+/**
+ * Query vectors, remembered for a few minutes.
+ *
+ * Every `search_docs` call embedded its query over the network — a round trip
+ * with a 60-second ceiling before a single row is read. The same question asked
+ * twice paid twice, and the agent asks the same question more than once often:
+ * a retry after a narrow result, a sub-agent covering the same ground, a person
+ * rephrasing one word.
+ *
+ * Keyed by the model as well as the text, so a change of embedder cannot return
+ * vectors from the wrong space. Per-process and short-lived by design — this is
+ * a cache for a burst of related turns, not a store, and on serverless a cold
+ * invocation simply starts empty.
+ */
+const QUERY_VECTORS = new Map();
+const QUERY_CACHE_MAX = 64;
+const QUERY_CACHE_TTL_MS = 5 * 60_000;
+
+async function queryVector(userId, text, embedder, fetchVector = null) {
+  const key = `${embedder.provider}:${embedder.model}:${text}`;
+  const hit = QUERY_VECTORS.get(key);
+  if (hit && Date.now() - hit.at < QUERY_CACHE_TTL_MS) {
+    QUERY_VECTORS.delete(key);
+    QUERY_VECTORS.set(key, hit); // least-recently-used ordering
+    return hit.vector;
+  }
+
+  // Injectable so the suite can drive the caching without a provider key or a
+  // network round trip. Production always takes the default.
+  const vector = fetchVector
+    ? await fetchVector(text)
+    : (await embed(userId, [text], embedder)).vectors[0];
+  QUERY_VECTORS.set(key, { vector, at: Date.now() });
+  while (QUERY_VECTORS.size > QUERY_CACHE_MAX) {
+    QUERY_VECTORS.delete(QUERY_VECTORS.keys().next().value);
+  }
+  return vector;
+}
+
 export async function searchDocs(userId, { query, limit = 6, source = null }) {
   const text = String(query || '').trim();
   if (!text) throw new Error('Give something to search for.');
@@ -432,8 +478,7 @@ export async function searchDocs(userId, { query, limit = 6, source = null }) {
   if (!embedder) throw noEmbedder();
 
   const store = getStore();
-  const { vectors } = await embed(userId, [text]);
-  const needle = vectors[0];
+  const needle = await queryVector(userId, text, embedder);
 
   const wanted = Math.min(Math.max(Number(limit) || 6, 1), 20);
   // Over-fetch, because merging adjacent chunks collapses some of them, and
@@ -594,4 +639,6 @@ export async function forgetSource(userId, source) {
 }
 
 /** Exposed for the suite that pins how the shortlist is reranked. */
-export const __testing = { lexicalScore, terms, fuseRankings, STOPWORDS };
+// QUERY_VECTORS is here because a cache that never invalidates is a correctness
+// bug, not a performance detail — the suite has to be able to reach it.
+export const __testing = { lexicalScore, terms, fuseRankings, STOPWORDS, QUERY_VECTORS, QUERY_CACHE_TTL_MS, QUERY_CACHE_MAX, queryVector };
