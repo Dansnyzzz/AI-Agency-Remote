@@ -2482,9 +2482,6 @@ export function createPgStore(connectionString) {
       return rows[0] ?? null;
     },
 
-    async deleteSharedModel(id) {
-      await q('DELETE FROM shared_models WHERE id = $1', [id]);
-    },
 
     /** Drives the "is the library stale?" check and the freshness label. */
     async modelLibraryStatus() {

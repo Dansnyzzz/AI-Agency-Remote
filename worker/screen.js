@@ -37,7 +37,6 @@ export function setFrameSink(fn) {
 }
 
 export const isWatched = () => watching;
-export const activeSource = () => active?.name || null;
 
 /**
  * Send a frame. Returns false when nobody is watching, which is a source's cue
@@ -100,5 +99,3 @@ export function release(name) {
   if (active?.name === name) active = null;
 }
 
-/** How long the panel has been closed, for sources deciding whether to idle. */
-export const unwatchedFor = () => Date.now() - lastWatchedAt;

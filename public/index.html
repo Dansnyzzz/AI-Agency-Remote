@@ -830,19 +830,11 @@
     </dialog>
 
     <!-- ── Search conversations ─────────────────────────────────────── -->
-    <!-- ── Artifacts ────────────────────────────────────────────────────
-         Every document, spreadsheet, deck and page the assistant has made,
-         newest first, with the conversation each came from. -->
-    <dialog id="artifacts" class="sheet sheet--tall">
-      <form method="dialog" class="sheet__head">
-        <h2>Artifacts</h2>
-        <button class="icon-btn" value="close" aria-label="Close">✕</button>
-      </form>
-
-      <div class="sheet__body" id="artifact-list">
-        <p class="hint">Loading…</p>
-      </div>
-    </dialog>
+    <!-- The Artifacts *dialog* was removed here. It was replaced by the
+         artifacts shelf — pages.js, reached by gotoShelf('artifacts') — and
+         left behind as markup no JavaScript referenced: neither #artifacts nor
+         #artifact-list appeared anywhere, so its permanent "Loading…" could
+         never be replaced by anything. -->
 
     <!-- ── Workspace files ──────────────────────────────────────────────
          The folder the assistant works in, on the machine running the worker.

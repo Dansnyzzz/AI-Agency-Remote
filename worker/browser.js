@@ -171,28 +171,20 @@ const profileDir = () => path.join(dataDir(), 'browser-profile');
 const CDP_PORT = Number(process.env.BROWSER_CDP_PORT) || 9222;
 const cdpEndpoint = () => process.env.BROWSER_CDP_URL || `http://127.0.0.1:${CDP_PORT}`;
 
-export const browserMode = () => mode;
-
 /**
- * Adopt a mode chosen in the app.
+ * `browserMode` and `setBrowserMode` were removed here.
  *
- * The browser in hand is closed rather than kept, and that is the point: a
- * session opened as a sandbox is *not* the signed-in profile somebody just
- * asked for, and carrying on with it would quietly do the work in the wrong
- * browser while the interface said otherwise. The next tool call reopens in the
- * new mode.
+ * They existed for a picker in the app that let somebody choose sandbox,
+ * profile or attach per computer. That picker was taken out — the answer is
+ * always a clean sandbox, and `.env.example` says so where BROWSER_MODE is
+ * documented — and the two functions were left behind, exported and called by
+ * nothing.
+ *
+ * The mode is still settable, by `BROWSER_MODE` in the worker's environment,
+ * which is read once at start-up. Nothing changes it at runtime any more, so a
+ * setter that closes the live browser to adopt a new one had no way to be
+ * reached and no caller to reach it.
  */
-export async function setBrowserMode(next) {
-  const wanted = BROWSER_MODES.includes(next) ? next : 'sandbox';
-  if (wanted === mode) return mode;
-  mode = wanted;
-  await closeBrowser().catch(() => {});
-  // Re-probe: "is a browser listening on the debugging port" is exactly the
-  // question somebody has just made relevant by choosing `attach`, and the
-  // answer they need is the one from now, not from start-up.
-  await refreshBrowserCapabilities().catch(() => {});
-  return mode;
-}
 
 /**
  * Is there a live context to act in?

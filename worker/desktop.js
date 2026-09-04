@@ -83,7 +83,6 @@ let camera = null;
  */
 export const desktopAllowed = () => /^(1|true|yes)$/i.test(process.env.DESKTOP_ACCESS || '');
 
-export const desktopRunning = () => !!host;
 
 function reject(message) {
   for (const { reject: fail, timer } of pending.values()) {
