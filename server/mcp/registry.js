@@ -1,6 +1,7 @@
 import { getStore } from '../store/index.js';
 import { encryptSecret, decryptSecret } from '../crypto.js';
 import { connectMcp } from './client.js';
+import { log } from '../util/trace.js';
 
 /**
  * The MCP servers an account has plugged in.
@@ -128,9 +129,24 @@ export async function mcpTools(userId) {
   let rows;
   try {
     rows = await store.listMcpServers(userId);
-  } catch {
-    // The table may not exist yet on a database mid-migration. No MCP is a
-    // perfectly workable state; a crashed turn is not.
+  } catch (err) {
+    /**
+     * Carry on without MCP, but say so unless it is the expected case.
+     *
+     * The reasoning for swallowing this is sound — the table may not exist yet
+     * on a database mid-migration, and no MCP is a workable state where a
+     * crashed turn is not. The problem was that it swallowed *everything* the
+     * same way. A connection pool exhausted, a timeout, a permissions error:
+     * all of them silently removed every MCP tool from the turn, and the model
+     * then told the user it could not do things it could do perfectly well.
+     * Nothing anywhere named a cause.
+     *
+     * A missing table stays silent because it is expected and self-resolving.
+     * Anything else is logged, so "my Figma tools vanished" has somewhere to be
+     * looked up.
+     */
+    const missingTable = /relation .* does not exist|no such table|undefined_table/i.test(err?.message || '');
+    if (!missingTable) log.warn('mcp: could not list servers; continuing without MCP tools', { err: err?.message });
     return { tools: [], servers: [] };
   }
 

@@ -176,7 +176,13 @@ const SHIM = `<script>
     } catch (ignored) { /* frozen; nothing more to try */ }
     window.storage.list().then(function (all) {
       for (var k in all) mem[k] = typeof all[k] === 'string' ? all[k] : JSON.stringify(all[k]);
-    }).catch(function () {});
+    }).catch(function (err) {
+      // Starting empty is the right behaviour — an artifact must still run when
+      // its stored values cannot be read. Saying nothing was not: the page then
+      // looks like a first visit, and whoever wrote it has no way to tell that
+      // apart from storage being broken.
+      console.warn('[AI Remote] Could not read stored values; this artifact is starting empty.', err);
+    });
   }
 })();
 </script>`;
