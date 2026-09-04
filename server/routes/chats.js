@@ -1,0 +1,285 @@
+import crypto from 'node:crypto';
+import { riskReason } from '../tools/definitions.js';
+import { resolveForUser } from '../autoPick.js';
+import { getStore } from '../store/index.js';
+import { verifyOwned } from '../attachments.js';
+import { deriveTitle, needsApproval as pendingApproval } from '../agent.js';
+import { compact as compactChat, measure as measureContext } from '../compact.js';
+import { getPrefs } from '../settings.js';
+
+/**
+ * Lifted out of server/app.js — see the note on mountWorkspaceRoutes for why.
+ *
+ * The routes are unchanged: same handlers, same paths, same order. Only their
+ * address in the tree moved.
+ *
+ * @param {import('express').Router} api  the authenticated router
+ * @param {{ wrap: Function, body: Function, isRunning: Function }} ctx
+ */
+export function mountChatRoutes(api, { wrap, body, isRunning }) {
+  // ── chats ───────────────────────────────────────────────────────────
+  api.get(
+    '/chats',
+    wrap(async (req, res) => {
+      res.json({ chats: await getStore().listChats(req.user.id) });
+    }),
+  );
+
+  api.post(
+    '/chats',
+    wrap(async (req, res) => {
+      const prefs = await getPrefs(req.user.id);
+      const store = getStore();
+
+      // A conversation may only be filed under a project of your own — the id
+      // comes from a browser, and an id is a thing somebody can type.
+      const projectId = req.body?.projectId ? String(req.body.projectId) : null;
+      if (projectId && !(await store.getProject(req.user.id, projectId))) {
+        return res.status(404).json({ error: 'No such project.' });
+      }
+
+      const chat = await store.createChat(req.user.id, {
+        id: crypto.randomUUID(),
+        title: req.body?.title || 'New chat',
+        model: req.body?.model || prefs.defaultModel,
+        projectId,
+      });
+      res.status(201).json({ chat });
+    }),
+  );
+
+  // Declared before `/chats/:id`, or Express reads "search" as a chat id.
+  api.get(
+    '/chats/search',
+    wrap(async (req, res) => {
+      const query = String(req.query.q || '').trim();
+      if (query.length < 2) return res.json({ chats: [] });
+      res.json({ chats: await getStore().searchChats(req.user.id, query) });
+    }),
+  );
+
+  api.get(
+    '/chats/:id',
+    wrap(async (req, res) => {
+      const store = getStore();
+      const chat = await store.getChat(req.user.id, req.params.id);
+      if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+      const messages = await store.listMessages(req.user.id, req.params.id);
+
+      /**
+       * Whether reopening this conversation should show the approval bar.
+       *
+       * The browser used to decide this on its own and got it wrong: it marked
+       * every trailing tool call as needing a yes, including under policies
+       * where the server would never have asked. The risk rules live on the
+       * server, so the answer does too.
+       */
+      const last = messages[messages.length - 1];
+      let pending = null;
+      if (last?.role === 'assistant' && last.toolCalls?.length) {
+        const prefs = await getPrefs(req.user.id);
+        const gated = pendingApproval(last.toolCalls, prefs.toolPolicy);
+        if (gated.length) {
+          pending = last.toolCalls.map((c) => ({
+            id: c.id,
+            name: c.name,
+            input: c.input,
+            needsApproval: gated.some((p) => p.id === c.id),
+            reason: riskReason(c.name, c.input),
+          }));
+        }
+      }
+
+      // How full the window is, so the gauge is right the moment a conversation
+      // opens rather than only after the next turn.
+      let context = null;
+      try {
+        // The account's model, not the one stored on the conversation — the gauge
+        // has to be measured against the window the next turn will actually use.
+        const entry = await resolveForUser(req.user.id, (await getPrefs(req.user.id)).defaultModel);
+        context = measureContext(messages, entry);
+      } catch {
+        /* an unresolvable model is the model picker's problem, not the gauge's */
+      }
+
+      // Which project this conversation answers under. The header says so:
+      // "grounded in six documents" is not something to have to remember.
+      let project = null;
+      if (chat.project_id) {
+        const found = await store.getProject(req.user.id, chat.project_id);
+        if (found) {
+          const files = await store.listProjectFiles(req.user.id, found.id);
+          project = { id: found.id, name: found.name, grounded: found.grounded, files: files.length };
+        }
+      }
+
+      // Everything the assistant made here, so reopening a conversation brings
+      // the documents back with it rather than leaving them buried in the
+      // transcript at the point they were written.
+      const files = await store.listGeneratedFiles(req.user.id, req.params.id);
+
+      res.json({ chat, messages, pendingApproval: pending, context, project, files });
+    }),
+  );
+
+  /** Just the files, for refreshing the shelf without reloading a conversation. */
+  api.get(
+    '/chats/:id/files',
+    wrap(async (req, res) => {
+      const store = getStore();
+      const chat = await store.getChat(req.user.id, req.params.id);
+      if (!chat) return res.status(404).json({ error: 'Chat not found' });
+      res.json({ files: await store.listGeneratedFiles(req.user.id, req.params.id) });
+    }),
+  );
+
+  api.patch(
+    '/chats/:id',
+    wrap(async (req, res) => {
+      const patch = {};
+      for (const key of ['title', 'model', 'pinned']) if (key in (req.body || {})) patch[key] = req.body[key];
+
+      const chat = await getStore().updateChat(req.user.id, req.params.id, patch);
+      if (!chat) return res.status(404).json({ error: 'Chat not found' });
+      res.json({ chat });
+    }),
+  );
+
+  api.delete(
+    '/chats/:id',
+    wrap(async (req, res) => {
+      await getStore().deleteChat(req.user.id, req.params.id);
+      res.json({ ok: true });
+    }),
+  );
+
+  api.post(
+    '/chats/:id/messages',
+    wrap(async (req, res) => {
+      const store = getStore();
+      const chatId = req.params.id;
+      const chat = await store.getChat(req.user.id, chatId);
+      if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+      const text = String(req.body?.text || '').trim();
+
+      let files;
+      try {
+        // Ownership checked here, not trusted: the ids come from the browser.
+        files = await verifyOwned(req.user.id, req.body?.attachments);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+
+      // A photo on its own is a perfectly good message — "what is this?" is
+      // implied, and demanding a caption first would be pedantry.
+      if (!text && !files.length) {
+        return res.status(400).json({ error: 'Type something, or attach a file.' });
+      }
+
+      const message = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        text,
+        ...(files.length ? { attachments: files } : {}),
+      };
+      await store.appendMessage(req.user.id, chatId, message);
+      await store.attachToChat(req.user.id, chatId, files.map((f) => f.id));
+
+      // The first message doubles as the title until the user renames it.
+      const existing = await store.listMessages(req.user.id, chatId);
+      if (existing.length === 1 || chat.title === 'New chat') {
+        const title = text || files.map((f) => f.name).join(', ');
+        await store.updateChat(req.user.id, chatId, { title: deriveTitle(title) });
+      }
+      res.status(201).json({ message });
+    }),
+  );
+
+  /**
+   * Edit something you said, and ask again from there.
+   *
+   * Refused mid-run: the messages after this one are about to be deleted, and
+   * deleting them out from under a run in progress would leave the agent
+   * writing into a conversation that no longer has a place for it.
+   */
+  api.patch(
+    '/chats/:id/messages/:messageId',
+    wrap(async (req, res) => {
+      const store = getStore();
+      const chat = await store.getChat(req.user.id, req.params.id);
+      if (!chat) return res.status(404).json({ error: 'Chat not found' });
+      if (isRunning(chat)) {
+        return res.status(409).json({ error: 'This conversation is running. Stop it first.' });
+      }
+
+      const text = String(req.body?.text || '').trim();
+      if (!text) return res.status(400).json({ error: 'A message cannot be empty.' });
+
+      try {
+        const message = await store.editUserMessage(req.user.id, req.params.id, req.params.messageId, text);
+        if (!message) return res.status(404).json({ error: 'Message not found' });
+        res.json({ message });
+      } catch (err) {
+        res.status(err.status || 400).json({ error: err.message });
+      }
+    }),
+  );
+
+  /**
+   * Fold the older turns up now, rather than waiting for the ceiling.
+   *
+   * The automatic one runs when the window is nearly full; this is for choosing
+   * the moment yourself — finishing one piece of work and wanting a clean slate
+   * without losing what was decided.
+   */
+  api.post(
+    '/chats/:id/compact',
+    wrap(async (req, res) => {
+      const store = getStore();
+      const chatId = req.params.id;
+      const chat = await store.getChat(req.user.id, chatId);
+      if (!chat) return res.status(404).json({ error: 'Chat not found' });
+      /**
+       * Not while a turn is running.
+       *
+       * The message-edit route has always refused mid-run, for exactly the
+       * reason this one needed to and did not: writing a summary between an
+       * assistant turn and the tool message answering it means the next turn's
+       * `activeTranscript` slices from the summary, and that assistant turn plus
+       * its results vanish from what the model sees.
+       */
+      if (isRunning(chat)) {
+        return res.status(409).json({ error: 'This conversation is running. Stop it first.' });
+      }
+
+      const prefs = await getPrefs(req.user.id);
+      const messages = await store.listMessages(req.user.id, chatId);
+      // The account's model. Folding a conversation up has to be measured and
+      // performed against the window the next turn will run in. Through
+      // resolveForUser so Auto expands to the free model it would actually pick.
+      const entry = await resolveForUser(req.user.id, prefs.defaultModel);
+
+      try {
+        const summary = await compactChat({
+          userId: req.user.id,
+          chatId,
+          entry,
+          prefs,
+          messages,
+        });
+        if (!summary) {
+          return res.status(400).json({ error: 'There is not enough here yet to be worth folding up.' });
+        }
+        res.json({
+          summary: { id: summary.id, text: summary.text, replaced: summary.replaced },
+          context: measureContext([...messages, summary], entry),
+        });
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    }),
+  );
+
+}

@@ -191,6 +191,17 @@ const SYSTEM = [
  * @returns the summary message that was appended, or null when there was
  *   nothing worth folding.
  */
+/**
+ * @param {{
+ *   userId: string, chatId: string, entry: any, prefs: any, messages: any[],
+ *   signal?: AbortSignal,
+ *   stream?: (opts: any) => AsyncGenerator<any, void, unknown>,
+ * }} args
+ *
+ *  is optional and was not marked so: the agent loop passes one because
+ * a turn can be stopped, and the chat route does not because a compaction the
+ * user asked for by pressing a button has nothing to cancel it.
+ */
 export async function compact({ userId, chatId, entry, prefs, messages, signal, stream = streamCompletion }) {
   const store = getStore();
   const live = activeTranscript(messages);

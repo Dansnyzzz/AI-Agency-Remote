@@ -393,6 +393,15 @@ const escapeHtmlText = (value) =>
  *   content it was built from, kept so a later edit starts from the words rather
  *   than from a parsed approximation of them
  */
+/**
+ * @param {{
+ *   format?: string, name?: string, content?: string, title?: string,
+ *   author?: string, created?: Date,
+ * }} [args]
+ *
+ * Written out because only the two with defaults were being inferred: with the
+ * rest unmarked, every caller read as passing properties the type did not have.
+ */
 export function createDocument({ format, name, content, title, author = 'AI Remote', created = new Date() } = {}) {
   const kind = String(format || '').toLowerCase();
   if (!CREATABLE.includes(kind)) {

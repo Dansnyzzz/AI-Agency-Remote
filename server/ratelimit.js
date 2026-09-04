@@ -99,7 +99,12 @@ export async function forgive(req, action, extra = '') {
  * `identify` pulls the second dimension out of the request — the email, usually.
  * It runs before the handler, so the body is already parsed.
  */
-export function limit(action, identify = () => '') {
+/**
+ * @param {string} action
+ * @param {(req: any) => string} [identify]  the second dimension, read off the
+ *   request — the email being tried, or the account id.
+ */
+export function limit(action, identify = (/** @type {any} */ _req) => '') {
   return async (req, res, next) => {
     try {
       const blocked = await consume(req, action, identify(req));
