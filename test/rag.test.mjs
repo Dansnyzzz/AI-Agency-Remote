@@ -425,6 +425,24 @@ section('hybrid reranking');
   );
 }
 
+// ── credentials do not travel in a URL ────────────────────────────────
+
+section('no API key is put in a query string');
+{
+  // A query string is the part of a request that ends up where nobody chose:
+  // proxy logs, error traces, an exception quoting the URL it failed on.
+  // Google documents `?key=…` and also accepts `x-goog-api-key`, so there is no
+  // reason to take the first.
+  const files = ['../server/rag.js', '../server/models.js'];
+  for (const rel of files) {
+    const src = fs.readFileSync(new URL(rel, import.meta.url), 'utf8');
+    // Comments are allowed to mention it; code is not. Strip line comments and
+    // block comments before looking.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    check(`${rel.split('/').pop()} sends no key in a URL`, !/\?key=|&key=/.test(code), code.match(/.{0,40}[?&]key=.{0,30}/)?.[0]);
+  }
+}
+
 // ── the query-vector cache ────────────────────────────────────────────
 
 section('a query is embedded once, not once per search');

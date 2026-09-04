@@ -125,10 +125,19 @@ async function embedOpenAI(texts, apiKey, model) {
 }
 
 async function embedGoogle(texts, apiKey, model) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents?key=${encodeURIComponent(apiKey)}`;
+  /**
+   * The key travels in a header, not in the query string.
+   *
+   * `?key=…` is Google's documented shape and it works, but a query string is
+   * the part of a request that ends up in places nobody chose: proxy logs,
+   * error traces, an exception message quoting the URL it failed on. Google
+   * accepts `x-goog-api-key` for the same call, so the credential stays in the
+   * part of the request that is conventionally not logged.
+   */
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
       requests: texts.map((text) => ({ model: `models/${model}`, content: { parts: [{ text }] } })),
     }),
