@@ -95,7 +95,7 @@ async function readSources(ledger, readPage) {
   );
 }
 
-export async function gatherEvidence(queries, { search = defaultSearch, readPage } = {}) {
+export async function gatherEvidence(queries, { search = defaultSearch, readPage, userId = null } = {}) {
   const ledger = new Map();
   const byUrl = new Map();
   const findings = [];
@@ -104,7 +104,7 @@ export async function gatherEvidence(queries, { search = defaultSearch, readPage
   for (const query of queries) {
     let out;
     try {
-      out = await search(query);
+      out = await search(query, { userId });
     } catch (err) {
       findings.push({ id: null, query, snippet: `(search failed: ${err.message})` });
       continue;

@@ -80,6 +80,9 @@ export async function runDeepResearch({ question, userId, user, chatId, signal, 
    * behaviour, which the confidence grader then correctly refuses to call HIGH.
    */
   const { ledger, findings } = await gatherEvidence(queries, {
+    // Carried only so the searches can be attributed: a run makes up to six of
+    // them on a deployment-wide key that no per-account quota covers.
+    userId,
     ...(search ? { search } : {}),
     ...(deps.readPage ? { readPage: deps.readPage } : {}),
   });

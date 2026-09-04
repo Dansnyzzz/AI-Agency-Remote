@@ -22,6 +22,7 @@
  */
 
 import { untrusted } from './tools/untrusted.js';
+import { log } from './util/trace.js';
 
 const DEFAULT_ORDER = ['exa', 'duckduckgo', 'tavily', 'brave'];
 
@@ -270,7 +271,7 @@ export function searchChain() {
  *   and why it did not answer, which is the difference between "there is
  *   nothing about this on the web" and "the search key expired last Tuesday".
  */
-export async function search(query, { count = 8 } = {}) {
+export async function search(query, { count = 8, userId = null } = {}) {
   const wanted = Math.min(Math.max(Number(count) || 8, 1), 20);
   const chain = searchChain();
 
@@ -288,7 +289,24 @@ export async function search(query, { count = 8 } = {}) {
     const engine = ENGINES[name];
     try {
       const results = await engine.run(query, wanted);
-      if (results.length) return { engine: engine.label, results, attempts };
+      if (results.length) {
+        /**
+         * Say who spent it.
+         *
+         * These keys are deployment-wide — one Exa or Tavily key serves every
+         * account — so unlike a model call there is no per-account quota this
+         * lands against and nothing anywhere recorded who searched. A single
+         * `deep_research` run makes up to six of these, so "the search bill
+         * went up" had no way of being traced to anybody.
+         *
+         * Attribution rather than enforcement: the operator can now see it in
+         * the log. Per-account search keys would be the fuller answer and are a
+         * product decision, not an audit fix — see .env.example, which now says
+         * plainly that these are shared.
+         */
+        log.info('search', { engine: engine.label, userId: userId || 'unattributed', results: results.length });
+        return { engine: engine.label, results, attempts };
+      }
       attempts.push({ engine: engine.label, error: 'no results' });
     } catch (err) {
       attempts.push({ engine: engine.label, error: err.message });
