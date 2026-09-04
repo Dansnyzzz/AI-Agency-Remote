@@ -74,6 +74,55 @@ function pushesToProtected(command) {
     });
 }
 
+/**
+ * The command with heredoc *bodies* removed, so rules match commands and not data.
+ *
+ * Every rule below tests the raw text, which means a word inside something being
+ * *written to a file* reads exactly like a word being *run*. This blocked two
+ * genuinely read-only calls during the audit that produced this change: a `grep`
+ * whose search pattern contained the words, and a `cat > file <<'EOF'` whose
+ * document body mentioned publishing to a registry. Neither was a command.
+ *
+ * That is the failure mode this file's own header warns about — a guard that
+ * blocks what a developer legitimately types gets switched off, and then it
+ * protects nothing.
+ *
+ * Only heredoc bodies are stripped, and only between the delimiter that opens
+ * one and the line that closes it. Quoted strings are deliberately left alone:
+ * `bash -c "git push origin main"` is a real command inside quotes, and removing
+ * quoted text would be a genuine hole rather than a cosmetic one.
+ *
+ * The residual gap, stated plainly: a heredoc can write a script that is run
+ * afterwards, and that run is not caught here. It never was — `bash script.sh`
+ * does not name what is inside the script — so this narrows false positives
+ * without widening what actually gets through.
+ */
+export function withoutHeredocs(command) {
+  const text = String(command || '');
+  // `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"` — the delimiter is what closes it.
+  const opener = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/g;
+
+  let out = '';
+  let at = 0;
+  let match;
+  while ((match = opener.exec(text))) {
+    const tag = match[2];
+    // The body starts on the line after the line the opener sits on.
+    const lineEnd = text.indexOf('\n', opener.lastIndex);
+    if (lineEnd === -1) break;
+
+    const close = new RegExp(`^\\s*${tag}\\s*$`, 'm');
+    const rest = text.slice(lineEnd + 1);
+    const found = close.exec(rest);
+    if (!found) break;
+
+    out += text.slice(at, lineEnd + 1);
+    at = lineEnd + 1 + found.index + found[0].length;
+    opener.lastIndex = at;
+  }
+  return out + text.slice(at);
+}
+
 /** Each rule is [pattern-or-predicate, why]. `why` is read by the model, so it must be actionable. */
 const RULES = [
   [
@@ -159,12 +208,12 @@ process.stdin.on('data', (chunk) => {
 });
 
 process.stdin.on('end', () => {
-  let command = '';
+  let rawCommand = '';
   let cwd = process.cwd();
   try {
     const payload = JSON.parse(raw || '{}');
     // Bash uses `command`; the PowerShell tool uses the same field name.
-    command = String(payload.tool_input?.command || '');
+    rawCommand = String(payload.tool_input?.command || '');
     cwd = String(payload.cwd || process.cwd());
   } catch {
     // A guard that crashes on unexpected input must fail open, not wedge every
@@ -176,6 +225,9 @@ process.stdin.on('end', () => {
     process.stderr.write(`Blocked by .claude/hooks/guard-bash.js\n\n${why}\n`);
     process.exit(2);
   };
+
+  // Rules read the command with heredoc *bodies* removed. See `withoutHeredocs`.
+  const command = withoutHeredocs(rawCommand);
 
   // Most rules are a pattern; one needs to read the command the way git does,
   // so a rule may also be a predicate.

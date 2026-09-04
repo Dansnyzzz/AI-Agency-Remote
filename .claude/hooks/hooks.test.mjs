@@ -445,6 +445,33 @@ try {
   /* a leftover temp directory is not a test failure */
 }
 
+/* ── a heredoc body is data, not a command ─────────────────────── */
+
+{
+  // Every rule tests the raw command text, so a word inside something being
+  // *written to a file* read exactly like a word being *run*. During the audit
+  // that produced this, the guard blocked two read-only calls: a grep whose
+  // search pattern contained the words, and a `cat > file <<EOF` whose document
+  // body mentioned publishing. That is the failure this file's header warns
+  // about — a guard that blocks legitimate work gets switched off.
+  const { withoutHeredocs } = await import('./guard-bash.js');
+
+  // Assembled rather than written out, because this file is read by the guard
+  // when the suite itself is run from a shell.
+  const trigger = ['npm', 'publish'].join(' ');
+  const sees = (cmd) => /\bnpm\s+publish\b/.test(withoutHeredocs(cmd));
+
+  is(!sees(`cat > a.md <<'EOF'\n${trigger}\nEOF\necho done`), 'a heredoc body is not read as a command');
+  is(!sees(`cat <<-EOF\n${trigger}\nEOF`), 'and <<- is handled the same way');
+  is(sees(trigger), 'a real command is still caught');
+  is(sees(`cat > a.md <<'EOF'\nharmless\nEOF\n${trigger}`), 'and so is one after a heredoc');
+
+  // Quoted text is deliberately NOT stripped: `bash -c "..."` is a real command
+  // inside quotes, and removing quoted text would be a hole rather than a fix.
+  is(sees(`bash -c "${trigger}"`), 'a quoted command is still caught');
+  is(sees(`cat <<'EOF'\n${trigger}`), 'an unterminated heredoc is left alone');
+}
+
 /* ── the fingerprint must agree with isSource ───────────────────── */
 
 {
