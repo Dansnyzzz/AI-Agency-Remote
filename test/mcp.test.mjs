@@ -364,7 +364,11 @@ section('a server plugged in reaches the assistant');
   // allowed and changing what either computes is not.
   const { slugify } = await import('../server/mcp/registry.js');
   const client = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  const body = /const slugForMcp = ([\s\S]*?);\n/.exec(client)?.[1];
+  // `\r?\n`, because this file is checked out with CRLF on Windows and the first
+  // version of this pattern matched only LF. That made the guard fail for a
+  // reason having nothing to do with what it guards — the worst kind of false
+  // alarm, since the honest reading of it is "somebody deleted the function".
+  const body = /const slugForMcp = ([\s\S]*?);\r?\n/.exec(client)?.[1];
   // Detail only when it is missing: this harness prints the detail either way,
   // and "slugForMcp not found" beside a tick is the kind of line people learn
   // to skim past.
