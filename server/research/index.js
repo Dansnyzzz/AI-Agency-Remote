@@ -10,11 +10,23 @@ import { buildReport } from './report.js';
 /**
  * The token budget for one research run.
  *
- * A safety stop, not a tight leash: a run makes eight to twelve model calls, and
- * this is the ceiling that keeps a runaway one — a debate that will not settle,
+ * A safety stop, not a tight leash.
+ *
+ * The count, since this said "eight to twelve" and the number is fixed: a run
+ * makes **at most eight** model calls — up to two planning attempts, then the
+ * debate's proposer, one critic and one revision per round (rounds is 2 and no
+ * caller overrides it), and the arbiter. Searching costs none of them, and page
+ * reading costs a fetch rather than a call.
+ *
+ * This is the ceiling that keeps a runaway one — a debate that will not settle,
  * a model that will not answer in JSON — from quietly spending a fortune. When
  * it is hit the run stops and returns what it has, labelled, rather than being
  * cut off mid-sentence with no explanation.
+ *
+ * Checked *between* calls, not within one, so a single very long reply can
+ * overshoot it. That is the honest limit of a token budget enforced from
+ * outside the provider, and it is why this is a safety stop rather than a
+ * spending control.
  */
 const DEFAULT_CAP = 250_000;
 

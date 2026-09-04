@@ -215,6 +215,22 @@ section('planning turns a question into search queries');
   };
   const fell = await planQuestions('Fallback question', { userId: 'u', entry: {}, stream: badStream, budget: { spent: 0, cap: 1e9 } });
   check('unparseable output falls back to the question itself', fell.length === 1 && fell[0] === 'Fallback question');
+
+  // Every other model call in a run checks the budget; this one did not, so
+  // both planning attempts fired regardless of what was left. It matters most
+  // in the case the budget exists for: a caller passing a small cap on purpose,
+  // or a retry after a run that already overspent.
+  let called = 0;
+  const countingStream = async function* () {
+    called += 1;
+    yield { type: 'text', delta: '{"queries":["a"]}' };
+    yield { type: 'done', usage: { input: 1, output: 1 } };
+  };
+  const spent = await planQuestions('Q?', {
+    userId: 'u', entry: {}, stream: countingStream, budget: { spent: 500, cap: 100 },
+  });
+  check('planning does not run when the budget is already gone', called === 0, `${called} calls`);
+  check('and it still answers with the question itself', spent.length === 1 && spent[0] === 'Q?', JSON.stringify(spent));
 }
 
 section('the debate drafts, criticises, and settles');
