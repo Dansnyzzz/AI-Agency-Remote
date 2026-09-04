@@ -162,7 +162,9 @@ const DEFAULT_MODE = BROWSER_MODES.includes(process.env.BROWSER_MODE || '')
   ? process.env.BROWSER_MODE
   : 'sandbox';
 
-let mode = DEFAULT_MODE;
+// `const` since `setBrowserMode` went: the mode is read once from the
+// environment at start-up and nothing reassigns it any more.
+const mode = DEFAULT_MODE;
 
 /** Where a persistent profile lives. One per machine, beside the other worker state. */
 const profileDir = () => path.join(dataDir(), 'browser-profile');
