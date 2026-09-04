@@ -133,7 +133,12 @@ async function webFetch({ url, max_chars = 20000 }) {
  * this on the web". Now every engine is tried in turn and the answer says which
  * one spoke.
  */
-async function webSearch({ query, count = 8 }, { userId } = {}) {
+/**
+ * @param {{ query: string, count?: number }} input
+ * @param {{ userId?: string }} [context]  the tool context; only `userId` is used
+ */
+async function webSearch({ query, count = 8 }, context = {}) {
+  const { userId } = context;
   // `userId` only so the search can be attributed in the log. The keys these
   // engines use are deployment-wide, so nothing else about the call depends on
   // which account made it.
