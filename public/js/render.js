@@ -219,21 +219,31 @@ export function stepFamily(name) {
 /** A file's extension, upper-cased, as the stand-in for a thumbnail. */
 const extensionBadge = (name) => String(name || 'file').split('.').pop().slice(0, 4).toUpperCase();
 
-/** What kind of thing this is, in words, for the line under a filename. */
-const FILE_NOUN = {
-  docx: t('file.docx'),
-  doc: t('file.docx'),
-  xlsx: t('file.xlsx'),
-  xls: t('file.xlsx'),
-  pptx: t('file.pptx'),
-  ppt: t('file.pptx'),
-  pdf: 'PDF',
-  csv: t('file.csv'),
-  md: 'Markdown',
-  html: t('file.html'),
-  json: 'JSON',
-  txt: 'Text',
+/**
+ * What kind of thing this is, in words, for the line under a filename.
+ *
+ * Keys, resolved when the noun is needed rather than when this module loads.
+ * Calling `t()` in the object literal looked equivalent and was not: it runs
+ * once at import, before the language is settled, and freezes whatever was
+ * current — so switching language left every file still described in the old
+ * one. The names that are the same in both languages stay literals.
+ */
+const FILE_NOUN_KEY = {
+  docx: 'file.docx',
+  doc: 'file.docx',
+  xlsx: 'file.xlsx',
+  xls: 'file.xlsx',
+  pptx: 'file.pptx',
+  ppt: 'file.pptx',
+  csv: 'file.csv',
+  html: 'file.html',
+  txt: 'file.txt',
 };
+
+const FILE_NOUN_LITERAL = { pdf: 'PDF', md: 'Markdown', json: 'JSON' };
+
+const fileNoun = (extension) =>
+  FILE_NOUN_LITERAL[extension] || (FILE_NOUN_KEY[extension] ? t(FILE_NOUN_KEY[extension]) : '');
 
 
 /**
@@ -409,7 +419,7 @@ export function fileCard(file) {
   const name = el('span', 'filecard__name');
   name.textContent = file.name;
   const meta = el('span', 'filecard__meta');
-  meta.textContent = [FILE_NOUN[extensionBadge(file.name).toLowerCase()], humanSize(file.bytes || 0)]
+  meta.textContent = [fileNoun(extensionBadge(file.name).toLowerCase()), humanSize(file.bytes || 0)]
     .filter(Boolean)
     .join(' · ');
   body.append(name, meta);
