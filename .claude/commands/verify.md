@@ -3,6 +3,26 @@ description: Run the full Definition of Done gate from CLAUDE.md §5 and report 
 allowed-tools: Bash, PowerShell, Read, Grep, Glob
 ---
 
+## If you are about to claim something got better, measure it first
+
+A performance or cost change needs a number from *before* it, or "faster" is an
+opinion. This repository froze two numbers and no more: `.typecheck-baseline.json`
+and the thresholds in `.c8rc.json`. There is no recorded latency, token or
+throughput baseline, so anything outside those two has to be measured on the spot
+— and measured before the change, because afterwards is too late.
+
+The cheapest honest version, and enough for almost everything here:
+
+```
+node -e "const t=process.hrtime.bigint(); /* the thing */ ; console.log(Number(process.hrtime.bigint()-t)/1e6,'ms')"
+```
+
+Run it against the old code, keep the number, run it against the new code, and
+put both in the commit. A ratio with no absolute figures behind it is not a
+measurement. If it cannot be measured, say that instead of implying it improved.
+
+---
+
 Run the quality gate. **Run the commands — do not predict their output.**
 
 ```
