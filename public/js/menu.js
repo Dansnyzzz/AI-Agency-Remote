@@ -17,6 +17,16 @@ import { escapeHtml } from './markdown.js';
 let host = null;
 let closer = null;
 
+/**
+ * Where focus came from, so it can be put back.
+ *
+ * The menu focused its first item on open and then removed itself on close
+ * without returning focus anywhere. Focus fell to <body>, so a keyboard user
+ * who opened a menu and pressed Escape restarted from the top of the page — and
+ * on a conversation list that is a long way from where they were.
+ */
+let returnFocusTo = null;
+
 /** Shut whatever is open. Safe to call when nothing is. */
 export function closeMenu() {
   if (!host) return;
@@ -28,6 +38,14 @@ export function closeMenu() {
   window.removeEventListener('scroll', closeMenu, true);
   const was = closer;
   closer = null;
+
+  // Back where it started, and only if focus is still somewhere in the menu:
+  // a click elsewhere has already moved it deliberately.
+  const back = returnFocusTo;
+  returnFocusTo = null;
+  back?.setAttribute?.('aria-expanded', 'false');
+  if (back?.isConnected && (!document.activeElement || document.activeElement === document.body)) back.focus();
+
   was?.();
 }
 
@@ -36,11 +54,39 @@ function onDocClick(event) {
 }
 
 function onKey(event) {
-  if (event.key !== 'Escape') return;
-  // Stopped here so Escape closes the menu without also closing the dialog or
-  // the page behind it — one press, one thing.
+  if (event.key === 'Escape') {
+    // Stopped here so Escape closes the menu without also closing the dialog or
+    // the page behind it — one press, one thing.
+    event.stopPropagation();
+    closeMenu();
+    return;
+  }
+
+  /**
+   * Up, Down, Home and End move between items.
+   *
+   * `role="menu"` promises this and nothing implemented it, so the only way
+   * through was Tab — which walks out of the menu and on into the page behind
+   * it, because the items are appended to <body> at the end of the document.
+   * A menu you can open by keyboard and not read by keyboard is worse than a
+   * plain list.
+   */
+  if (!host) return;
+  const items = [...host.querySelectorAll('[data-pick]')];
+  if (!items.length) return;
+
+  const at = items.indexOf(document.activeElement);
+  const next =
+    event.key === 'ArrowDown' ? items[(at + 1 + items.length) % items.length]
+    : event.key === 'ArrowUp' ? items[(at - 1 + items.length) % items.length]
+    : event.key === 'Home' ? items[0]
+    : event.key === 'End' ? items[items.length - 1]
+    : null;
+  if (!next) return;
+
+  event.preventDefault();
   event.stopPropagation();
-  closeMenu();
+  next.focus();
 }
 
 /**
@@ -81,6 +127,9 @@ export function openMenu(anchor, items, onClose = null) {
 
   document.body.appendChild(host);
   closer = onClose;
+  returnFocusTo = anchor;
+  // aria-haspopup on the anchor promises a state; without this it never had one.
+  anchor.setAttribute('aria-expanded', 'true');
   place(anchor);
 
   // Registered in the capture phase and on a later frame: the click that opened

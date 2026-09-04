@@ -715,11 +715,25 @@ function openRowMenu(chat, anchor, titleButton) {
   const top = below + size.height > window.innerHeight - 8 ? box.top - size.height - 6 : below;
   rowMenu.style.left = `${Math.max(8, left)}px`;
   rowMenu.style.top = `${Math.max(8, top)}px`;
+  anchor.setAttribute('aria-expanded', 'true');
   rowMenu.querySelector('.menu__item')?.focus();
 
   const onKey = (event) => {
     const key = event.key.toLowerCase();
     if (event.key === 'Escape') return closeRowMenu();
+
+    // Up and Down move between the items. This menu had letter shortcuts and
+    // nothing else, so the only way through it was the three letters somebody
+    // had to already know about.
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const items = [...rowMenu.querySelectorAll('.menu__item')];
+      if (!items.length) return;
+      const at = items.indexOf(/** @type {HTMLElement} */ (document.activeElement));
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      event.preventDefault();
+      /** @type {HTMLElement} */ (items[(at + step + items.length) % items.length]).focus();
+      return;
+    }
     const shortcut = { p: 0, r: 1, d: 3 }[key];
     if (shortcut === undefined || event.metaKey || event.ctrlKey) return;
     event.preventDefault();
@@ -732,10 +746,16 @@ function openRowMenu(chat, anchor, titleButton) {
 
   closeRowMenu = () => {
     rowMenu.hidden = true;
+    anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('mousedown', onOutside);
     window.removeEventListener('resize', closeRowMenu);
     closeRowMenu = () => {};
+    // Back to the ⋯ button rather than to <body>, which on a conversation list
+    // means restarting from the top of the sidebar.
+    if (anchor.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+      anchor.focus();
+    }
   };
   document.addEventListener('keydown', onKey);
   document.addEventListener('mousedown', onOutside);
@@ -3978,12 +3998,28 @@ function openMenu(host, anchor, items) {
     if (!host.contains(event.target) && event.target !== anchor) closeMenu();
   };
 
+  /**
+   * Put focus back on the button that opened this.
+   *
+   * The menu never focused anything on open and never restored anything on
+   * close, so a keyboard user pressing the policy chip got a menu they could
+   * only reach by carrying on tabbing forward through the document — and
+   * closing it left focus wherever that had ended up. `aria-haspopup="menu"`
+   * on the chip promised a state that nothing ever set.
+   */
+  anchor.setAttribute('aria-expanded', 'true');
+  host.querySelector('button:not([disabled])')?.focus();
+
   closeMenu = () => {
     host.hidden = true;
+    anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('mousedown', onOutside);
     window.removeEventListener('resize', closeMenu);
     closeMenu = () => {};
+    if (anchor.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+      anchor.focus();
+    }
   };
   document.addEventListener('keydown', onKey);
   document.addEventListener('mousedown', onOutside);
