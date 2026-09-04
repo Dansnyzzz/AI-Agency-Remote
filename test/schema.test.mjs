@@ -210,7 +210,7 @@ section('schema.sql and SCHEMA_VERSION move together');
   const fingerprint = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
 
   /** Update BOTH of these, together, whenever schema.sql changes. */
-  const STAMPED = { version: 16, fingerprint: 'c8405a4b08beee0a' };
+  const STAMPED = { version: 17, fingerprint: '73631c7ea98cd360' };
 
   check(
     'the recorded version matches the code',
@@ -289,6 +289,55 @@ section('two processes cannot open the same database');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ── what version 17 added ─────────────────────────────────────────────
+{
+  const db = await PGlite.create();
+  const driver = { async query(text, params) { return (await db.query(text, params)).rows; } };
+  const store = createPgStore(driver);
+  await store.init();
+
+  const names = (await driver.query(
+    "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
+  )).map((r) => r.indexname);
+
+  // Four predicates that were scanning whole tables. The two `created_at` ones
+  // matter most: the sweep pruners filter on that column alone, from the cron
+  // route, inside the 300s ceiling, on tables that only grow — and every index
+  // that covered them led with user_id, which a query cannot skip past.
+  for (const idx of [
+    'usage_events_created_idx',
+    'attachments_created_idx',
+    'shared_models_provider_idx',
+    'tool_jobs_device_idx',
+    'pairings_code_unclaimed_idx',
+  ]) {
+    check(`index exists: ${idx}`, names.includes(idx));
+  }
+
+  // The uniqueness has to actually bite, or it is decoration. Two live
+  // unclaimed rows sharing a code is what let the installer name the wrong
+  // account, and that is the one thing a confirmation prompt must get right.
+  const add = (id, hash, claimedAt) =>
+    driver.query(
+      `INSERT INTO pairings (id, code_hash, device_name, expires_at, claimed_at)
+            VALUES ($1, $2, 'pc', NOW() + INTERVAL '10 min', $3)`,
+      [id, hash, claimedAt],
+    );
+
+  await add('pair-1', 'HASH-A', null);
+  let refused = false;
+  try { await add('pair-2', 'HASH-A', null); } catch (err) { refused = /unique/i.test(err.message); }
+  check('a second unclaimed pairing cannot reuse a live code', refused);
+
+  // Partial on purpose: a claimed code is spent, and a full unique index would
+  // also collide with expired rows the pruner has not swept yet.
+  let claimedAllowed = true;
+  try { await add('pair-3', 'HASH-A', new Date().toISOString()); } catch { claimedAllowed = false; }
+  check('but a claimed one may, because the index is partial', claimedAllowed);
+
+  await db.close();
+}
+
 // ── the statement splitter ────────────────────────────────────────────
 {
   const { splitStatements } = await import('../server/store/pg.js');
@@ -322,8 +371,8 @@ section('two processes cannot open the same database');
   check('schema.sql parses into statements', real.length > 50, String(real.length));
   check(
     'and every one of them starts with a keyword',
-    real.every((s) => /^(CREATE|ALTER|INSERT|UPDATE|DROP|DO|COMMENT|SET|GRANT|WITH|SELECT)/i.test(s)),
-    real.find((s) => !/^(CREATE|ALTER|INSERT|UPDATE|DROP|DO|COMMENT|SET|GRANT|WITH|SELECT)/i.test(s))?.slice(0, 60),
+    real.every((s) => /^(CREATE|ALTER|INSERT|UPDATE|DELETE|DROP|DO|COMMENT|SET|GRANT|WITH|SELECT)/i.test(s)),
+    real.find((s) => !/^(CREATE|ALTER|INSERT|UPDATE|DELETE|DROP|DO|COMMENT|SET|GRANT|WITH|SELECT)/i.test(s))?.slice(0, 60),
   );
   check('with no comment marker left in any of them', !real.some((s) => s.includes('--') || s.includes('/*')));
 }

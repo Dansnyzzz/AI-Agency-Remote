@@ -67,18 +67,36 @@ const cleanName = (value, fallback) =>
  * authenticate yet, and nothing is granted until somebody claims it.
  */
 export async function startPairing({ deviceName, info }) {
-  const id = crypto.randomUUID();
-  const code = pairingCode();
-
-  await getStore().createPairing({
-    id,
-    codeHash: sha256(code),
-    deviceName: cleanName(deviceName, 'A computer'),
-    info: info || {},
-    expiresAt: new Date(Date.now() + PAIRING_TTL_MS).toISOString(),
-  });
-
-  return { id, code, expiresInSec: Math.floor(PAIRING_TTL_MS / 1000) };
+  /**
+   * Try again if the code is already live.
+   *
+   * Schema 17 makes the code unique across unclaimed pairings, which is what
+   * stops the installer naming the wrong account. The cost of a uniqueness rule
+   * is that an insert can now fail, and a collision — however unlikely with
+   * eight characters — must not reach somebody as an error asking them to pair
+   * again. It is a fresh random code; drawing another is the whole fix.
+   *
+   * Three attempts, then let it through: a failure that survives three
+   * independent draws is not a collision, and swallowing it would hide the real
+   * fault behind a misleading message.
+   */
+  for (let attempt = 0; ; attempt += 1) {
+    const id = crypto.randomUUID();
+    const code = pairingCode();
+    try {
+      await getStore().createPairing({
+        id,
+        codeHash: sha256(code),
+        deviceName: cleanName(deviceName, 'A computer'),
+        info: info || {},
+        expiresAt: new Date(Date.now() + PAIRING_TTL_MS).toISOString(),
+      });
+      return { id, code, expiresInSec: Math.floor(PAIRING_TTL_MS / 1000) };
+    } catch (err) {
+      const duplicate = err?.code === '23505' || /duplicate key|unique constraint/i.test(err?.message || '');
+      if (!duplicate || attempt >= 2) throw err;
+    }
+  }
 }
 
 /**

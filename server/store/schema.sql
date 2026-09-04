@@ -650,3 +650,45 @@ CREATE INDEX IF NOT EXISTS scheduled_tasks_lease_idx ON scheduled_tasks (run_sta
 -- monotonic: the newer holder evicts the older, which then fails its heartbeat
 -- and stops, instead of two loops appending to one transcript.
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS run_lock_seq BIGINT NOT NULL DEFAULT 0;
+
+-- ── 17 ────────────────────────────────────────────────────────────────
+-- Four predicates that had no index, and the one uniqueness rule this file
+-- already described as needed and left undone.
+
+-- `pruneOrphanAttachments` and the usage pruner both filter on `created_at`
+-- alone, and the only indexes covering those columns lead with `user_id`. A
+-- leading column cannot be skipped, so both swept the whole table — from the
+-- cron route, inside the 300s function ceiling, on tables that only grow.
+CREATE INDEX IF NOT EXISTS usage_events_created_idx ON usage_events (created_at);
+CREATE INDEX IF NOT EXISTS attachments_created_idx  ON attachments (created_at);
+
+-- The model library can be filtered by provider. That filter was added
+-- deliberately — filtering in the browser had been hiding whole providers — and
+-- was never given an index to run on.
+CREATE INDEX IF NOT EXISTS shared_models_provider_idx ON shared_models (provider);
+
+-- `cancelJobsForDevice` runs when a computer is unpaired, and `claimJob` uses
+-- device_id as a residual filter. Nothing indexed it.
+CREATE INDEX IF NOT EXISTS tool_jobs_device_idx ON tool_jobs (device_id);
+
+-- The uniqueness `pairings_code_idx` says is needed and does not attempt.
+-- Two live rows could share a code, and `peekEnrolment` returned the first row
+-- of an unordered result — so the installer could name the wrong account, which
+-- is the one thing a confirmation prompt must never get wrong.
+--
+-- Partial, over unclaimed rows only. A claimed pairing's code is spent, and a
+-- full unique index would also collide with expired rows `prunePairings` has
+-- not swept yet, rejecting a legitimate new pairing an hour later.
+--
+-- The backfill has to come first, or this cannot be created on a database that
+-- already holds a duplicate. The newest unclaimed row for a code is the one
+-- somebody is looking at right now, so the older ones go.
+DELETE FROM pairings a
+ USING pairings b
+ WHERE a.claimed_at IS NULL
+   AND b.claimed_at IS NULL
+   AND a.code_hash = b.code_hash
+   AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.id < b.id));
+
+CREATE UNIQUE INDEX IF NOT EXISTS pairings_code_unclaimed_idx
+    ON pairings (code_hash) WHERE claimed_at IS NULL;

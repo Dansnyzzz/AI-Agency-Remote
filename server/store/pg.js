@@ -179,8 +179,14 @@ export function splitStatements(sql) {
  *      cut off mid-run stops for a person instead of repeating every hour, and
  *      chats.run_lock_seq so a resuming run evicts the previous holder of the
  *      lease rather than joining it
+ *  17  the four predicates 16 missed — usage_events.created_at and
+ *      attachments.created_at, which the sweep pruners filter on alone while
+ *      every index over them leads with user_id; shared_models.provider; and
+ *      tool_jobs.device_id — plus the unique pairing code that 16 wrote down
+ *      as needed and deferred, partial over unclaimed rows and backfilled
+ *      first, so an installer can no longer be told the wrong account
  */
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /**
  * How long a run lease may go untouched before another run may take it.
@@ -2704,9 +2710,24 @@ export function createPgStore(connectionString) {
      */
     async peekEnrolment(codeHash) {
       const rows = await q(
+        /**
+         * Newest first, and only one.
+         *
+         * This took `rows[0]` of an unordered result. Postgres is free to
+         * return matching rows in any order, so with two live rows sharing a
+         * code the installer could name either account — and the account name
+         * is what the person is being asked to confirm.
+         *
+         * Version 17 adds a partial unique index that stops two such rows
+         * existing. This ordering is the other half: it is what makes the
+         * answer deterministic on a database that has not migrated yet, and on
+         * claimed rows, which the index deliberately does not cover.
+         */
         `SELECT p.id, p.user_id, u.email
            FROM pairings p JOIN users u ON u.id = p.user_id
-          WHERE p.code_hash = $1 AND p.expires_at > NOW()`,
+          WHERE p.code_hash = $1 AND p.expires_at > NOW()
+          ORDER BY p.created_at DESC, p.id DESC
+          LIMIT 1`,
         [codeHash],
       );
       return rows[0] ?? null;
@@ -2717,8 +2738,25 @@ export function createPgStore(connectionString) {
      */
     async consumeEnrolment(codeHash) {
       const rows = await q(
+        /**
+         * Exactly the row `peekEnrolment` showed, and only that row.
+         *
+         * This deleted *every* live row matching the code and returned an
+         * arbitrary one. With two such rows that is two failures at once: the
+         * other pairing is destroyed, and the account enrolled may not be the
+         * account the person just confirmed — peek and consume were each free
+         * to pick a different row.
+         *
+         * The same ORDER BY as peek, so the two agree by construction. Still
+         * one statement, so two machines racing on the same code cannot both
+         * win: the row is gone with the first.
+         */
         `DELETE FROM pairings
-          WHERE code_hash = $1 AND expires_at > NOW()
+          WHERE id = (
+                SELECT id FROM pairings
+                 WHERE code_hash = $1 AND expires_at > NOW()
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1)
       RETURNING id, user_id`,
         [codeHash],
       );
