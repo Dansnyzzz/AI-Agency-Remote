@@ -3,6 +3,7 @@ import { t } from './i18n.js';
 import { escapeHtml, renderMarkdown, wireCopyButtons } from './markdown.js';
 import { openMenu } from './menu.js';
 import { toast } from './render.js';
+import { humanSize } from './format.js';
 
 
 /**
@@ -92,8 +93,6 @@ window.addEventListener('message', async (event) => {
 
 const $ = (id) => document.getElementById(id);
 
-const humanSize = (bytes) =>
-  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 const ago = (value) => {
   if (!value) return '';

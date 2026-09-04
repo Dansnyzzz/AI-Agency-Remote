@@ -1,5 +1,6 @@
 import { renderMarkdown, escapeHtml } from './markdown.js';
 import { t } from './i18n.js';
+import { humanSize } from './format.js';
 
 /**
  * One repaint per frame, and a real fallback when there are no frames.
@@ -234,8 +235,6 @@ const FILE_NOUN = {
   txt: 'Text',
 };
 
-const humanSize = (bytes) =>
-  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 /**
  * What was sent, above what was said about it.

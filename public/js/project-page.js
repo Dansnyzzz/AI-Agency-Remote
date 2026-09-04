@@ -3,6 +3,7 @@ import { t } from './i18n.js';
 import { escapeHtml } from './markdown.js';
 import { openMenu } from './menu.js';
 import { toast } from './render.js';
+import { readAsBase64, counted } from './format.js';
 
 /**
  * One project, opened.
@@ -27,7 +28,6 @@ const $ = (id) => document.getElementById(id);
  * replaced: Vietnamese does not inflect the noun, so the translation has to own
  * the entire phrase rather than a stem the formatter adds an `s` to.
  */
-const counted = (n, key) => (n === 1 ? t(`${key}One`) : t(key)).replace('{n}', String(n));
 
 const fmtChars = (n) => {
   const say = (key, value) => t(key).replace('{n}', String(value));
@@ -52,14 +52,6 @@ const ago = (value) => {
 };
 
 /** A File as base64, without the `data:…;base64,` preamble the server does not want. */
-function readAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.readAsDataURL(file);
-  });
-}
 
 /** Text as base64, going through UTF-8 first — `btoa` alone throws on anything accented. */
 const textToBase64 = (text) => {

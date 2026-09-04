@@ -20,6 +20,7 @@ import { createPages } from './pages.js';
 import { createProjectPage } from './project-page.js';
 import { t, applyI18n, adoptLanguage, setLanguage, currentLanguage, LANGUAGES } from './i18n.js';
 import { createOnboarding } from './onboarding.js';
+import { humanSize, readAsBase64 } from './format.js';
 
 // Before anything is drawn. The language is guessed from storage and the browser
 // at module load, so the first paint is already right rather than a page of
@@ -4161,18 +4162,8 @@ function renderStaged() {
   }
 }
 
-const humanSize = (bytes) =>
-  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 /** A File as base64, without the `data:…;base64,` preamble the server does not want. */
-function readAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.readAsDataURL(file);
-  });
-}
 
 async function stageFiles(files) {
   const limits = state.boot?.attachments || { maxBytes: 5 * 1024 * 1024, maxPerMessage: 6 };

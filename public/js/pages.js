@@ -5,6 +5,7 @@ import { openMenu } from './menu.js';
 import { editProjectDetails, projectMenuItems } from './project-page.js';
 import { workflowsView, workflowForm } from './workflows.js';
 import { toast } from './render.js';
+import { humanSize, counted } from './format.js';
 
 /**
  * The shelves: Projects, Artifacts, Scheduled.
@@ -41,8 +42,6 @@ const ago = (value) => {
   return new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
-const humanSize = (bytes) =>
-  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 /**
  * A count and its noun, as a whole phrase.
@@ -52,8 +51,6 @@ const humanSize = (bytes) =>
  * `t()`. Vietnamese does not inflect the noun at all, so the translation has to
  * own the entire phrase; the caller names which pair of keys it wants.
  */
-const counted = (n, key) =>
-  (n === 1 ? t(`${key}One`) : t(key)).replace('{n}', String(n));
 
 /** Two presses to delete, and the second one deliberate. */
 function armed(button, warning, run) {
