@@ -200,10 +200,10 @@ const EFFORT_IDS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const efforts = () => EFFORT_IDS.map((id) => [id, t(`effort.${id}`)]);
 
 const SUGGESTIONS = [
-  'Show me what is in my workspace and summarise the project.',
-  'Search the web for what changed in this library recently.',
-  'Find every TODO in the codebase and group them by file.',
-  'Run the test suite and explain any failures.',
+  t('suggest.workspace'),
+  t('suggest.library'),
+  t('suggest.todos'),
+  t('suggest.tests'),
 ];
 
 /* ── boot ──────────────────────────────────────────────────────── */
@@ -299,8 +299,8 @@ function setRevealed(input, revealed) {
   const button = /** @type {HTMLElement} */ (document.querySelector(`[data-reveal="${input.id}"]`));
   input.type = revealed ? 'text' : 'password';
   button.setAttribute('aria-pressed', String(revealed));
-  button.setAttribute('aria-label', revealed ? 'Hide password' : 'Show password');
-  button.title = revealed ? 'Hide password' : 'Show password';
+  button.setAttribute('aria-label', revealed ? t('gate.hidePassword') : t('gate.showPassword'));
+  button.title = revealed ? t('gate.hidePassword') : t('gate.showPassword');
 }
 
 function showGate() {
@@ -333,14 +333,14 @@ function renderGateMode() {
   const reset = gateMode === 'reset';
 
   $('gate-sub').textContent = reset
-    ? 'Enter the code from your email and choose a new password.'
+    ? t('gate.sub.reset')
     : forgot
-      ? 'Enter your email and we will send you a reset code.'
+      ? t('gate.sub.forgot')
       : needsSetup
-        ? 'Create the first account — it becomes the administrator.'
+        ? t('gate.sub.first')
         : signup
-          ? 'Create your account.'
-          : 'Sign in to continue.';
+          ? t('gate.sub.signup')
+          : t('gate.sub.signin');
 
   // Reset needs the email (to find the account), the code, and a new password.
   // Following the emailed link fills the token in instead, so the code box hides.
@@ -363,11 +363,11 @@ function renderGateMode() {
   setRevealed($('gate-newpassword'), false);
 
   $('gate-submit').textContent = reset
-    ? 'Set new password'
+    ? t('gate.submit.reset')
     : forgot
-      ? 'Send reset link'
+      ? t('gate.submit.forgot')
       : signup
-        ? 'Create account'
+        ? t('gate.submit.signup')
         : 'Sign in';
 
   // Always offer the other direction. Someone whose session expired lands here
@@ -377,7 +377,7 @@ function renderGateMode() {
   const canSignUp = session.signupOpen !== false || session.needsSetup;
   $('gate-switch').hidden = reset || (!signup && !forgot && !canSignUp);
   $('gate-switch').textContent =
-    signup || forgot ? 'Already have an account? Sign in' : 'Need an account? Sign up';
+    signup || forgot ? t('gate.switch.toSignin') : t('gate.switch.toSignup');
   $('gate-forgot').hidden = signup || forgot || reset;
 }
 
@@ -400,7 +400,7 @@ $('gate-switch').addEventListener('click', async () => {
     session = await api.session();
     renderGateMode();
     if (session.needsSetup) {
-      note('Nobody has registered on this deployment yet. Create the first account instead.');
+      note(t('gate.note.firstAccount'));
     }
   } catch {
     // Offline or the server restarted; the form still works, so say nothing.
@@ -421,7 +421,7 @@ $('gate-form').addEventListener('submit', async (event) => {
       await api.forgotPassword($('gate-email').value.trim());
       setGateMode('reset');
       // Deliberately identical whether or not the address exists.
-      note('If that address has an account, a reset code is on its way. Enter it below.');
+      note(t('gate.note.resetSent'));
       submit.disabled = false;
       return;
     } else if (gateMode === 'reset') {
@@ -433,7 +433,7 @@ $('gate-form').addEventListener('submit', async (event) => {
       });
       resetToken = null;
       setGateMode('signin');
-      note('Password updated. Sign in with your new password.');
+      note(t('gate.note.passwordUpdated'));
       submit.disabled = false;
       return;
     } else if (gateMode === 'signup') {
@@ -443,7 +443,7 @@ $('gate-form').addEventListener('submit', async (event) => {
         password: $('gate-password').value,
       });
       if (result.emailBackend === 'console') {
-        toast('No mail provider configured — the confirmation code is in the server log.');
+        toast(t('gate.note.noMail'));
       }
     } else {
       const email = $('gate-email').value.trim();
@@ -471,7 +471,7 @@ $('gate-form').addEventListener('submit', async (event) => {
     } else {
       needsTotp = false;
       renderGateMode();
-      fail(err.message || 'That did not work.');
+      fail(err.message || t('gate.error.generic'));
     }
   } finally {
     submit.disabled = false;
@@ -544,7 +544,7 @@ async function start() {
       await openChat(handoff);
       if (shouldRun) await stream();
     } catch {
-      toast('That conversation could not be opened.', 'error');
+      toast(t('chat.openFailed'), 'error');
     }
   }
 
@@ -577,7 +577,7 @@ async function refreshChats() {
   if (!chats.length) {
     list.append(Object.assign(document.createElement('div'), {
       className: 'chats__label',
-      textContent: 'No conversations yet',
+      textContent: t('nav.noConversations'),
     }));
     return;
   }
@@ -694,12 +694,12 @@ function openRowMenu(chat, anchor, titleButton) {
         if (chat.id === state.chatId) {
           state.chatId = null;
           $('messages').innerHTML = '';
-          $('chat-title').textContent = 'New chat';
+          $('chat-title').textContent = t('nav.newChat');
           setEmpty(true);
           hideApproval();
         }
         await refreshChats();
-        toast('Conversation deleted.');
+        toast(t('chat.deleted'));
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -1023,7 +1023,7 @@ function startBlankChat(project = null) {
   $('messages').innerHTML = '';
   $('status-host').innerHTML = '';
   hideApproval();
-  $('chat-title').textContent = project ? `New chat — ${project.name}` : 'New chat';
+  $('chat-title').textContent = project ? `New chat — ${project.name}` : t('nav.newChat');
   setEmpty(true);
   // Nothing in the sidebar is selected any more, because what you are looking
   // at is not in it.
@@ -1053,7 +1053,7 @@ function renderProjectChip() {
   chip.textContent = project.name;
   chip.classList.toggle('is-grounded', !!project.grounded);
   chip.title = project.files
-    ? `${project.grounded ? 'Answers from' : 'Answers first from'} ${project.files} source${
+    ? `${project.grounded ? t('chat.answersFrom') : t('chat.answersFirstFrom')} ${project.files} source${
         project.files === 1 ? '' : 's'
       } in "${project.name}".`
     : `"${project.name}" has no sources yet, so this conversation answers like any other.`;
@@ -1259,7 +1259,7 @@ $('project-form-save').addEventListener('click', async () => {
   const name = $('project-form-name').value.trim();
   const error = $('project-form-error');
   if (!name) {
-    error.textContent = 'Give it a name — a subject, a client, a piece of coursework.';
+    error.textContent = t('project.namePrompt');
     return;
   }
   try {
@@ -1363,7 +1363,7 @@ $('messages').addEventListener('click', async (event) => {
     } catch {
       // Denied permission, or an insecure origin. Selecting it is the fallback
       // every browser still allows.
-      toast('Could not reach the clipboard — select the text and press Ctrl+C.', 'error');
+      toast(t('clipboard.failed'), 'error');
     }
     return;
   }
@@ -1382,12 +1382,12 @@ $('messages').addEventListener('click', async (event) => {
  */
 function beginEdit(message, text) {
   if (state.running) {
-    toast('Stop the run first — editing rewinds the conversation.', 'error');
+    toast(t('chat.stopBeforeEdit'), 'error');
     return;
   }
   const id = message.dataset.messageId;
   if (!id) {
-    toast('This message is still being saved. Try again in a moment.', 'error');
+    toast(t('chat.stillSaving'), 'error');
     return;
   }
   if (message.classList.contains('is-editing')) return;
@@ -1419,7 +1419,7 @@ function beginEdit(message, text) {
 
   const save = async () => {
     const next = box.value.trim();
-    if (!next) return toast('A message cannot be empty.', 'error');
+    if (!next) return toast(t('composer.empty'), 'error');
     if (next === text) return cancel();
 
     row.querySelectorAll('button').forEach((b) => (b.disabled = true));
@@ -1470,7 +1470,7 @@ $('composer').addEventListener('submit', async (event) => {
   const ready = staged.filter((f) => f.id);
   if (!text && !ready.length) return;
   if (staged.some((f) => !f.id && !f.failed)) {
-    toast('Still uploading — one moment.');
+    toast(t('composer.uploading'));
     return;
   }
 
@@ -2349,7 +2349,7 @@ document.addEventListener('click', async (event) => {
         copySetup.textContent = t('worker.copy');
       }, 1400);
     } catch {
-      toast('Could not reach the clipboard — select the text and press Ctrl+C.', 'error');
+      toast(t('clipboard.failed'), 'error');
     }
     return;
   }
@@ -2363,7 +2363,7 @@ document.addEventListener('click', async (event) => {
       button.textContent = t('worker.copy');
     }, 1400);
   } catch {
-    toast('Could not reach the clipboard — select the text and press Ctrl+C.', 'error');
+    toast(t('clipboard.failed'), 'error');
   }
 });
 
@@ -2382,11 +2382,11 @@ function renderWorker() {
     const reach = worker.online
       ? [
           worker.info?.fullDisk
-            ? 'File tools: the whole disk'
+            ? t('worker.fullDisk')
             : `File tools: inside the workspace only`,
           worker.info?.desktop
             ? 'Desktop control: <strong>on</strong> — it can drive real applications'
-            : 'Desktop control: off',
+            : t('worker.desktopOff'),
         ].join('<br />')
       : '';
 
@@ -2404,7 +2404,7 @@ function renderWorker() {
                ? `This server is running on the administrator's computer, and its files and shell belong to
                   that account alone — that boundary is the point. Either ask an administrator to promote
                   your account, or pair a machine of your own below; the assistant will reach that one.`
-               : 'File and shell tools are hidden from the assistant until a worker connects.'
+               : t('worker.noTools')
            }</div></div>`;
   }
 }
@@ -2685,7 +2685,7 @@ function effortRow() {
   const row = document.createElement('div');
   row.className = 'menu__foot';
   row.setAttribute('role', 'group');
-  row.setAttribute('aria-label', 'Reasoning effort');
+  row.setAttribute('aria-label', t('settings.effort'));
 
   const name = document.createElement('span');
   name.className = 'menu__foot-name';
@@ -3030,7 +3030,7 @@ async function loadSkills() {
     });
   }
   for (const btn of $('skill-list').querySelectorAll('[data-skill-del]')) {
-    armed(btn, 'Really remove?', async () => {
+    armed(btn, t('action.reallyRemove'), async () => {
       await api.deleteSkill(btn.dataset.skillDel);
       loadSkills();
     });
@@ -3091,7 +3091,7 @@ async function loadTasks() {
     });
   }
   for (const btn of $('task-list').querySelectorAll('[data-task-del]')) {
-    armed(btn, 'Really remove?', async () => {
+    armed(btn, t('action.reallyRemove'), async () => {
       await api.deleteTask(btn.dataset.taskDel);
       loadTasks();
     });
@@ -3203,7 +3203,7 @@ $('save-name').addEventListener('click', async () => {
     const { user } = await api.updateAccount({ name: $('account-name').value.trim() });
     state.boot.user = user;
     fillSettings();
-    toast('Name updated.');
+    toast(t('account.nameUpdated'));
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -3224,7 +3224,7 @@ function renderTwoFactor() {
         </div>
         <div class="hint">Your authenticator app is required at every sign-in.</div>
         <div class="provider__row">
-          <input type="password" id="twofa-password" placeholder="Your password" autocomplete="current-password" />
+          <input type="password" id="twofa-password" placeholder="${escapeHtml(t('account.yourPassword'))}" aria-label="${escapeHtml(t('account.yourPassword'))}" autocomplete="current-password" />
           <input type="text" id="twofa-off-code" placeholder="Code" inputmode="numeric" autocomplete="one-time-code" />
           <button class="btn btn--ghost" id="twofa-disable" type="button">Turn off</button>
         </div>
@@ -3234,7 +3234,7 @@ function renderTwoFactor() {
         await api.disableTwoFactor($('twofa-password').value, $('twofa-off-code').value.trim());
         state.boot = await api.bootstrap();
         fillSettings();
-        toast('Two-factor authentication turned off.');
+        toast(t('account.totpOff'));
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -3270,7 +3270,7 @@ function renderTwoFactor() {
             On a phone, <a href="${escapeHtml(uri)}">tap here</a> to open your authenticator directly.
           </div>
           <div class="provider__row">
-            <input type="text" id="twofa-verify" placeholder="Enter the 6-digit code" inputmode="numeric" autocomplete="one-time-code" />
+            <input type="text" id="twofa-verify" placeholder="${escapeHtml(t('account.enterCode'))}" aria-label="${escapeHtml(t('account.enterCode'))}" inputmode="numeric" autocomplete="one-time-code" />
             <button class="btn btn--primary" id="twofa-confirm" type="button">Confirm</button>
           </div>
         </div>`;
@@ -3318,8 +3318,8 @@ $('save-password').addEventListener('click', async () => {
     $('new-password').value = '';
     toast(
       signedOutOtherDevices
-        ? 'Password updated. Every other device has been signed out.'
-        : 'Password updated.',
+        ? t('account.passwordUpdatedAll')
+        : t('account.passwordUpdated'),
     );
   } catch (err) {
     toast(err.message, 'error');
@@ -3364,7 +3364,7 @@ async function loadAdmin() {
       .join('')}</div>`;
 
     for (const btn of document.querySelectorAll('[data-del-user]')) {
-      armed(btn, 'Really remove?', async () => {
+      armed(btn, t('action.reallyRemove'), async () => {
         await api.deleteUser(btn.dataset.delUser);
         loadAdmin();
       });
@@ -3389,7 +3389,7 @@ async function loadAdmin() {
         field.className = 'chat-item--editing';
         field.style.width = '9rem';
         field.placeholder = 'tokens / month, 0 = none';
-        field.title = 'Monthly token limit while using the shared API key. 0 means no limit.';
+        field.title = t('admin.tokenLimit');
         btn.replaceWith(field);
         field.focus();
 
@@ -3475,7 +3475,7 @@ $('add-model-btn').addEventListener('click', async () => {
   const id = input.value.trim();
   if (!id) return;
 
-  status.textContent = 'Verifying with OpenRouter…';
+  status.textContent = t('models.verifying');
   try {
     const { model } = await api.addModel(id);
     input.value = '';
@@ -3501,7 +3501,7 @@ $('audit-models').addEventListener('click', async () => {
   const host = $('audit-results');
 
   button.disabled = true;
-  status.textContent = 'Calling each one…';
+  status.textContent = t('devices.calling');
   host.innerHTML = '';
 
   try {
@@ -3581,18 +3581,18 @@ function renderPairChip() {
   const count = worker?.machines?.length || 0;
 
   let label;
-  if (!online) label = 'Add a computer';
+  if (!online) label = t('devices.add');
   // The app is running on the machine it works on, so there is nothing to pair
   // for *this* account — but somebody else can still pair a computer of theirs.
-  else if (worker.local) label = 'This computer';
+  else if (worker.local) label = t('devices.thisOne');
   else if (count > 1) label = `${count} computers`;
   else label = worker.activeName || 'Computer';
 
   $('pair-dot').className = `dot ${online ? 'is-online' : 'is-offline'}`;
   $('pair-chip-label').textContent = label;
   $('pair-chip').title = online
-    ? 'Your computers — add another, or switch which one is in use'
-    : 'No computer connected. Click to add one.';
+    ? t('devices.yours')
+    : t('devices.none');
 }
 
 /**
@@ -3610,7 +3610,7 @@ function renderLocalCode(local) {
   $('pair-offer-code').textContent = local.code;
   $('pair-offer-note').textContent = local.name
     ? `Waiting to be added as "${local.name}".`
-    : 'Waiting to be added.';
+    : t('devices.waiting');
 }
 
 $('pair-copy').addEventListener('click', async () => {
@@ -3690,7 +3690,7 @@ async function loadDevices() {
               ? `Currently working in <code>${escapeHtml(d.workspace)}</code> — waiting for it to pick up the change.`
               : d.workspace
                 ? `Currently working in <code>${escapeHtml(d.workspace)}</code>. Clear the box to hand it back to the machine's own setting.`
-                : 'It will report where it is working once it connects.'
+                : t('devices.willReport')
         }</p>
 
         <div class="row">
@@ -3731,8 +3731,8 @@ async function loadDevices() {
       try {
         await api.setDeviceWorkspace(id, field.value.trim());
         status.textContent = field.value.trim()
-          ? 'Saved. That computer will move within about fifteen seconds.'
-          : "Saved. It will go back to the machine's own setting.";
+          ? t('devices.moved')
+          : t('devices.revertedToOwn');
         // Long enough for a heartbeat to land and report where it really is.
         setTimeout(loadDevices, 16_000);
       } catch (err) {
@@ -3760,7 +3760,7 @@ async function loadDevices() {
         state.boot.prefs = await api.savePrefs({ activeDevice: btn.dataset.useDevice });
         await refreshWorker();
         await loadDevices();
-        toast('Switched computer.');
+        toast(t('devices.switched'));
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -3769,7 +3769,7 @@ async function loadDevices() {
 
   // Unpairing cuts a machine off mid-task if one is running, so it asks twice.
   for (const btn of host.querySelectorAll('[data-unpair]')) {
-    armed(btn, 'Really unpair?', async () => {
+    armed(btn, t('devices.reallyUnpair'), async () => {
       const { name } = await api.unpairDevice(btn.dataset.unpair);
       toast(`Unpaired ${name}. That computer can no longer be reached.`);
       await refreshWorker();
@@ -3850,7 +3850,7 @@ function showModelNews(model) {
     ['Released', model.releasedAt ? new Date(model.releasedAt).toLocaleDateString(undefined, {
       year: 'numeric', month: 'long', day: 'numeric',
     }) : 'not stated'],
-    ['Context window', fmtTokens(model.context) || 'not stated'],
+    [t('news.contextWindow'), fmtTokens(model.context) || 'not stated'],
     [
       'Price',
       model.isFree
@@ -3859,7 +3859,7 @@ function showModelNews(model) {
           ? `$${model.price.in} in · $${model.price.out} out per 1M tokens`
           : 'not published',
     ],
-    ['Runs on', 'Your OpenRouter key'],
+    ['Runs on', t('news.yourKey')],
   ];
 
   $('news-facts').innerHTML = facts
@@ -3870,8 +3870,8 @@ function showModelNews(model) {
   $('news-description').hidden = !model.description;
 
   $('news-note').textContent = model.isFree
-    ? 'This one is free — it costs nothing to try.'
-    : 'Billed to your own OpenRouter key at the rate above.';
+    ? t('news.free')
+    : t('news.billed');
 
   const decide = async (action) => {
     $('news-apply').disabled = true;
@@ -4083,26 +4083,26 @@ $('context-gauge').addEventListener('click', () => {
       static: true,
     },
     {
-      label: state.boot.prefs.autoCompact === false ? 'Turn on auto-compacting' : 'Turn off auto-compacting',
+      label: state.boot.prefs.autoCompact === false ? t('compact.turnOn') : t('compact.turnOff'),
       hint:
         state.boot.prefs.autoCompact === false
-          ? 'Fold the older turns up automatically before the window fills.'
-          : 'The conversation will stop working once the window is full.',
+          ? t('compact.onHint')
+          : t('compact.offHint'),
       async run() {
         state.boot.prefs = await api.savePrefs({ autoCompact: state.boot.prefs.autoCompact === false });
         toast(
           state.boot.prefs.autoCompact
-            ? 'Auto-compacting is on.'
-            : 'Auto-compacting is off. Long conversations will hit the window.',
+            ? t('compact.isOn')
+            : t('compact.isOff'),
         );
       },
     },
     {
-      label: 'Compact now',
-      hint: 'Summarise the earlier turns and carry on with the room that frees up.',
+      label: t('compact.now'),
+      hint: t('compact.nowHint'),
       async run() {
-        if (!state.chatId) return toast('Nothing to compact yet.');
-        toast('Folding the earlier turns up…');
+        if (!state.chatId) return toast(t('compact.nothing'));
+        toast(t('compact.working'));
         const { summary, context } = await api.compactChat(state.chatId);
         renderContext(context);
         toast(`Summarised ${summary.replaced} earlier messages.`);
@@ -4622,7 +4622,7 @@ function setRail(collapsed) {
   const toggle = $('sidebar-toggle');
   toggle.disabled = !collapsed;
   if (collapsed) {
-    toggle.setAttribute('aria-label', 'Expand menu');
+    toggle.setAttribute('aria-label', t('action.expandMenu'));
     toggle.setAttribute('aria-expanded', 'false');
   } else {
     // Not a control in this state; leaving the words on it would have a screen

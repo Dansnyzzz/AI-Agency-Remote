@@ -221,16 +221,16 @@ const extensionBadge = (name) => String(name || 'file').split('.').pop().slice(0
 
 /** What kind of thing this is, in words, for the line under a filename. */
 const FILE_NOUN = {
-  docx: 'Word document',
-  doc: 'Word document',
-  xlsx: 'Excel workbook',
-  xls: 'Excel workbook',
-  pptx: 'PowerPoint deck',
-  ppt: 'PowerPoint deck',
+  docx: t('file.docx'),
+  doc: t('file.docx'),
+  xlsx: t('file.xlsx'),
+  xls: t('file.xlsx'),
+  pptx: t('file.pptx'),
+  ppt: t('file.pptx'),
   pdf: 'PDF',
-  csv: 'Spreadsheet data',
+  csv: t('file.csv'),
   md: 'Markdown',
-  html: 'Web page',
+  html: t('file.html'),
   json: 'JSON',
   txt: 'Text',
 };

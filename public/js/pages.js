@@ -504,7 +504,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
       return t('pages.sortBy');
     },
     lede:
-      'Work that runs on a clock, or whenever you press it. Each run lands in its own conversation, ready to read later.',
+      t('pages.tasks.lede'),
     orders: [
       { id: 'next', label: t('pages.order.next') },
       { id: 'name', label: 'Name' },
