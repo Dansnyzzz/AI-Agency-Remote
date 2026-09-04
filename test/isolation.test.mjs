@@ -1410,6 +1410,42 @@ section('spend that never went through the agent loop is still counted');
   check('the usage page can say which part of the system spent it', named.has('compaction') && named.has('research.propose'), [...named].join(', '));
 }
 
+section('a write refuses on its own, not because of a check above it');
+{
+  // These statements were keyed on id alone, with ownership proven by a SELECT
+  // several lines earlier. Nothing was reachable across accounts — the check
+  // was there and it was correct — but the safety lived at the call site rather
+  // than in the statement, and one of them deletes every later message in a
+  // conversation. Driving the store directly with the wrong account is what
+  // tells the two apart.
+  // Fresh accounts: the ones created at the top of this file are deleted by the
+  // cascade test above, and a foreign key failure here would look like a bug in
+  // what is being tested rather than in the fixture.
+  const owner = await store.createUser({
+    id: 'u-owner', email: 'owner@example.com', passwordHash: 'x', name: 'Owner', role: 'user',
+  });
+  const other = await store.createUser({
+    id: 'u-other', email: 'other@example.com', passwordHash: 'x', name: 'Other', role: 'user',
+  });
+
+  const chat = await store.createChat(owner.id, { id: 'c-scope', title: 'Owner', model: 'm' });
+  await store.appendMessage(owner.id, chat.id, { id: 'm-1', role: 'user', text: 'first' });
+  await store.appendMessage(owner.id, chat.id, { id: 'm-2', role: 'assistant', text: 'second' });
+
+  const stolen = await store.editUserMessage(other.id, chat.id, 'm-1', 'rewritten by the other account');
+  check('another account cannot edit a message', stolen === null, JSON.stringify(stolen));
+
+  const after = await store.listMessages(owner.id, chat.id);
+  check('the message is untouched', after.find((m) => m.id === 'm-1')?.text === 'first');
+  check('and nothing after it was deleted', after.length === 2, `${after.length} messages`);
+
+  // The owner can still do it, or the guard would be a wall rather than a fence.
+  const mine = await store.editUserMessage(owner.id, chat.id, 'm-1', 'rewritten by the owner');
+  check('the owner can still edit', mine?.text === 'rewritten by the owner', JSON.stringify(mine));
+  const trimmed = await store.listMessages(owner.id, chat.id);
+  check('and editing still rewinds the conversation', trimmed.length === 1, `${trimmed.length} messages`);
+}
+
 section('concurrent writes to one setting compose instead of racing');
 {
   // Artifact storage was read-all, mutate, setUserSetting — the read-modify-write

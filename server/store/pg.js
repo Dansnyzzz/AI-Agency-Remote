@@ -1057,8 +1057,33 @@ export function createPgStore(connectionString) {
       // The attachments travel with the message: editing the words does not
       // detach the photograph they were about.
       const content = { ...found.content, text };
-      await q('UPDATE messages SET content = $1 WHERE id = $2', [JSON.stringify(content), messageId]);
-      await q('DELETE FROM messages WHERE chat_id = $1 AND seq > $2', [chatId, found.seq]);
+      /**
+       * The ownership test travels with the write, not just ahead of it.
+       *
+       * The SELECT above already proves this message belongs to this account,
+       * so nothing here was reachable across a tenancy boundary. But an UPDATE
+       * keyed on `id` alone and a DELETE keyed on `chat_id` alone are only safe
+       * because of a check several lines earlier, in a different statement —
+       * and the DELETE removes every later message in the conversation, which
+       * is the most destructive statement in this file.
+       *
+       * `messages` has no user_id of its own (see schema.sql), so the join to
+       * `chats` is how tenancy is expressed everywhere else in this module.
+       * Doing it here too makes each statement independently correct rather
+       * than correct-in-context.
+       */
+      await q(
+        `UPDATE messages SET content = $1
+          WHERE id = $2 AND chat_id = $3
+            AND EXISTS (SELECT 1 FROM chats c WHERE c.id = $3 AND c.user_id = $4)`,
+        [JSON.stringify(content), messageId, chatId, userId],
+      );
+      await q(
+        `DELETE FROM messages
+          WHERE chat_id = $1 AND seq > $2
+            AND EXISTS (SELECT 1 FROM chats c WHERE c.id = $1 AND c.user_id = $3)`,
+        [chatId, found.seq, userId],
+      );
       await this.touchChat(userId, chatId);
 
       return { id: messageId, role: 'user', ...content, seq: Number(found.seq) };
@@ -1209,9 +1234,13 @@ export function createPgStore(connectionString) {
         );
       }
 
+      // Scoped by account as well as attachment. The table carries user_id and
+      // every other query here uses it; leaving it off made this the one read
+      // whose correctness rested on the check twelve lines above rather than on
+      // the statement itself.
       const seen = await q(
-        'SELECT COALESCE(MAX(revision), 0)::int AS n FROM attachment_versions WHERE attachment_id = $1',
-        [id],
+        'SELECT COALESCE(MAX(revision), 0)::int AS n FROM attachment_versions WHERE attachment_id = $1 AND user_id = $2',
+        [id, userId],
       );
       // The first rewrite files two rows: what was there originally becomes
       // revision 1. Without that the history would start at the second draft
@@ -1631,7 +1660,11 @@ export function createPgStore(connectionString) {
       RETURNING id, name, mime, bytes, pages, chars, created_at`,
         [file.id, projectId, userId, file.name, file.mime, file.bytes, file.pages ?? null, file.text, file.text.length],
       );
-      await q('UPDATE projects SET updated_at = NOW() WHERE id = $1', [projectId]);
+      // `AND user_id` because this one had no ownership test at all — not in the
+      // statement and not above it. The INSERT before it carries user_id, so a
+      // caller reaching addProjectFile with someone else's projectId would file
+      // the row under its own account and then touch a project it does not own.
+      await q('UPDATE projects SET updated_at = NOW() WHERE id = $1 AND user_id = $2', [projectId, userId]);
       return rows[0];
     },
     async deleteProjectFile(userId, id) {
