@@ -336,6 +336,23 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
 
     switch (preview.kind) {
       case 'document':
+        /**
+         * The one branch here that does not escape, because it cannot: this is
+         * already markup, converted from a .docx by server/office/blocks.js.
+         *
+         * That makes it the only place in this file relying on an invariant
+         * held somewhere else — and the document may have arrived from a
+         * stranger. The escaping over there is correct: `runsToHtml` escapes
+         * every run, links are restricted to http, https, mailto and #, and
+         * `img src` and `alt` are escaped too.
+         *
+         * It is now also *tested* over there — office.test.mjs feeds a hostile
+         * document through `blocksToHtml` and asserts no script tag, no event
+         * handler on any rendered tag, no javascript: href, and no tag broken
+         * open by a quote in the data. Before that, this line depended on a
+         * promise nothing checked, which is the kind of coupling a refactor
+         * breaks silently.
+         */
         return `<div class="doc">${preview.html}</div>`;
       case 'sheets':
         return renderSheets(preview.sheets || []);
