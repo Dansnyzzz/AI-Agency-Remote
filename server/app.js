@@ -2816,7 +2816,20 @@ export function createApp() {
   // handler by its arity, so dropping the parameter turns this into ordinary
   // middleware that never runs.
   app.use((err, req, res, next) => {
-    console.error('[ai-remote]', err);
+    /**
+     * Through the trace logger, not straight to the console.
+     *
+     * This is the last place an unhandled failure is seen, and it was the one
+     * place that threw away the request id. Every other record in a request
+     * carries it — `emit` reads it out of the AsyncLocalStorage this file sets
+     * up at the top — so the 500 was the single line you could not join to the
+     * turn that produced it, which is exactly the line you are looking for.
+     *
+     * `log.error` also unpacks the error rather than stringifying it, so the
+     * name, the status and the first line of the stack are separately
+     * searchable instead of buried in one string.
+     */
+    log.error('unhandled error', err, { method: req.method, path: req.path });
     if (res.headersSent) return res.end();
     res.status(500).json({ error: err?.message || 'Internal error' });
   });
