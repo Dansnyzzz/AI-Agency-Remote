@@ -1,5 +1,5 @@
 {
-  "total": 416,
+  "total": 413,
   "files": {
     "public/js/api.js": 4,
     "public/js/app.js": 179,
@@ -15,7 +15,7 @@
     "public/js/workflows.js": 15,
     "public/js/workspace.js": 22,
     "scripts/launch.js": 1,
-    "server/app.js": 11,
+    "server/app.js": 9,
     "server/attachments.js": 1,
     "server/compact.js": 1,
     "server/crypto.js": 2,
@@ -36,7 +36,7 @@
     "server/settings.js": 1,
     "server/store/index.js": 1,
     "server/store/pg.js": 5,
-    "server/subagents.js": 3,
+    "server/subagents.js": 2,
     "server/tools/calc.js": 2,
     "server/tools/chart.js": 1,
     "server/tools/cloud.js": 6,
