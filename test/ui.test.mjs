@@ -347,7 +347,11 @@ section('attaching photos and files');
   });
   check('the preview appears', staged.shown && staged.count === 1, `${staged.count} shown`);
   check('naming the file', staged.name === 'note.txt', staged.name);
-  check('and its size once uploaded', /KB|MB/.test(staged.meta || ''), staged.meta);
+  // `B` as well as KB and MB. This asserted /KB|MB/ against a 21-byte file, which
+  // only passed because humanSize rounded everything under a megabyte up to at
+  // least "1 KB" — so the check was pinning the rounding bug rather than the
+  // behaviour. The unified formatter says "21 B", which is what the file is.
+  check('and its size once uploaded', /\d+\s?(B|KB|MB)\b/.test(staged.meta || ''), staged.meta);
   check('a file alone lights the send button', staged.sendReady, 'a photo with no caption is a complete message');
   check('and it can be removed', staged.removable);
 
@@ -2325,7 +2329,13 @@ section('artifacts');
     check('and the script inside it actually ran', text === 'ran 5', String(text));
 
     await page.click('#viewer-close');
-    await page.evaluate(() => document.getElementById('artifacts').close());
+    // No dialog to close. Artifacts became a shelf — `#open-artifacts` calls
+    // `gotoShelf('artifacts')`, and this section checks `#page` above — but the
+    // `<dialog id="artifacts">` it replaced was left in index.html, and this
+    // line went on closing it. An already-closed dialog closes silently, so the
+    // line passed for as long as the dead markup survived and threw the moment
+    // it was removed. Nothing here needs the shelf shut: the checks below read
+    // `#settings`, and the next section opens the shelves itself.
     await page.waitForTimeout(200);
   }
 }

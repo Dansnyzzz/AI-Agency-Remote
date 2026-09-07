@@ -3,6 +3,7 @@ import { t } from './i18n.js';
 import { escapeHtml, renderMarkdown, wireCopyButtons } from './markdown.js';
 import { openMenu } from './menu.js';
 import { toast } from './render.js';
+import { humanSize } from './format.js';
 
 
 /**
@@ -92,8 +93,6 @@ window.addEventListener('message', async (event) => {
 
 const $ = (id) => document.getElementById(id);
 
-const humanSize = (bytes) =>
-  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 const ago = (value) => {
   if (!value) return '';
@@ -336,6 +335,23 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
 
     switch (preview.kind) {
       case 'document':
+        /**
+         * The one branch here that does not escape, because it cannot: this is
+         * already markup, converted from a .docx by server/office/blocks.js.
+         *
+         * That makes it the only place in this file relying on an invariant
+         * held somewhere else — and the document may have arrived from a
+         * stranger. The escaping over there is correct: `runsToHtml` escapes
+         * every run, links are restricted to http, https, mailto and #, and
+         * `img src` and `alt` are escaped too.
+         *
+         * It is now also *tested* over there — office.test.mjs feeds a hostile
+         * document through `blocksToHtml` and asserts no script tag, no event
+         * handler on any rendered tag, no javascript: href, and no tag broken
+         * open by a quote in the data. Before that, this line depended on a
+         * promise nothing checked, which is the kind of coupling a refactor
+         * breaks silently.
+         */
         return `<div class="doc">${preview.html}</div>`;
       case 'sheets':
         return renderSheets(preview.sheets || []);

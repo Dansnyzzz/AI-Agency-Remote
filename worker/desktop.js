@@ -21,7 +21,26 @@ import { claim, publishFrame, release } from './screen.js';
  *
  * **Off unless you turn it on.** A browser sandbox is contained; this is not.
  * It types into whatever has focus and clicks whatever is under the pointer, so
- * it stays behind `DESKTOP_ACCESS=true` and every action needs approval.
+ * it stays behind `DESKTOP_ACCESS=true`.
+ *
+ * This used to end "and every action needs approval". That was not true, and it
+ * is the kind of untruth that matters: somebody reading it believes there is a
+ * second control catching whatever the flag lets through, and there is not.
+ *
+ * What `assessRisk` in server/tools/definitions.js actually grades, and what the
+ * default `guarded` policy does with it:
+ *
+ *   safe       desktop_look, desktop_windows            — never asks
+ *   ordinary   desktop_focus, click, scroll, type, key  — runs without asking
+ *   sensitive  desktop_key with a dangerous combination,
+ *              desktop_close, desktop_launch of a shell — stops and asks
+ *
+ * So typing into whatever holds focus is unprompted. That is a deliberate
+ * design rather than an oversight — the same file argues that asking about
+ * everything and asking about nothing fail the same way, because neither leaves
+ * any attention for the cases that matter — and `ask` mode exists for anyone who
+ * wants the stricter behaviour. It is written out here so the trade is visible
+ * at the point where somebody would otherwise assume it had been made for them.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -64,7 +83,6 @@ let camera = null;
  */
 export const desktopAllowed = () => /^(1|true|yes)$/i.test(process.env.DESKTOP_ACCESS || '');
 
-export const desktopRunning = () => !!host;
 
 function reject(message) {
   for (const { reject: fail, timer } of pending.values()) {
@@ -413,10 +431,29 @@ async function reportOn(window, note) {
     working = null;
     try {
       snapshot = remember(await call('look', {}));
-    } catch {
+    } catch (err) {
       wake();
+      /**
+       * Do not report every failure as a closed window.
+       *
+       * This said "That window has closed" whatever went wrong — a host crash,
+       * a 60-second timeout, a UI Automation fault. The model then went looking
+       * for a window that was still there, or told the user their application
+       * had shut when it had not. A confident wrong answer is worse here than
+       * an uncertain right one, because the model acts on it.
+       *
+       * A timeout in particular means the opposite of what was being reported:
+       * the host is busy, so the window is very likely still open.
+       */
+      const message = String(err?.message || '');
+      const timedOut = /timed out|timeout/i.test(message);
+      const reason = timedOut
+        ? 'The desktop host did not answer in time, so the window may well still be open — try again, or call desktop_windows.'
+        : /closed|not found|no such window/i.test(message)
+          ? 'That window has closed. Call desktop_windows to see what is still open.'
+          : `Reading that window failed: ${message || 'the desktop host gave no reason'}. Call desktop_windows to see what is still open.`;
       return {
-        text: `${note}\n\nThat window has closed. Call desktop_windows to see what is still open.`,
+        text: `${note}\n\n${reason}`,
         // Still worth a picture: "which window closed" is exactly the question
         // somebody reading this back will have.
         shot: await stepShot(),

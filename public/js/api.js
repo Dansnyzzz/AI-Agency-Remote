@@ -1,5 +1,6 @@
 /** Thin wrapper over the JSON API, plus the SSE reader for the agent stream. */
 import { narrate } from './mirror.js';
+import { t } from './i18n.js';
 
 async function request(method, path, body) {
   const res = await fetch(path, {
@@ -12,7 +13,7 @@ async function request(method, path, body) {
   // back to the gate, which is the only useful thing to do here.
   if (res.status === 401) {
     location.reload();
-    throw new Error('Session expired.');
+    throw new Error(t('session.expired'));
   }
   const text = await res.text();
   const json = text ? JSON.parse(text) : {};
@@ -267,7 +268,7 @@ export async function runAgent({ chatId, model, decision, runId, signal, handler
 
   if (res.status === 401) {
     location.reload();
-    throw new Error('Session expired.');
+    throw new Error(t('session.expired'));
   }
   if (!res.ok || !res.body) {
     // The refusal carries a reason — a 409 from the run lock, say — and losing

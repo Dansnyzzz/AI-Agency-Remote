@@ -94,16 +94,22 @@ export function t(key, vars) {
  * from user input or a server response, which is what makes it safe to assign.
  */
 export function applyI18n(root = document) {
-  for (const node of root.querySelectorAll('[data-i18n]')) {
+  // querySelectorAll is typed as Element, and dataset, placeholder and title
+  // live on HTMLElement and HTMLInputElement. The annotations say which kind of
+  // node each attribute is only ever put on, which is a fact about the markup
+  // worth writing down rather than a cast to quieten the checker.
+  for (const node of /** @type {NodeListOf<HTMLElement>} */ (root.querySelectorAll('[data-i18n]'))) {
     node.textContent = t(node.dataset.i18n);
   }
-  for (const node of root.querySelectorAll('[data-i18n-html]')) {
+  for (const node of /** @type {NodeListOf<HTMLElement>} */ (root.querySelectorAll('[data-i18n-html]'))) {
     node.innerHTML = t(node.dataset.i18nHtml);
   }
-  for (const node of root.querySelectorAll('[data-i18n-placeholder]')) {
+  for (const node of /** @type {NodeListOf<HTMLInputElement>} */ (
+    root.querySelectorAll('[data-i18n-placeholder]')
+  )) {
     node.placeholder = t(node.dataset.i18nPlaceholder);
   }
-  for (const node of root.querySelectorAll('[data-i18n-title]')) {
+  for (const node of /** @type {NodeListOf<HTMLElement>} */ (root.querySelectorAll('[data-i18n-title]'))) {
     const text = t(node.dataset.i18nTitle);
     node.title = text;
     // A button whose only label is an icon carries its name in aria-label; leaving

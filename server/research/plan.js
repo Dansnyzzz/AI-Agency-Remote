@@ -33,6 +33,22 @@ export async function planQuestions(question, { userId, entry, stream, budget, s
   const writer = await modelForRole(userId, 'research.plan', entry);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    /**
+     * Honour the budget here too.
+     *
+     * Every other model call in a research run checks it; this one did not, so
+     * both planning attempts always fired regardless of what was left. That
+     * matters most in the case the budget exists for — a caller passing a small
+     * cap deliberately, or a retry after a run that already overspent — where
+     * the planner would spend first and the budget would only be noticed
+     * afterwards.
+     *
+     * Falling back to the question itself is what this function already does
+     * when the model will not answer usefully, so there is a sensible answer to
+     * give rather than an error to invent.
+     */
+    if (budget && budget.spent >= budget.cap) break;
+
     // `low` effort on purpose: this turns one question into a handful of search
     // queries. It is a rewriting job, not a reasoning one, and paying for deep
     // thinking on it buys nothing measurable.

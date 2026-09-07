@@ -62,7 +62,7 @@ Both were prose, and prose is what a long unattended run talks itself out of at
 turn ninety. `gate.js` is the version that holds.
 
 ```
-npm run gate              lint + 24 suites + hook tests, then stamp
+npm run gate              lint + hooks + eval + typecheck + suites, then stamp
 npm run gate -- --fast    lint + hook tests only, seconds, stamped as partial
 node .claude/hooks/gate.js status
 ```

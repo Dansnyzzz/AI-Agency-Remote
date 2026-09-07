@@ -210,7 +210,7 @@ section('schema.sql and SCHEMA_VERSION move together');
   const fingerprint = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
 
   /** Update BOTH of these, together, whenever schema.sql changes. */
-  const STAMPED = { version: 16, fingerprint: 'c8405a4b08beee0a' };
+  const STAMPED = { version: 17, fingerprint: '73631c7ea98cd360' };
 
   check(
     'the recorded version matches the code',
@@ -287,6 +287,94 @@ section('two processes cannot open the same database');
   check('closing releases it', !fs.existsSync(`${dir}/owner.pid`));
 
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// ── what version 17 added ─────────────────────────────────────────────
+{
+  const db = await PGlite.create();
+  const driver = { async query(text, params) { return (await db.query(text, params)).rows; } };
+  const store = createPgStore(driver);
+  await store.init();
+
+  const names = (await driver.query(
+    "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
+  )).map((r) => r.indexname);
+
+  // Four predicates that were scanning whole tables. The two `created_at` ones
+  // matter most: the sweep pruners filter on that column alone, from the cron
+  // route, inside the 300s ceiling, on tables that only grow — and every index
+  // that covered them led with user_id, which a query cannot skip past.
+  for (const idx of [
+    'usage_events_created_idx',
+    'attachments_created_idx',
+    'shared_models_provider_idx',
+    'tool_jobs_device_idx',
+    'pairings_code_unclaimed_idx',
+  ]) {
+    check(`index exists: ${idx}`, names.includes(idx));
+  }
+
+  // The uniqueness has to actually bite, or it is decoration. Two live
+  // unclaimed rows sharing a code is what let the installer name the wrong
+  // account, and that is the one thing a confirmation prompt must get right.
+  const add = (id, hash, claimedAt) =>
+    driver.query(
+      `INSERT INTO pairings (id, code_hash, device_name, expires_at, claimed_at)
+            VALUES ($1, $2, 'pc', NOW() + INTERVAL '10 min', $3)`,
+      [id, hash, claimedAt],
+    );
+
+  await add('pair-1', 'HASH-A', null);
+  let refused = false;
+  try { await add('pair-2', 'HASH-A', null); } catch (err) { refused = /unique/i.test(err.message); }
+  check('a second unclaimed pairing cannot reuse a live code', refused);
+
+  // Partial on purpose: a claimed code is spent, and a full unique index would
+  // also collide with expired rows the pruner has not swept yet.
+  let claimedAllowed = true;
+  try { await add('pair-3', 'HASH-A', new Date().toISOString()); } catch { claimedAllowed = false; }
+  check('but a claimed one may, because the index is partial', claimedAllowed);
+
+  await db.close();
+}
+
+// ── the statement splitter ────────────────────────────────────────────
+{
+  const { splitStatements } = await import('../server/store/pg.js');
+
+  // Dollar-quoting is the one that matters. It is how every conditional
+  // backfill is written, and without it the semicolons *inside* the block split
+  // it into fragments that each fail as a syntax error in perfectly good SQL.
+  // The splitter's own header used to warn about this and leave it unhandled,
+  // which made it something the next person to write a migration would discover
+  // the hard way.
+  const cases = [
+    ['two plain statements', 'CREATE TABLE a (id int); CREATE TABLE b (id int);', 2],
+    ['a trailing semicolon is optional', 'SELECT 1', 1],
+    ['a line comment cannot split', 'SELECT 1; -- a; b; c\nSELECT 2;', 2],
+    ['a semicolon inside a string cannot split', "INSERT INTO t VALUES ('a;b');", 1],
+    ['nor one after an escaped quote', "INSERT INTO t VALUES ('it''s; fine');", 1],
+    ['a DO block stays whole', 'DO $$ BEGIN IF TRUE THEN UPDATE t SET x=1; END IF; END $$;', 1],
+    ['a tagged block stays whole', 'DO $body$ BEGIN a; b; END $body$; SELECT 1;', 2],
+    ['a different tag does not terminate it', 'DO $a$ SELECT $$x;y$$; $a$;', 1],
+    ['a block comment cannot split', 'SELECT 1; /* a; b; c */ SELECT 2;', 2],
+    ['nor a nested one', 'SELECT 1; /* a /* b; */ c; */ SELECT 2;', 2],
+  ];
+  for (const [what, sql, want] of cases) {
+    const got = splitStatements(sql);
+    check(what, got.length === want, `want ${want}, got ${got.length}: ${JSON.stringify(got).slice(0, 90)}`);
+  }
+
+  // The real file must still come apart the way it always did.
+  const schemaPath = new URL('../server/store/schema.sql', import.meta.url);
+  const real = splitStatements(fs.readFileSync(schemaPath, 'utf8'));
+  check('schema.sql parses into statements', real.length > 50, String(real.length));
+  check(
+    'and every one of them starts with a keyword',
+    real.every((s) => /^(CREATE|ALTER|INSERT|UPDATE|DELETE|DROP|DO|COMMENT|SET|GRANT|WITH|SELECT)/i.test(s)),
+    real.find((s) => !/^(CREATE|ALTER|INSERT|UPDATE|DELETE|DROP|DO|COMMENT|SET|GRANT|WITH|SELECT)/i.test(s))?.slice(0, 60),
+  );
+  check('with no comment marker left in any of them', !real.some((s) => s.includes('--') || s.includes('/*')));
 }
 
 fs.rmSync(DATA_DIR, { recursive: true, force: true });

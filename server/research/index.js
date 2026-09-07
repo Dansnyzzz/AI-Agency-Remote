@@ -10,11 +10,23 @@ import { buildReport } from './report.js';
 /**
  * The token budget for one research run.
  *
- * A safety stop, not a tight leash: a run makes eight to twelve model calls, and
- * this is the ceiling that keeps a runaway one — a debate that will not settle,
+ * A safety stop, not a tight leash.
+ *
+ * The count, since this said "eight to twelve" and the number is fixed: a run
+ * makes **at most eight** model calls — up to two planning attempts, then the
+ * debate's proposer, one critic and one revision per round (rounds is 2 and no
+ * caller overrides it), and the arbiter. Searching costs none of them, and page
+ * reading costs a fetch rather than a call.
+ *
+ * This is the ceiling that keeps a runaway one — a debate that will not settle,
  * a model that will not answer in JSON — from quietly spending a fortune. When
  * it is hit the run stops and returns what it has, labelled, rather than being
  * cut off mid-sentence with no explanation.
+ *
+ * Checked *between* calls, not within one, so a single very long reply can
+ * overshoot it. That is the honest limit of a token budget enforced from
+ * outside the provider, and it is why this is a safety stop rather than a
+ * spending control.
  */
 const DEFAULT_CAP = 250_000;
 
@@ -36,6 +48,15 @@ const ledgerToArray = (ledger) =>
  * `deps` injects `search`, `stream`, `entry`, `store` and `cap` for tests; in
  * production only the defaults run.
  */
+/**
+ * @param {{
+ *   question: string, userId?: string, user?: any, chatId?: string|null, signal?: AbortSignal,
+ *   deps?: {
+ *     store?: any, stream?: any, search?: any, entry?: any, cap?: number,
+ *     readPage?: (url: string) => Promise<string>,
+ *   },
+ * }} args
+ */
 export async function runDeepResearch({ question, userId, user, chatId, signal, deps = {} }) {
   const store = deps.store || getStore();
   const stream = deps.stream;
@@ -49,7 +70,22 @@ export async function runDeepResearch({ question, userId, user, chatId, signal, 
   const overBudget = () => budget.spent >= budget.cap;
 
   const queries = await planQuestions(question, { userId, entry, stream, budget, signal, chatId });
-  const { ledger, findings } = await gatherEvidence(queries, search ? { search } : {});
+
+  /**
+   * The page reader is injected rather than imported.
+   *
+   * `web_fetch` lives in tools/cloud.js, and cloud.js is what calls this
+   * function — importing it back would close a cycle. The caller passes it, and
+   * a caller that does not (the suite, mostly) gets the old snippet-only
+   * behaviour, which the confidence grader then correctly refuses to call HIGH.
+   */
+  const { ledger, findings } = await gatherEvidence(queries, {
+    // Carried only so the searches can be attributed: a run makes up to six of
+    // them on a deployment-wide key that no per-account quota covers.
+    userId,
+    ...(search ? { search } : {}),
+    ...(deps.readPage ? { readPage: deps.readPage } : {}),
+  });
 
   let claims = [];
   let transcript = [];

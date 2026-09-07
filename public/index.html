@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#0B0E11" media="(prefers-color-scheme: dark)" />
@@ -96,10 +96,10 @@
         <p class="gate__sub" id="gate-sub">Sign in to continue.</p>
 
         <div id="gate-accounts">
-          <input id="gate-name" class="gate__input gate__input--text" type="text" placeholder="Your name" autocomplete="name" hidden />
-          <input id="gate-email" class="gate__input gate__input--text" type="email" placeholder="you@example.com" autocomplete="email" />
+          <input id="gate-name" class="gate__input gate__input--text" type="text" placeholder="Your name" autocomplete="name" hidden data-i18n-title="gate.name" aria-label="Your name" />
+          <input id="gate-email" class="gate__input gate__input--text" type="email" placeholder="you@example.com" autocomplete="email" data-i18n-title="gate.email" aria-label="Email address" />
           <div class="gate__field" id="gate-password-field">
-            <input id="gate-password" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="Password" autocomplete="current-password" />
+            <input id="gate-password" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="Password" autocomplete="current-password" data-i18n-title="gate.password" aria-label="Password" />
             <button class="gate__reveal" type="button" data-reveal="gate-password" aria-controls="gate-password" aria-pressed="false" aria-label="Show password" title="Show password">
               <svg class="gate__eye gate__eye--shown" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                 <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
@@ -112,14 +112,14 @@
               </svg>
             </button>
           </div>
-          <input id="gate-totp" class="gate__input" type="text" inputmode="numeric" placeholder="Authenticator code" autocomplete="one-time-code" hidden />
+          <input id="gate-totp" class="gate__input" type="text" inputmode="numeric" placeholder="Authenticator code" autocomplete="one-time-code" hidden data-i18n-title="gate.totp" aria-label="Authenticator code" />
         </div>
 
         <!-- Choosing a new password, from either an emailed link or a code. -->
         <div id="gate-newpass" hidden>
-          <input id="gate-resetcode" class="gate__input" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" />
+          <input id="gate-resetcode" class="gate__input" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" data-i18n-title="gate.resetcode" aria-label="The 6-digit code from your email" />
           <div class="gate__field">
-            <input id="gate-newpassword" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="New password" autocomplete="new-password" />
+            <input id="gate-newpassword" class="gate__input gate__input--text gate__input--secret" type="password" placeholder="New password" autocomplete="new-password" data-i18n-title="gate.newpassword" aria-label="New password" />
             <button class="gate__reveal" type="button" data-reveal="gate-newpassword" aria-controls="gate-newpassword" aria-pressed="false" aria-label="Show password" title="Show password">
               <svg class="gate__eye gate__eye--shown" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                 <path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" />
@@ -293,7 +293,7 @@
       <main class="main" id="main">
         <header class="topbar">
           <button class="icon-btn topbar__menu" id="sidebar-open" aria-label="Open menu">☰</button>
-          <div class="topbar__title" id="chat-title">New chat</div>
+          <h1 class="topbar__title" id="chat-title">New chat</h1>
           <div class="topbar__right">
             <!-- Ahead of the policy and model chips, because connecting a
                  computer is the thing somebody does once and cannot find. -->
@@ -345,7 +345,7 @@
                 <svg class="find__mark" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
                   <circle cx="9" cy="9" r="5.5" /><path d="m13.2 13.2 3.3 3.3" />
                 </svg>
-                <input id="page-search" type="text" placeholder="Search projects…" autocomplete="off" />
+                <input id="page-search" type="text" placeholder="Search projects…" autocomplete="off" data-i18n-title="pages.searchInput" aria-label="Search projects" />
                 <button class="find__clear" id="page-search-clear" type="button" aria-label="Clear search">✕</button>
               </div>
               <button class="pill" id="page-sort" type="button" hidden></button>
@@ -386,7 +386,7 @@
                    because it is the reason to come here. Nothing is created
                    until it is sent. -->
               <div class="starter">
-                <textarea id="project-page-ask" rows="2" placeholder="How can I help you today?"></textarea>
+                <textarea id="project-page-ask" rows="2" placeholder="How can I help you today?" data-i18n-title="project.askInput" aria-label="Ask about this project"></textarea>
                 <div class="starter__row">
                   <span class="starter__chip" id="project-page-chip"></span>
                   <button class="starter__send" id="project-page-send" type="button" aria-label="Start conversation" disabled>↑</button>
@@ -433,8 +433,11 @@
                assertive: it is the only moment in the app where nothing further
                happens until somebody answers. Announcing it politely would
                queue it behind the streaming transcript above. -->
-          <div class="approval" id="approval" role="alertdialog" aria-labelledby="approval-title"
-               aria-live="assertive" hidden>
+          <!-- No aria-live here. role="alertdialog" is already announced
+               assertively when it appears, and the two together made a screen
+               reader read the approval prompt twice — the one message in the
+               app where being read twice is most confusing. -->
+          <div class="approval" id="approval" role="alertdialog" aria-labelledby="approval-title" hidden>
             <div class="approval__body">
               <strong id="approval-title" data-i18n="approval.title">Approve these actions?</strong>
               <div class="approval__list" id="approval-list"></div>
@@ -474,8 +477,7 @@
                 id="file-input"
                 multiple
                 accept="image/*,text/*,application/pdf,application/json,.md,.csv,.log,.yml,.yaml,.ts,.tsx,.js,.jsx,.py,.sql,.xml,.html,.css,.docx,.xlsx,.pptx,.docm,.xlsm,.pptm"
-                hidden
-              />
+                hidden data-i18n-title="composer.attachInput" aria-label="Attach files" />
               <!-- Drawn rather than typed. As the character "+" this sat
                    visibly high in its circle: a text glyph is centred on the
                    font's own maths axis, which is above the middle of the line
@@ -561,10 +563,17 @@
               <span class="screen__live" id="screen-live"></span>
               <span class="tag" id="screen-source">sandbox</span>
               <span class="screen__title" id="screen-title">Screen</span>
-              <button class="icon-btn" id="screen-drive" title="Take control — click and type into the page yourself" aria-pressed="false">🖰</button>
-              <button class="icon-btn" id="screen-stop" title="Close the sandbox browser">✕</button>
-              <button class="icon-btn" id="screen-expand" title="Full size">⤢</button>
-              <button class="icon-btn" id="screen-hide" title="Hide">▾</button>
+              <!-- Same rule as #stop and #send above, and for the same reason:
+                   name-from-content wins over `title`, so with only a glyph
+                   inside these announced as "mouse", "multiplication x", "north
+                   east and south west arrow" and "black down-pointing small
+                   triangle". applyI18n() only rewrites an aria-label that
+                   already exists, so declaring it here is also what makes it
+                   translate — none of these four had data-i18n-title either. -->
+              <button class="icon-btn" id="screen-drive" type="button" data-i18n-title="screen.driveOff" title="Take control — click and type into the page yourself" aria-label="Take control — click and type into the page yourself" aria-pressed="false">🖰</button>
+              <button class="icon-btn" id="screen-stop" type="button" data-i18n-title="screen.close" title="Close the sandbox browser" aria-label="Close the sandbox browser">✕</button>
+              <button class="icon-btn" id="screen-expand" type="button" data-i18n-title="screen.expand" title="Full size" aria-label="Full size">⤢</button>
+              <button class="icon-btn" id="screen-hide" type="button" data-i18n-title="screen.hide" title="Hide" aria-label="Hide">▾</button>
             </header>
             <!-- A real address bar above the picture rather than a caption
                  under it. The panel is a browser window somebody else is
@@ -695,8 +704,7 @@
             autocomplete="off"
             autocapitalize="characters"
             spellcheck="false"
-            maxlength="9"
-          />
+            maxlength="9" data-i18n-title="pair.codeInput" aria-label="Pairing code from your computer" />
           <button class="btn btn--ghost" id="pair-submit" type="button">Pair</button>
         </div>
         <p class="hint" id="pair-status"></p>
@@ -776,29 +784,34 @@
             type="search"
             placeholder="Search — try &quot;free claude&quot;, &quot;>200k&quot;, &quot;&lt;$1&quot;, or paste a model id"
             autocomplete="off"
+            data-i18n-title="models.searchInput"
+            aria-label="Search models"
           />
           <button class="search__clear" id="model-search-clear" type="button" hidden aria-label="Clear">✕</button>
         </div>
 
         <!-- Which API the model runs on, and therefore which key pays for it. -->
-        <div class="seg seg--scroll" role="tablist" id="provider-filter">
-          <button class="seg__btn is-active" data-provider="all" type="button">All</button>
-          <button class="seg__btn" data-provider="anthropic" type="button">Anthropic</button>
-          <button class="seg__btn" data-provider="openai" type="button">OpenAI</button>
-          <button class="seg__btn" data-provider="google" type="button">Google</button>
-          <button class="seg__btn" data-provider="openrouter" type="button">OpenRouter</button>
-          <button class="seg__btn" data-provider="orcarouter" type="button">OrcaRouter</button>
+        <!-- A group of filters, not tabs: these switch what the list below shows
+             rather than swapping panels, and the children were never role="tab".
+             aria-pressed is the state that matches what they actually do. -->
+        <div class="seg seg--scroll" role="group" aria-label="Filter by provider" id="provider-filter">
+          <button class="seg__btn is-active" data-provider="all" type="button" aria-pressed="true">All</button>
+          <button class="seg__btn" data-provider="anthropic" type="button" aria-pressed="false">Anthropic</button>
+          <button class="seg__btn" data-provider="openai" type="button" aria-pressed="false">OpenAI</button>
+          <button class="seg__btn" data-provider="google" type="button" aria-pressed="false">Google</button>
+          <button class="seg__btn" data-provider="openrouter" type="button" aria-pressed="false">OpenRouter</button>
+          <button class="seg__btn" data-provider="orcarouter" type="button" aria-pressed="false">OrcaRouter</button>
         </div>
 
-        <div class="seg" role="tablist" id="tier-filter">
-          <button class="seg__btn is-active" data-tier="all" type="button">All</button>
-          <button class="seg__btn" data-tier="free" type="button">Free</button>
-          <button class="seg__btn" data-tier="paid" type="button">Paid</button>
+        <div class="seg" role="group" aria-label="Filter by price" id="tier-filter">
+          <button class="seg__btn is-active" data-tier="all" type="button" aria-pressed="true">All</button>
+          <button class="seg__btn" data-tier="free" type="button" aria-pressed="false">Free</button>
+          <button class="seg__btn" data-tier="paid" type="button" aria-pressed="false">Paid</button>
         </div>
 
         <div class="browser__row" id="vendor-row">
           <div class="chips" id="family-filter"></div>
-          <select id="model-sort" class="mini-select" title="Sort order">
+          <select id="model-sort" class="mini-select" title="Sort order" data-i18n-title="models.sortInput" aria-label="Sort order">
             <option value="new">Newest first</option>
             <option value="old">Oldest first</option>
             <option value="name">Name A–Z</option>
@@ -817,19 +830,11 @@
     </dialog>
 
     <!-- ── Search conversations ─────────────────────────────────────── -->
-    <!-- ── Artifacts ────────────────────────────────────────────────────
-         Every document, spreadsheet, deck and page the assistant has made,
-         newest first, with the conversation each came from. -->
-    <dialog id="artifacts" class="sheet sheet--tall">
-      <form method="dialog" class="sheet__head">
-        <h2>Artifacts</h2>
-        <button class="icon-btn" value="close" aria-label="Close">✕</button>
-      </form>
-
-      <div class="sheet__body" id="artifact-list">
-        <p class="hint">Loading…</p>
-      </div>
-    </dialog>
+    <!-- The Artifacts *dialog* was removed here. It was replaced by the
+         artifacts shelf — pages.js, reached by gotoShelf('artifacts') — and
+         left behind as markup no JavaScript referenced: neither #artifacts nor
+         #artifact-list appeared anywhere, so its permanent "Loading…" could
+         never be replaced by anything. -->
 
     <!-- ── Workspace files ──────────────────────────────────────────────
          The folder the assistant works in, on the machine running the worker.
@@ -847,7 +852,7 @@
                three characters. A real regular expression is one line away in
                the chat, where `grep` already lives. -->
           <input class="workspace__find" id="workspace-find" type="search"
-                 placeholder="Search in these files…  ↵" autocomplete="off" />
+                 placeholder="Search in these files…  ↵" autocomplete="off" data-i18n-title="workspace.findInput" aria-label="Search in these files" />
           <button class="btn btn--ghost" id="workspace-new" type="button" formnovalidate>New file</button>
           <button class="icon-btn" value="close" aria-label="Close">✕</button>
         </div>
@@ -1045,7 +1050,7 @@
       <div class="browser__controls">
         <div class="search">
           <span class="search__icon" aria-hidden="true">⌕</span>
-          <input id="search-input" type="search" placeholder="Search titles and everything said" autocomplete="off" />
+          <input id="search-input" type="search" placeholder="Search titles and everything said" autocomplete="off" data-i18n-title="search.inputLabel" aria-label="Search titles and everything said" />
           <button class="search__clear" id="search-clear" type="button" hidden aria-label="Clear">✕</button>
         </div>
       </div>
@@ -1061,20 +1066,20 @@
       </form>
 
       <div class="sheet__tabs" role="tablist">
-        <button class="tab is-active" data-tab="providers" role="tab" data-i18n="settings.tab.providers">Providers</button>
-        <button class="tab" data-tab="models" role="tab" data-i18n="settings.tab.models">Models</button>
-        <button class="tab" data-tab="behaviour" role="tab" data-i18n="settings.tab.behaviour">Behaviour</button>
-        <button class="tab" data-tab="skills" role="tab" data-i18n="settings.tab.skills">Skills</button>
-        <button class="tab" data-tab="tasks" role="tab" data-i18n="settings.tab.tasks">Scheduled</button>
-        <button class="tab" data-tab="connectors" role="tab" data-i18n="settings.tab.connectors">Connectors</button>
-        <button class="tab" data-tab="mcp" role="tab" data-i18n="settings.tab.mcp">MCP servers</button>
-        <button class="tab" data-tab="worker" role="tab" data-i18n="settings.tab.worker">Computers</button>
-        <button class="tab" data-tab="account" role="tab" data-i18n="settings.tab.account">Account</button>
-        <button class="tab" data-tab="admin" role="tab" id="tab-admin" hidden data-i18n="settings.tab.people">People</button>
+        <button class="tab is-active" type="button" data-tab="providers" role="tab" id="tab-providers" aria-controls="panel-providers" aria-selected="true" tabindex="0" data-i18n="settings.tab.providers">Providers</button>
+        <button class="tab" type="button" data-tab="models" role="tab" id="tab-models" aria-controls="panel-models" aria-selected="false" tabindex="-1" data-i18n="settings.tab.models">Models</button>
+        <button class="tab" type="button" data-tab="behaviour" role="tab" id="tab-behaviour" aria-controls="panel-behaviour" aria-selected="false" tabindex="-1" data-i18n="settings.tab.behaviour">Behaviour</button>
+        <button class="tab" type="button" data-tab="skills" role="tab" id="tab-skills" aria-controls="panel-skills" aria-selected="false" tabindex="-1" data-i18n="settings.tab.skills">Skills</button>
+        <button class="tab" type="button" data-tab="tasks" role="tab" id="tab-tasks" aria-controls="panel-tasks" aria-selected="false" tabindex="-1" data-i18n="settings.tab.tasks">Scheduled</button>
+        <button class="tab" type="button" data-tab="connectors" role="tab" id="tab-connectors" aria-controls="panel-connectors" aria-selected="false" tabindex="-1" data-i18n="settings.tab.connectors">Connectors</button>
+        <button class="tab" type="button" data-tab="mcp" role="tab" id="tab-mcp" aria-controls="panel-mcp" aria-selected="false" tabindex="-1" data-i18n="settings.tab.mcp">MCP servers</button>
+        <button class="tab" type="button" data-tab="worker" role="tab" id="tab-worker" aria-controls="panel-worker" aria-selected="false" tabindex="-1" data-i18n="settings.tab.worker">Computers</button>
+        <button class="tab" type="button" data-tab="account" role="tab" id="tab-account" aria-controls="panel-account" aria-selected="false" tabindex="-1" data-i18n="settings.tab.account">Account</button>
+        <button class="tab" type="button" data-tab="admin" role="tab" id="tab-admin" aria-controls="panel-admin" aria-selected="false" tabindex="-1" id="tab-admin" hidden data-i18n="settings.tab.people">People</button>
       </div>
 
       <div class="sheet__body">
-        <section class="panel is-active" data-panel="providers">
+        <section class="panel is-active" data-panel="providers" id="panel-providers" role="tabpanel" aria-labelledby="tab-providers">
           <p class="hint">
             Keys are stored on your server and never sent to the browser. Set them as environment
             variables instead and they become read-only here.
@@ -1082,7 +1087,7 @@
           <div id="provider-list"></div>
         </section>
 
-        <section class="panel" data-panel="models">
+        <section class="panel" data-panel="models" id="panel-models" role="tabpanel" aria-labelledby="tab-models">
           <p class="hint">
             The library refreshes itself from OpenRouter once a day, so free models appear without
             anyone pressing anything. You can also add one by id — it is verified, then becomes
@@ -1119,7 +1124,7 @@
           <div id="audit-results"></div>
         </section>
 
-        <section class="panel" data-panel="behaviour">
+        <section class="panel" data-panel="behaviour" id="panel-behaviour" role="tabpanel" aria-labelledby="tab-behaviour">
           <!-- Mode and effort used to be repeated here as two more dropdowns.
                Two homes for one setting is two places to disagree, and the one
                beside the send button is the one that is read at the moment it
@@ -1202,7 +1207,7 @@
           <span class="hint" id="behaviour-status"></span>
         </section>
 
-        <section class="panel" data-panel="skills">
+        <section class="panel" data-panel="skills" id="panel-skills" role="tabpanel" aria-labelledby="tab-skills">
           <p class="hint">
             A procedure taught once instead of re-explained every conversation. The assistant sees the
             names and descriptions, and reads the full instructions when one applies — so the
@@ -1229,7 +1234,7 @@
           <div id="skill-list"></div>
         </section>
 
-        <section class="panel" data-panel="tasks">
+        <section class="panel" data-panel="tasks" id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks">
           <p class="hint">
             Work that runs without you watching. Each run is a fresh conversation you can open
             afterwards — the result is waiting rather than announced. Write the prompt as if to
@@ -1244,7 +1249,7 @@
             <textarea id="task-prompt" rows="4" placeholder="Read the reports in D:\campaigns and summarise the week."></textarea>
           </div>
           <div class="row">
-            <input type="text" id="task-when" placeholder="17:00 or fri 17:00" style="max-width:12rem" />
+            <input type="text" id="task-when" placeholder="17:00 or fri 17:00" style="max-width:12rem" data-i18n-title="task.whenInput" aria-label="When to run it" />
             <label class="row" style="gap:6px">
               <input type="checkbox" id="task-repeat" checked /> repeat
             </label>
@@ -1255,7 +1260,7 @@
           <div id="task-list"></div>
         </section>
 
-        <section class="panel" data-panel="connectors">
+        <section class="panel" data-panel="connectors" id="panel-connectors" role="tabpanel" aria-labelledby="tab-connectors">
           <p class="hint">
             Tokens are encrypted on the server and never sent back to the browser. Each is verified
             with the service before it is stored, so a bad paste fails here rather than mid-task.
@@ -1268,7 +1273,7 @@
           </p>
         </section>
 
-        <section class="panel" data-panel="mcp">
+        <section class="panel" data-panel="mcp" id="panel-mcp" role="tabpanel" aria-labelledby="tab-mcp">
           <p class="hint" data-i18n="mcp.lede">
             MCP servers add tools from outside this app — Figma, Jira, Sentry, a database, hundreds of
             others. Plug one in and the assistant can use it. Nothing here is chosen by the assistant:
@@ -1325,7 +1330,7 @@
           <div id="mcp-list"></div>
         </section>
 
-        <section class="panel" data-panel="worker">
+        <section class="panel" data-panel="worker" id="panel-worker" role="tabpanel" aria-labelledby="tab-worker">
           <div id="worker-status-card"></div>
 
           <h3>Add a computer</h3>
@@ -1351,7 +1356,7 @@
           <button class="btn btn--ghost" id="open-pair" type="button">Enter a pairing code</button>
         </section>
 
-        <section class="panel" data-panel="account">
+        <section class="panel" data-panel="account" id="panel-account" role="tabpanel" aria-labelledby="tab-account">
           <div id="account-card"></div>
 
           <div class="field">
@@ -1388,7 +1393,7 @@
           <button class="btn btn--ghost" id="logout" type="button">Sign out</button>
         </section>
 
-        <section class="panel" data-panel="admin">
+        <section class="panel" data-panel="admin" id="panel-admin" role="tabpanel" aria-labelledby="tab-admin">
           <h3>People</h3>
           <p class="hint">
             Anyone can sign up with an email and a password. Each account brings its own API keys and

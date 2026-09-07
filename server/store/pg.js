@@ -13,45 +13,102 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * fresh database. Quote state is tracked so a ';' or '--' inside a string
  * literal is left alone.
  *
- * **It does not understand dollar-quoting or block comments.** Single quotes and
- * `--` are handled; `$$ … $$` and `/* … *\/` are not. So the natural way to
- * write a conditional backfill —
+ * It understands single-quoted strings with `''` escapes, `--` line comments,
+ * nested `/* … *\/` block comments, and dollar-quoting — both `$$ … $$` and the
+ * tagged `$body$ … $body$`, matched exactly as Postgres matches them.
+ *
+ * Dollar-quoting is the one that matters, and it used to be missing. It is how
+ * every conditional backfill is written —
  *
  *     DO $$ BEGIN IF NOT EXISTS (…) THEN UPDATE …; END IF; END $$;
  *
- * — would be shredded at the inner semicolon and fail as several broken
- * fragments. Every statement in schema.sql today is a plain CREATE or ALTER, so
- * this has never mattered; it is written down because the next non-trivial
- * migration is exactly when somebody reaches for a DO block, and the failure
- * would look like a syntax error in perfectly good SQL.
+ * — and without it the semicolons inside the block split it into fragments that
+ * each fail as a syntax error in SQL that is perfectly good. Every statement in
+ * schema.sql today is still a plain CREATE or ALTER, so nothing has depended on
+ * it yet; it is handled now so that the next non-trivial migration is a
+ * migration rather than an afternoon.
  */
-function splitStatements(sql) {
-  let stripped = '';
+export function splitStatements(sql) {
+  const statements = [];
+  let current = '';
   let inString = false;
+
   for (let i = 0; i < sql.length; i += 1) {
     const char = sql[i];
+
     if (inString) {
-      stripped += char;
+      current += char;
       // '' is an escaped quote inside a Postgres string literal.
-      if (char === "'") inString = sql[i + 1] === "'" ? (stripped += sql[++i], true) : false;
+      if (char === "'") inString = sql[i + 1] === "'" ? (current += sql[++i], true) : false;
       continue;
     }
+
     if (char === "'") {
       inString = true;
-      stripped += char;
+      current += char;
       continue;
     }
+
+    /**
+     * Dollar-quoting: `$$ … $$` and the tagged `$body$ … $body$`.
+     *
+     * This is the form every non-trivial migration reaches for, because it is
+     * the only way to write a conditional backfill:
+     *
+     *     DO $$ BEGIN IF NOT EXISTS (…) THEN UPDATE …; END IF; END $$;
+     *
+     * Without this the semicolons *inside* the block split it into fragments,
+     * each of which fails as a syntax error in SQL that is perfectly good. The
+     * header comment used to warn about this and leave it unhandled, on the
+     * grounds that schema.sql had no such block yet — which made the failure
+     * something the next person to write one would discover the hard way.
+     *
+     * The tag is copied verbatim and matched exactly, which is what Postgres
+     * does: `$a$ … $a$` and `$$ … $$` do not terminate each other.
+     */
+    const dollar = char === '$' ? /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/.exec(sql.slice(i)) : null;
+    if (dollar) {
+      const tag = dollar[0];
+      const end = sql.indexOf(tag, i + tag.length);
+      // Unterminated: take the rest verbatim rather than silently splitting it.
+      const stop = end === -1 ? sql.length : end + tag.length;
+      current += sql.slice(i, stop);
+      i = stop - 1;
+      continue;
+    }
+
+    // A line comment runs to the newline.
     if (char === '-' && sql[i + 1] === '-') {
       while (i < sql.length && sql[i] !== '\n') i += 1;
-      stripped += '\n';
+      current += '\n';
       continue;
     }
-    stripped += char;
+
+    // A block comment. Postgres nests these; so does this.
+    if (char === '/' && sql[i + 1] === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === '/' && sql[i + 1] === '*') (depth += 1, i += 2);
+        else if (sql[i] === '*' && sql[i + 1] === '/') (depth -= 1, i += 2);
+        else i += 1;
+      }
+      i -= 1;
+      current += ' ';
+      continue;
+    }
+
+    if (char === ';') {
+      statements.push(current);
+      current = '';
+      continue;
+    }
+
+    current += char;
   }
-  return stripped
-    .split(';')
-    .map((s) => s.trim())
-    .filter(Boolean);
+
+  statements.push(current);
+  return statements.map((s) => s.trim()).filter(Boolean);
 }
 
 /**
@@ -122,8 +179,14 @@ function splitStatements(sql) {
  *      cut off mid-run stops for a person instead of repeating every hour, and
  *      chats.run_lock_seq so a resuming run evicts the previous holder of the
  *      lease rather than joining it
+ *  17  the four predicates 16 missed — usage_events.created_at and
+ *      attachments.created_at, which the sweep pruners filter on alone while
+ *      every index over them leads with user_id; shared_models.provider; and
+ *      tool_jobs.device_id — plus the unique pairing code that 16 wrote down
+ *      as needed and deferred, partial over unclaimed rows and backfilled
+ *      first, so an installer can no longer be told the wrong account
  */
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /**
  * How long a run lease may go untouched before another run may take it.
@@ -582,6 +645,33 @@ export function createPgStore(connectionString) {
       return rows[0]?.value ?? patch;
     },
     /**
+     * Merge into a setting one level down, without reading it first.
+     *
+     * `mergeUserSetting` composes at the top level, which is enough when two
+     * writers touch different keys. Artifact storage is shaped
+     * `{ artifactId: { name: value } }`, so a top-level merge would still let
+     * two writes to the *same* artifact overwrite one another — the second
+     * replaces the whole bucket, including the key the first had just added.
+     *
+     * `jsonb_set` with the bucket concatenated onto itself narrows the race to
+     * the same artifact *and* the same key, where last-write-wins is the only
+     * meaningful answer anyway.
+     */
+    async mergeUserSettingIn(userId, key, entry, patch) {
+      const rows = await q(
+        `INSERT INTO user_settings (user_id, key, value)
+              VALUES ($1, $2, jsonb_build_object($3::text, $4::jsonb))
+         ON CONFLICT (user_id, key) DO UPDATE SET value = jsonb_set(
+                COALESCE(user_settings.value, '{}'::jsonb),
+                ARRAY[$3::text],
+                COALESCE(user_settings.value -> $3::text, '{}'::jsonb) || $4::jsonb,
+                true)
+      RETURNING value`,
+        [userId, key, String(entry), JSON.stringify(patch ?? {})],
+      );
+      return rows[0]?.value ?? null;
+    },
+    /**
      * Remove one top-level entry from a setting, leaving the rest alone.
      *
      * The counterpart to `mergeUserSetting`, and needed for the same reason: a
@@ -624,11 +714,25 @@ export function createPgStore(connectionString) {
      */
     async listChats(userId) {
       return q(
-        `SELECT c.id, c.title, c.model, c.pinned, c.created_at, c.updated_at,
-                (SELECT COUNT(*)::int FROM messages m WHERE m.chat_id = c.id) AS message_count
+        /**
+         * One pass over the messages index per chat, not two.
+         *
+         * This ran a correlated COUNT *and* a correlated EXISTS for every row,
+         * so the commonest query in the application — the sidebar, on every
+         * load — did up to four hundred index scans to return two hundred rows,
+         * and half of them only to answer a question the count had already
+         * answered.
+         *
+         * LATERAL runs the count once per chat and the outer WHERE reads its
+         * result, which is the same filter for one scan instead of two. Both
+         * are supported by messages_chat_seq_idx either way.
+         */
+        `SELECT c.id, c.title, c.model, c.pinned, c.created_at, c.updated_at, m.message_count
            FROM chats c
+           JOIN LATERAL (
+                SELECT COUNT(*)::int AS message_count FROM messages m WHERE m.chat_id = c.id
+           ) m ON m.message_count > 0
           WHERE c.user_id = $1
-            AND EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id)
           ORDER BY c.pinned DESC, c.updated_at DESC
           LIMIT 200`,
         [userId],
@@ -953,8 +1057,33 @@ export function createPgStore(connectionString) {
       // The attachments travel with the message: editing the words does not
       // detach the photograph they were about.
       const content = { ...found.content, text };
-      await q('UPDATE messages SET content = $1 WHERE id = $2', [JSON.stringify(content), messageId]);
-      await q('DELETE FROM messages WHERE chat_id = $1 AND seq > $2', [chatId, found.seq]);
+      /**
+       * The ownership test travels with the write, not just ahead of it.
+       *
+       * The SELECT above already proves this message belongs to this account,
+       * so nothing here was reachable across a tenancy boundary. But an UPDATE
+       * keyed on `id` alone and a DELETE keyed on `chat_id` alone are only safe
+       * because of a check several lines earlier, in a different statement —
+       * and the DELETE removes every later message in the conversation, which
+       * is the most destructive statement in this file.
+       *
+       * `messages` has no user_id of its own (see schema.sql), so the join to
+       * `chats` is how tenancy is expressed everywhere else in this module.
+       * Doing it here too makes each statement independently correct rather
+       * than correct-in-context.
+       */
+      await q(
+        `UPDATE messages SET content = $1
+          WHERE id = $2 AND chat_id = $3
+            AND EXISTS (SELECT 1 FROM chats c WHERE c.id = $3 AND c.user_id = $4)`,
+        [JSON.stringify(content), messageId, chatId, userId],
+      );
+      await q(
+        `DELETE FROM messages
+          WHERE chat_id = $1 AND seq > $2
+            AND EXISTS (SELECT 1 FROM chats c WHERE c.id = $1 AND c.user_id = $3)`,
+        [chatId, found.seq, userId],
+      );
       await this.touchChat(userId, chatId);
 
       return { id: messageId, role: 'user', ...content, seq: Number(found.seq) };
@@ -1105,9 +1234,13 @@ export function createPgStore(connectionString) {
         );
       }
 
+      // Scoped by account as well as attachment. The table carries user_id and
+      // every other query here uses it; leaving it off made this the one read
+      // whose correctness rested on the check twelve lines above rather than on
+      // the statement itself.
       const seen = await q(
-        'SELECT COALESCE(MAX(revision), 0)::int AS n FROM attachment_versions WHERE attachment_id = $1',
-        [id],
+        'SELECT COALESCE(MAX(revision), 0)::int AS n FROM attachment_versions WHERE attachment_id = $1 AND user_id = $2',
+        [id, userId],
       );
       // The first rewrite files two rows: what was there originally becomes
       // revision 1. Without that the history would start at the second draft
@@ -1527,7 +1660,11 @@ export function createPgStore(connectionString) {
       RETURNING id, name, mime, bytes, pages, chars, created_at`,
         [file.id, projectId, userId, file.name, file.mime, file.bytes, file.pages ?? null, file.text, file.text.length],
       );
-      await q('UPDATE projects SET updated_at = NOW() WHERE id = $1', [projectId]);
+      // `AND user_id` because this one had no ownership test at all — not in the
+      // statement and not above it. The INSERT before it carries user_id, so a
+      // caller reaching addProjectFile with someone else's projectId would file
+      // the row under its own account and then touch a project it does not own.
+      await q('UPDATE projects SET updated_at = NOW() WHERE id = $1 AND user_id = $2', [projectId, userId]);
       return rows[0];
     },
     async deleteProjectFile(userId, id) {
@@ -1885,14 +2022,28 @@ export function createPgStore(connectionString) {
      *
      * @returns the tasks that were stopped, so the caller can say so.
      */
-    async reapStalledTasks() {
+    /**
+     * @param userId scope it to one account, or omit for every account.
+     *
+     * The scoped form exists because this used to run only inside `sweep()`,
+     * and on a deployment `sweep()` runs only from the cron — which on Vercel's
+     * free tier is once a day. A task killed mid-run at nine in the morning sat
+     * marked `running` until the next afternoon, holding its lease, so it was
+     * neither retried nor reported. Opening the app already nudges that
+     * account's queue along; this lets the reap ride with it, and stays scoped
+     * because that route is explicit that a user request must never sweep
+     * everybody's queue.
+     */
+    async reapStalledTasks(userId = null) {
       const rows = await q(
         `UPDATE scheduled_tasks
             SET run_state = 'needs_attention',
                 enabled = FALSE,
                 last_status = 'stopped mid-run — it may or may not have finished, so it was not repeated'
           WHERE run_state = 'running' AND lease_until IS NOT NULL AND lease_until <= NOW()
+            AND ($1::text IS NULL OR user_id = $1)
       RETURNING id, user_id, title`,
+        [userId],
       );
       return rows;
     },
@@ -2331,9 +2482,6 @@ export function createPgStore(connectionString) {
       return rows[0] ?? null;
     },
 
-    async deleteSharedModel(id) {
-      await q('DELETE FROM shared_models WHERE id = $1', [id]);
-    },
 
     /** Drives the "is the library stale?" check and the freshness label. */
     async modelLibraryStatus() {
@@ -2592,9 +2740,24 @@ export function createPgStore(connectionString) {
      */
     async peekEnrolment(codeHash) {
       const rows = await q(
+        /**
+         * Newest first, and only one.
+         *
+         * This took `rows[0]` of an unordered result. Postgres is free to
+         * return matching rows in any order, so with two live rows sharing a
+         * code the installer could name either account — and the account name
+         * is what the person is being asked to confirm.
+         *
+         * Version 17 adds a partial unique index that stops two such rows
+         * existing. This ordering is the other half: it is what makes the
+         * answer deterministic on a database that has not migrated yet, and on
+         * claimed rows, which the index deliberately does not cover.
+         */
         `SELECT p.id, p.user_id, u.email
            FROM pairings p JOIN users u ON u.id = p.user_id
-          WHERE p.code_hash = $1 AND p.expires_at > NOW()`,
+          WHERE p.code_hash = $1 AND p.expires_at > NOW()
+          ORDER BY p.created_at DESC, p.id DESC
+          LIMIT 1`,
         [codeHash],
       );
       return rows[0] ?? null;
@@ -2605,8 +2768,25 @@ export function createPgStore(connectionString) {
      */
     async consumeEnrolment(codeHash) {
       const rows = await q(
+        /**
+         * Exactly the row `peekEnrolment` showed, and only that row.
+         *
+         * This deleted *every* live row matching the code and returned an
+         * arbitrary one. With two such rows that is two failures at once: the
+         * other pairing is destroyed, and the account enrolled may not be the
+         * account the person just confirmed — peek and consume were each free
+         * to pick a different row.
+         *
+         * The same ORDER BY as peek, so the two agree by construction. Still
+         * one statement, so two machines racing on the same code cannot both
+         * win: the row is gone with the first.
+         */
         `DELETE FROM pairings
-          WHERE code_hash = $1 AND expires_at > NOW()
+          WHERE id = (
+                SELECT id FROM pairings
+                 WHERE code_hash = $1 AND expires_at > NOW()
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1)
       RETURNING id, user_id`,
         [codeHash],
       );

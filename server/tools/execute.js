@@ -124,6 +124,25 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
  * thrown error would break the agent loop where the model could otherwise read
  * the failure and adjust.
  */
+/**
+ * Which of these a caller actually has to supply.
+ *
+ * Written down because it was not: the agent loop passes all seven and the
+ * workspace routes pass three, and both are correct — a person pressing Save in
+ * their own file browser has no chat to attribute the call to, nothing to
+ * abort it, no device hint and no deliverable to collect. Without the optional
+ * markers those calls read as missing four required arguments.
+ *
+ * @param {{
+ *   user: { id: string },
+ *   name: string,
+ *   input?: any,
+ *   chatId?: string|null,
+ *   signal?: AbortSignal,
+ *   deviceHint?: string|null,
+ *   deliverable?: any,
+ * }} args
+ */
 export async function executeTool({ user, name, input, chatId, signal, deviceHint, deliverable }) {
   const userId = user.id;
 

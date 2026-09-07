@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { t } from './i18n.js';
 import { escapeHtml } from './markdown.js';
 import { toast } from './render.js';
+import { humanSize } from './format.js';
 
 /**
  * The folder on the machine, from here.
@@ -21,14 +22,6 @@ import { toast } from './render.js';
 
 const $ = (id) => document.getElementById(id);
 
-const humanSize = (bytes) =>
-  bytes == null
-    ? ''
-    : bytes >= 1024 * 1024
-      ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
-      : bytes >= 1024
-        ? `${Math.round(bytes / 1024)} KB`
-        : `${bytes} B`;
 
 const ago = (ms) => {
   if (!ms) return '';

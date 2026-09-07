@@ -1,5 +1,6 @@
 import { renderMarkdown, escapeHtml } from './markdown.js';
 import { t } from './i18n.js';
+import { humanSize } from './format.js';
 
 /**
  * One repaint per frame, and a real fallback when there are no frames.
@@ -218,24 +219,32 @@ export function stepFamily(name) {
 /** A file's extension, upper-cased, as the stand-in for a thumbnail. */
 const extensionBadge = (name) => String(name || 'file').split('.').pop().slice(0, 4).toUpperCase();
 
-/** What kind of thing this is, in words, for the line under a filename. */
-const FILE_NOUN = {
-  docx: 'Word document',
-  doc: 'Word document',
-  xlsx: 'Excel workbook',
-  xls: 'Excel workbook',
-  pptx: 'PowerPoint deck',
-  ppt: 'PowerPoint deck',
-  pdf: 'PDF',
-  csv: 'Spreadsheet data',
-  md: 'Markdown',
-  html: 'Web page',
-  json: 'JSON',
-  txt: 'Text',
+/**
+ * What kind of thing this is, in words, for the line under a filename.
+ *
+ * Keys, resolved when the noun is needed rather than when this module loads.
+ * Calling `t()` in the object literal looked equivalent and was not: it runs
+ * once at import, before the language is settled, and freezes whatever was
+ * current — so switching language left every file still described in the old
+ * one. The names that are the same in both languages stay literals.
+ */
+const FILE_NOUN_KEY = {
+  docx: 'file.docx',
+  doc: 'file.docx',
+  xlsx: 'file.xlsx',
+  xls: 'file.xlsx',
+  pptx: 'file.pptx',
+  ppt: 'file.pptx',
+  csv: 'file.csv',
+  html: 'file.html',
+  txt: 'file.txt',
 };
 
-const humanSize = (bytes) =>
-  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+const FILE_NOUN_LITERAL = { pdf: 'PDF', md: 'Markdown', json: 'JSON' };
+
+const fileNoun = (extension) =>
+  FILE_NOUN_LITERAL[extension] || (FILE_NOUN_KEY[extension] ? t(FILE_NOUN_KEY[extension]) : '');
+
 
 /**
  * What was sent, above what was said about it.
@@ -364,8 +373,28 @@ export function widgetFrame(widget) {
 
   // A document rather than a fragment, so the picture is not styled by this page
   // and cannot reach out of its box.
+  /**
+   * Nothing in a widget may reach the network.
+   *
+   * The sandbox stops the markup *running* anything, and that was read as the
+   * whole story. It is not: a picture needs no script to phone home. The model
+   * writes this markup, and `<img src="https://somewhere/?id=…">` fires the
+   * moment the frame renders — confirming delivery and handing a third party an
+   * IP address, a user-agent and a timestamp, from an app whose entire promise
+   * is that your things stay on your machine. A model can be talked into
+   * emitting that by a page it read a moment earlier.
+   *
+   * A widget is a finished picture drawn from what the model already knows, so
+   * it has nothing legitimate to fetch. `default-src 'none'` says exactly that,
+   * and inline styles are re-permitted because the block below is one.
+   *
+   * In the document rather than as the frame's `csp` attribute: that attribute
+   * is not in Safari or Firefox, and this has to hold everywhere.
+   */
   frame.srcdoc =
     '<!doctype html><meta charset="utf-8">' +
+    '<meta http-equiv="Content-Security-Policy" ' +
+    "content=\"default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:\">" +
     '<style>' +
     'html,body{margin:0;padding:0;background:transparent;' +
     "font:13px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;color:#c8d3de}" +
@@ -390,7 +419,7 @@ export function fileCard(file) {
   const name = el('span', 'filecard__name');
   name.textContent = file.name;
   const meta = el('span', 'filecard__meta');
-  meta.textContent = [FILE_NOUN[extensionBadge(file.name).toLowerCase()], humanSize(file.bytes || 0)]
+  meta.textContent = [fileNoun(extensionBadge(file.name).toLowerCase()), humanSize(file.bytes || 0)]
     .filter(Boolean)
     .join(' · ');
   body.append(name, meta);

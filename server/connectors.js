@@ -27,6 +27,7 @@ export const SERVICES = {
     async verify(token) {
       const res = await fetch('https://api.github.com/user', {
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) throw new Error(`GitHub rejected that token (HTTP ${res.status}).`);
       const me = await res.json();
@@ -40,6 +41,7 @@ export const SERVICES = {
     async verify(token) {
       const res = await fetch('https://api.notion.com/v1/users/me', {
         headers: { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28' },
+        signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) throw new Error(`Notion rejected that token (HTTP ${res.status}).`);
       const me = await res.json();
@@ -54,6 +56,7 @@ export const SERVICES = {
       const res = await fetch('https://slack.com/api/auth.test', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(20_000),
       });
       const body = await res.json().catch(() => ({}));
       // Slack answers 200 with ok:false, so the status code alone proves nothing.

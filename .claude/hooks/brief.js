@@ -63,7 +63,7 @@ if (state) {
   if (state.verified) {
     lines.push('Gate: green and current — the full suite covers what is on disk.');
   } else if (state.fastOnly) {
-    lines.push('Gate: fast stamp only (lint + hooks). The 24 suites have not run against this tree.');
+    lines.push('Gate: fast stamp only (lint + hooks). The full suite has not run against this tree.');
   } else if (state.pending.length) {
     const names = state.pending.map((p) => p.file);
     lines.push(
