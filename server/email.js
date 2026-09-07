@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { log } from './util/trace.js';
 
 /**
  * Email delivery with three backends, chosen by whichever is configured:
@@ -69,7 +70,11 @@ export async function sendEmail({ to, subject, html, text }) {
   } catch (err) {
     // Never let a mail failure break the request that triggered it — the user
     // can always ask for another link.
-    console.error(`[ai-remote] email via ${backend} failed:`, err.message);
+    //
+    // Through the trace logger so the failure joins the request that caused it.
+    // A password reset that silently did not arrive is diagnosed by finding the
+    // one request it belonged to, and a bare console line has nothing to join on.
+    log.error(`email via ${backend} failed`, err, { backend });
     return { ok: false, backend, error: err.message };
   }
 }

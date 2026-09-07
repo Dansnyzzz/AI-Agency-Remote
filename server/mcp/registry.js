@@ -1,6 +1,7 @@
 import { getStore } from '../store/index.js';
 import { encryptSecret, decryptSecret } from '../crypto.js';
 import { connectMcp } from './client.js';
+import { log } from '../util/trace.js';
 
 /**
  * The MCP servers an account has plugged in.
@@ -52,24 +53,50 @@ export const slugify = (name) =>
     .replace(/^_+|_+$/g, '')
     .slice(0, 32) || 'server';
 
+/**
+ * A stored config, with its secrets brought back.
+ *
+ * Both catches used to swallow the failure and carry on with `{}`. That is the
+ * worst available answer: rotate ENCRYPTION_KEY, or restore a database next to a
+ * different .env, and the server would connect anyway — with no Authorization
+ * header, or with a child process missing the API key it needs. What comes back
+ * is then a 401 from somewhere else, or a server that starts and does nothing,
+ * and the actual cause is two layers away with nothing pointing at it.
+ *
+ * A credential that cannot be read is a broken server, and the caller already
+ * knows how to display one: `listMcpServers` catches per row and shows the
+ * message beside the server's name, and the agent's system prompt names broken
+ * servers so the model says "your Figma server is misconfigured" rather than
+ * "I cannot do that".
+ */
 function stored(row) {
   const config = { ...(row.config || {}) };
+
+  const decrypt = (cipher, what) => {
+    let plain;
+    try {
+      plain = decryptSecret(cipher);
+    } catch (err) {
+      throw new Error(
+        `Its stored ${what} could not be decrypted (${err?.message || 'unknown error'}). ` +
+          'That usually means ENCRYPTION_KEY has changed since the server was added — remove it and add it again.',
+      );
+    }
+    try {
+      return JSON.parse(plain || '{}');
+    } catch {
+      throw new Error(`Its stored ${what} could not be read back — remove the server and add it again.`);
+    }
+  };
+
   // Headers may carry a bearer token, so they are encrypted at rest like every
   // other credential in this app and decrypted only here.
   if (config.headersCipher) {
-    try {
-      config.headers = JSON.parse(decryptSecret(config.headersCipher) || '{}');
-    } catch {
-      config.headers = {};
-    }
+    config.headers = decrypt(config.headersCipher, 'headers');
     delete config.headersCipher;
   }
   if (config.envCipher) {
-    try {
-      config.env = JSON.parse(decryptSecret(config.envCipher) || '{}');
-    } catch {
-      config.env = {};
-    }
+    config.env = decrypt(config.envCipher, 'environment');
     delete config.envCipher;
   }
   return config;
@@ -102,16 +129,39 @@ export async function mcpTools(userId) {
   let rows;
   try {
     rows = await store.listMcpServers(userId);
-  } catch {
-    // The table may not exist yet on a database mid-migration. No MCP is a
-    // perfectly workable state; a crashed turn is not.
+  } catch (err) {
+    /**
+     * Carry on without MCP, but say so unless it is the expected case.
+     *
+     * The reasoning for swallowing this is sound — the table may not exist yet
+     * on a database mid-migration, and no MCP is a workable state where a
+     * crashed turn is not. The problem was that it swallowed *everything* the
+     * same way. A connection pool exhausted, a timeout, a permissions error:
+     * all of them silently removed every MCP tool from the turn, and the model
+     * then told the user it could not do things it could do perfectly well.
+     * Nothing anywhere named a cause.
+     *
+     * A missing table stays silent because it is expected and self-resolving.
+     * Anything else is logged, so "my Figma tools vanished" has somewhere to be
+     * looked up.
+     */
+    const missingTable = /relation .* does not exist|no such table|undefined_table/i.test(err?.message || '');
+    if (!missingTable) log.warn('mcp: could not list servers; continuing without MCP tools', { err: err?.message });
     return { tools: [], servers: [] };
   }
 
   const enabled = rows.filter((row) => row.enabled !== false);
   if (!enabled.length) return { tools: [], servers: [] };
 
-  if (!live.has(userId)) live.set(userId, new Map());
+  // Re-inserted on every use so the Map's insertion order is the LRU order.
+  if (live.has(userId)) {
+    const existing = live.get(userId);
+    live.delete(userId);
+    live.set(userId, existing);
+  } else {
+    live.set(userId, new Map());
+  }
+  evictIfCrowded(userId);
   const mine = live.get(userId);
 
   const tools = [];
@@ -217,6 +267,30 @@ export async function probeMcpServer(config) {
 export async function mcpStatus(userId) {
   const { servers } = await mcpTools(userId);
   return { servers };
+}
+
+/**
+ * How many accounts may hold live MCP connections at once.
+ *
+ * `live` is a process-global Map keyed by user, and nothing ever removed an
+ * entry except an explicit `forgetMcp`. On a long-lived local server that grows
+ * with every account that has ever used an MCP server and never shrinks —
+ * holding child processes and sockets for people who signed out days ago. An
+ * error entry is worse: it is remembered, retried after a minute, and then kept
+ * for ever whether or not anyone asks again.
+ *
+ * Least-recently-used, evicted properly rather than dropped: the entry's
+ * connections are closed on the way out, or eviction would leak the very
+ * processes it is meant to reclaim.
+ */
+const MAX_LIVE_ACCOUNTS = 24;
+
+function evictIfCrowded(keep) {
+  while (live.size > MAX_LIVE_ACCOUNTS) {
+    const oldest = live.keys().next().value;
+    if (oldest === undefined || oldest === keep) return;
+    forgetMcp(oldest);
+  }
 }
 
 /** Drop cached connections for an account, so the next turn reconnects. */

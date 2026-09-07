@@ -445,6 +445,104 @@ try {
   /* a leftover temp directory is not a test failure */
 }
 
+/* ── a heredoc body is data, not a command ─────────────────────── */
+
+{
+  // Every rule tests the raw command text, so a word inside something being
+  // *written to a file* read exactly like a word being *run*. During the audit
+  // that produced this, the guard blocked two read-only calls: a grep whose
+  // search pattern contained the words, and a `cat > file <<EOF` whose document
+  // body mentioned publishing. That is the failure this file's header warns
+  // about — a guard that blocks legitimate work gets switched off.
+  const { withoutHeredocs } = await import('./guard-bash.js');
+
+  // Assembled rather than written out, because this file is read by the guard
+  // when the suite itself is run from a shell.
+  const trigger = ['npm', 'publish'].join(' ');
+  const sees = (cmd) => /\bnpm\s+publish\b/.test(withoutHeredocs(cmd));
+
+  is(!sees(`cat > a.md <<'EOF'\n${trigger}\nEOF\necho done`), 'a heredoc body is not read as a command');
+  is(!sees(`cat <<-EOF\n${trigger}\nEOF`), 'and <<- is handled the same way');
+  is(sees(trigger), 'a real command is still caught');
+  is(sees(`cat > a.md <<'EOF'\nharmless\nEOF\n${trigger}`), 'and so is one after a heredoc');
+
+  // Quoted text is deliberately NOT stripped: `bash -c "..."` is a real command
+  // inside quotes, and removing quoted text would be a hole rather than a fix.
+  is(sees(`bash -c "${trigger}"`), 'a quoted command is still caught');
+  is(sees(`cat <<'EOF'\n${trigger}`), 'an unterminated heredoc is left alone');
+}
+
+/* ── the fingerprint must agree with isSource ───────────────────── */
+
+{
+  // dirtyHash hashed the whole of `git status --porcelain`, which contradicted
+  // isSource twenty lines below it — and isSource exists to say a README is not
+  // worth twenty-four suites. So note() honoured the exemption and dirtyHash did
+  // not: one line of documentation expired the stamp and demanded a full re-run,
+  // the exact behaviour the comment on NOT_SOURCE warns gets a gate switched off.
+  const gate = await import('./gate.js');
+
+  const baseline = gate.dirtyHash();
+
+  const doc = path.join(root, 'audit', `hooks-test-scratch-${process.pid}.md`);
+  fs.mkdirSync(path.dirname(doc), { recursive: true });
+  fs.writeFileSync(doc, '# written by hooks.test.mjs\n');
+  const afterDoc = gate.dirtyHash();
+
+  const src = path.join(root, `hooks-test-scratch-${process.pid}.js`);
+  fs.writeFileSync(src, '// written by hooks.test.mjs\n');
+  const afterSrc = gate.dirtyHash();
+
+  fs.rmSync(doc, { force: true });
+  fs.rmSync(src, { force: true });
+  const restored = gate.dirtyHash();
+
+  is(afterDoc === baseline, 'a new .md does not expire the stamp', `${baseline} -> ${afterDoc}`);
+  is(afterSrc !== baseline, 'a new .js does', `${baseline} -> ${afterSrc}`);
+  is(restored === baseline, 'and removing them puts the fingerprint back', `${baseline} -> ${restored}`);
+
+  // stamp() must be able to record a fingerprint taken before the suites ran.
+  // Taking it afterwards certified whatever happened to be on disk when the run
+  // finished — including anything edited while it was running, which for a run
+  // that takes minutes is a wide door.
+  is(gate.stamp.length >= 1, 'stamp() takes the fingerprint that was tested');
+
+  // A file outside the project is not project source. `startsWith('..')` is the
+  // right test on one filesystem and silently the wrong one across two: on
+  // Windows path.relative cannot express a different drive as `..`, so it
+  // returns an absolute path instead and the escape check waved it through.
+  // Found live — a scratch file under the system temp directory turned up in
+  // the pending list and verify-stop then refused a completion claim over it.
+  is(!gate.isSource('C:\\Users\\someone\\Temp\\scratch.mjs'), 'an absolute Windows path is not project source');
+  is(!gate.isSource('/tmp/scratch.mjs'), 'nor an absolute POSIX one');
+  is(!gate.isSource('../elsewhere/x.js'), 'nor one above the root');
+  is(gate.isSource('server/agent.js'), 'but a real relative path still is');
+}
+
+/* ── the gate must cover what CI blocks a merge on ─────────────── */
+
+{
+  // The gate stamped a tree green while typecheck was red, because STEPS.full
+  // never ran typecheck. That is the exact failure this directory exists to
+  // prevent: a stamp saying "verified" about a tree CI will reject.
+  //
+  // Pinned by reading the file rather than by running the gate — a real run is
+  // minutes long, and this check has to be cheap enough to stay in the suite.
+  const gateSource = fs.readFileSync(path.join(here, 'gate.js'), 'utf8');
+  const full = /full: \[([\s\S]*?)\],\r?\n\};/.exec(gateSource)?.[1] || '';
+
+  is(/'lint'/.test(full), 'the full gate runs lint');
+  is(/'typecheck'/.test(full), 'the full gate runs typecheck — the step it used to skip', full);
+  is(/'eval'/.test(full), 'the full gate runs the agent eval');
+  is(/'test:hooks'/.test(full), 'the full gate runs the hook suite');
+  is(/\['test'\]/.test(full), 'the full gate runs the suites');
+
+  // The fast gate is allowed to be small, but it must not quietly grow into the
+  // full one — verify-stop.js depends on the two meaning different things.
+  const fast = /fast: \[([\s\S]*?)\],/.exec(gateSource)?.[1] || '';
+  is(!/'typecheck'/.test(fast), 'and the fast gate stays fast');
+}
+
 console.log(
   failed === 0
     ? `\n[32mAll ${passed} hook checks passed.[0m\n`

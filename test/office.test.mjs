@@ -988,6 +988,60 @@ section('a document that cannot be read says so');
   check('and the model is told plainly, not handed nothing', /nothing could be read out of it/.test(parts[0].text), parts[0].text.slice(0, 80));
 }
 
+section('a hostile document cannot become markup');
+{
+  /**
+   * viewer.js puts `preview.html` into the page with innerHTML, same-origin and
+   * unsandboxed — the only preview branch that does not escape on the way in.
+   * Its comment says the document "may have arrived from a stranger", and the
+   * file asserts that everything reaching it was escaped by the server.
+   *
+   * That assertion was true and nothing checked it. An invariant one side
+   * relies on and neither side tests is one a refactor breaks silently, so it
+   * is pinned here — on the server, where the escaping actually happens.
+   */
+  const hostile = blocksToHtml(
+    [
+      { type: 'paragraph', runs: [{ text: '<script>alert(1)</script>' }] },
+      { type: 'heading', level: 2, runs: [{ text: '<img src=x onerror=alert(1)>' }] },
+      { type: 'quote', runs: [{ text: '" onmouseover="alert(1)' }] },
+      { type: 'code', text: '</code><script>alert(1)</script>' },
+      { type: 'paragraph', runs: [{ text: 'link', link: 'javascript:alert(1)' }] },
+      { type: 'paragraph', runs: [{ text: 'ok', link: 'https://example.com/"><script>x</script>' }] },
+      { type: 'table', header: true, rows: [[{ runs: [{ text: '<b>x</b>' }] }], [{ runs: [{ text: '</td><script>y</script>' }] }]] },
+      { type: 'image', alt: '" onerror="alert(1)', index: 0 },
+    ],
+    { mediaSrc: () => 'https://example.com/pic.png' },
+  );
+
+  // Only real tags are examined. Escaped text legitimately contains the string
+  // `onerror=`; what matters is that it is inside `&lt;…&gt;` and can never be
+  // parsed as an attribute. A regex over the whole string cannot tell those
+  // apart and would fail on correct output.
+  const tags = hostile.match(/<[a-z][^>]*>/gi) || [];
+
+  check('no script tag survives', !/<script/i.test(hostile), hostile.slice(0, 120));
+  // Quoted values are emptied before looking for a handler. `onerror=` inside
+  // an alt="" is text — the quotes around it are &quot; entities, so it cannot
+  // close the attribute — and a check that cannot tell that apart fails on
+  // output that is completely correct.
+  const bare = (tag) => tag.replace(/"[^"]*"/g, '""');
+  check(
+    'no rendered tag carries an event handler',
+    !tags.some((tag) => /\son\w+\s*=/i.test(bare(tag))),
+    tags.find((tag) => /\son\w+\s*=/i.test(bare(tag))),
+  );
+  check('a javascript: link is not rendered as a link', !/href="javascript:/i.test(hostile), hostile.slice(0, 160));
+  check(
+    'no tag was broken open by a quote in the data',
+    tags.every((tag) => (tag.match(/"/g) || []).length % 2 === 0),
+    tags.find((tag) => (tag.match(/"/g) || []).length % 2 !== 0),
+  );
+  // The markup it *is* allowed to produce must still be there, or the check
+  // above would pass on an empty string.
+  check('and the document still renders', /<h2>/.test(hostile) && /<table>/.test(hostile) && /<figure/.test(hostile));
+}
+
 server.close();
 await new Promise((r) => server.once('close', r));
 removeTemp(process.env.DATA_DIR);

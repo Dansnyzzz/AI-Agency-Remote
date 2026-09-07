@@ -1,4 +1,5 @@
 import { t, applyI18n } from './i18n.js';
+import { escapeHtml } from './markdown.js';
 
 /**
  * The five-step guide a new account is shown once.
@@ -40,14 +41,7 @@ export function createOnboarding({ providers, onOpenKeys, onPickModel, onTryProm
   /** Does this account already have a key anywhere? Step 2 turns on this. */
   const hasKey = () => Object.values(providers() || {}).some((p) => p?.configured);
 
-  const li = (key) => `<li>${escape(t(key))}</li>`;
-
-  /** Locale strings are ours, but they pass through `innerHTML`, so be strict. */
-  function escape(value) {
-    const div = document.createElement('div');
-    div.textContent = value;
-    return div.innerHTML;
-  }
+  const li = (key) => `<li>${escapeHtml(t(key))}</li>`;
 
   function render() {
     stepLabel.textContent = t('onb.step', { n: step, total: TOTAL });
@@ -56,21 +50,21 @@ export function createOnboarding({ providers, onOpenKeys, onPickModel, onTryProm
 
     if (step === 1) {
       body.innerHTML = `
-        <h3 class="onb__title">${escape(t('onb.1.title'))}</h3>
-        <p>${escape(t('onb.1.body'))}</p>
+        <h3 class="onb__title">${escapeHtml(t('onb.1.title'))}</h3>
+        <p>${escapeHtml(t('onb.1.body'))}</p>
         <ul class="onb__list">${li('onb.1.a')}${li('onb.1.b')}${li('onb.1.c')}</ul>
-        <p class="hint">${escape(t('onb.1.note'))}</p>`;
+        <p class="hint">${escapeHtml(t('onb.1.note'))}</p>`;
     } else if (step === 2) {
       const ready = hasKey();
       body.innerHTML = `
-        <h3 class="onb__title">${escape(t('onb.2.title'))}</h3>
-        <p>${escape(t('onb.2.body'))}</p>
-        <p class="onb__tip">${escape(t('onb.2.recommend'))}</p>
+        <h3 class="onb__title">${escapeHtml(t('onb.2.title'))}</h3>
+        <p>${escapeHtml(t('onb.2.body'))}</p>
+        <p class="onb__tip">${escapeHtml(t('onb.2.recommend'))}</p>
         <p class="onb__state ${ready ? 'is-done' : 'is-todo'}">
-          ${escape(t(ready ? 'onb.2.done' : 'onb.2.pending'))}
+          ${escapeHtml(t(ready ? 'onb.2.done' : 'onb.2.pending'))}
         </p>
-        ${ready ? '' : `<button class="btn btn--primary" id="onb-keys" type="button">${escape(t('onb.2.open'))}</button>`}
-        <p class="hint">${escape(t('onb.2.safety'))}</p>`;
+        ${ready ? '' : `<button class="btn btn--primary" id="onb-keys" type="button">${escapeHtml(t('onb.2.open'))}</button>`}
+        <p class="hint">${escapeHtml(t('onb.2.safety'))}</p>`;
       body.querySelector('#onb-keys')?.addEventListener('click', () => {
         // Deliberately leaves the guide open behind the sheet: pasting a key is a
         // detour, and coming back to step 3 is the point.
@@ -79,23 +73,23 @@ export function createOnboarding({ providers, onOpenKeys, onPickModel, onTryProm
     } else if (step === 3) {
       const free = isFree();
       body.innerHTML = `
-        <h3 class="onb__title">${escape(t('onb.3.title'))}</h3>
-        <p class="onb__state ${free ? 'is-free' : 'is-done'}">${escape(t(free ? 'onb.3.free' : 'onb.3.paid'))}</p>
-        ${free ? `<p class="onb__tip">${escape(t('onb.3.freeWarn'))}</p>` : ''}
-        <button class="btn btn--ghost" id="onb-model" type="button">${escape(t('onb.3.change'))}</button>
-        <p class="hint">${escape(t('onb.3.note'))}</p>`;
+        <h3 class="onb__title">${escapeHtml(t('onb.3.title'))}</h3>
+        <p class="onb__state ${free ? 'is-free' : 'is-done'}">${escapeHtml(t(free ? 'onb.3.free' : 'onb.3.paid'))}</p>
+        ${free ? `<p class="onb__tip">${escapeHtml(t('onb.3.freeWarn'))}</p>` : ''}
+        <button class="btn btn--ghost" id="onb-model" type="button">${escapeHtml(t('onb.3.change'))}</button>
+        <p class="hint">${escapeHtml(t('onb.3.note'))}</p>`;
       body.querySelector('#onb-model')?.addEventListener('click', () => onPickModel());
     } else if (step === 4) {
       const tries = ['onb.4.try1', 'onb.4.try2', 'onb.4.try3'];
       body.innerHTML = `
-        <h3 class="onb__title">${escape(t('onb.4.title'))}</h3>
-        <p>${escape(t('onb.4.body'))}</p>
+        <h3 class="onb__title">${escapeHtml(t('onb.4.title'))}</h3>
+        <p>${escapeHtml(t('onb.4.body'))}</p>
         <div class="onb__tries">
           ${tries
-            .map((key) => `<button class="onb__try" type="button" data-key="${key}">${escape(t(key))}</button>`)
+            .map((key) => `<button class="onb__try" type="button" data-key="${key}">${escapeHtml(t(key))}</button>`)
             .join('')}
         </div>
-        <p class="hint">${escape(t('onb.4.note'))}</p>`;
+        <p class="hint">${escapeHtml(t('onb.4.note'))}</p>`;
       for (const btn of body.querySelectorAll('.onb__try')) {
         btn.addEventListener('click', () => {
           // Closes the guide and hands the sentence to the composer. Pressing a
@@ -107,10 +101,10 @@ export function createOnboarding({ providers, onOpenKeys, onPickModel, onTryProm
       }
     } else {
       body.innerHTML = `
-        <h3 class="onb__title">${escape(t('onb.5.title'))}</h3>
-        <p>${escape(t('onb.5.body'))}</p>
+        <h3 class="onb__title">${escapeHtml(t('onb.5.title'))}</h3>
+        <p>${escapeHtml(t('onb.5.body'))}</p>
         <ul class="onb__list">${li('onb.5.guarded')}${li('onb.5.auto')}${li('onb.5.ask')}</ul>
-        <p class="onb__tip">${escape(t('onb.5.honest'))}</p>`;
+        <p class="onb__tip">${escapeHtml(t('onb.5.honest'))}</p>`;
     }
 
     applyI18n(dialog);

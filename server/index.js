@@ -84,4 +84,44 @@ createApp().listen(port, '0.0.0.0', () => {
   console.log('  Everyone signs in with their own email and password.');
   console.log('\n  Open a LAN address on your phone (same Wi-Fi), or run `npm run share`');
   console.log('  for a public HTTPS URL you can reach from anywhere.\n');
+
+  warnAboutUncappedSpend();
 });
+
+/**
+ * Three permissive defaults that are each reasonable and together are not.
+ *
+ * Signing up is open unless ALLOW_SIGNUP says otherwise. A provider key in the
+ * environment is a shared fallback that any account without its own key spends
+ * against. And DEFAULT_MONTHLY_TOKEN_LIMIT is blank in .env.example, so
+ * `defaultTokenLimit()` returns null and `checkQuota` lets every turn through.
+ *
+ * Each of those is documented where it is set. Nothing puts the three together
+ * and says what they mean when all of them are true, which is: anyone who finds
+ * this address can create an account and spend your money until you notice.
+ *
+ * No default limit is imposed here. Inventing one would start refusing turns on
+ * deployments that work today, and the right number depends on whose key it is.
+ * Saying it out loud at boot, once, is the honest version — it is the moment
+ * somebody is actually looking at the terminal.
+ */
+function warnAboutUncappedSpend() {
+  const SHARED_KEYS = [
+    'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY',
+    'OPENROUTER_API_KEY', 'ORCAROUTER_API_KEY',
+  ];
+  const shared = SHARED_KEYS.filter((name) => process.env[name]);
+  const capped = Number(process.env.DEFAULT_MONTHLY_TOKEN_LIMIT) > 0;
+  const signupOpen = !/^(0|false|no)$/i.test(process.env.ALLOW_SIGNUP ?? 'true');
+
+  if (!shared.length || capped || !signupOpen) return;
+
+  console.log('  ┌─ Anyone who reaches this address can spend your API credit.');
+  console.log(`  │  Shared key in the environment: ${shared.join(', ')}.`);
+  console.log('  │  Signing up is open, and no monthly token limit is set, so a new');
+  console.log('  │  account spends against that key with no ceiling.');
+  console.log('  │');
+  console.log('  │  Set ALLOW_SIGNUP=false once your own accounts exist, or');
+  console.log('  │  DEFAULT_MONTHLY_TOKEN_LIMIT to a number of tokens per account.');
+  console.log('  └─ Neither applies to anyone using their own key.\n');
+}

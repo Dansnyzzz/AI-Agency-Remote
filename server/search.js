@@ -22,6 +22,7 @@
  */
 
 import { untrusted } from './tools/untrusted.js';
+import { log } from './util/trace.js';
 
 const DEFAULT_ORDER = ['exa', 'duckduckgo', 'tavily', 'brave'];
 
@@ -213,9 +214,16 @@ async function searchDuckDuckGo(query, count) {
     const results = [];
     const link = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
     const snippet = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+    // Bounded by the same `count` the link loop below uses. It was unbounded,
+    // and ran to exhaustion over the whole response to collect snippets that
+    // were then mostly discarded — the loop below stops at `count`, so every
+    // one past that was parsed and thrown away. The page is a remote document,
+    // so its length is not this code's to assume.
     const snippets = [];
     let found;
-    while ((found = snippet.exec(html))) snippets.push(stripTags(found[1]));
+    while ((found = snippet.exec(html)) && snippets.length < count) {
+      snippets.push(stripTags(found[1]));
+    }
 
     let match;
     while ((match = link.exec(html)) && results.length < count) {
@@ -263,7 +271,7 @@ export function searchChain() {
  *   and why it did not answer, which is the difference between "there is
  *   nothing about this on the web" and "the search key expired last Tuesday".
  */
-export async function search(query, { count = 8 } = {}) {
+export async function search(query, { count = 8, userId = null } = {}) {
   const wanted = Math.min(Math.max(Number(count) || 8, 1), 20);
   const chain = searchChain();
 
@@ -281,7 +289,24 @@ export async function search(query, { count = 8 } = {}) {
     const engine = ENGINES[name];
     try {
       const results = await engine.run(query, wanted);
-      if (results.length) return { engine: engine.label, results, attempts };
+      if (results.length) {
+        /**
+         * Say who spent it.
+         *
+         * These keys are deployment-wide — one Exa or Tavily key serves every
+         * account — so unlike a model call there is no per-account quota this
+         * lands against and nothing anywhere recorded who searched. A single
+         * `deep_research` run makes up to six of these, so "the search bill
+         * went up" had no way of being traced to anybody.
+         *
+         * Attribution rather than enforcement: the operator can now see it in
+         * the log. Per-account search keys would be the fuller answer and are a
+         * product decision, not an audit fix — see .env.example, which now says
+         * plainly that these are shared.
+         */
+        log.info('search', { engine: engine.label, userId: userId || 'unattributed', results: results.length });
+        return { engine: engine.label, results, attempts };
+      }
       attempts.push({ engine: engine.label, error: 'no results' });
     } catch (err) {
       attempts.push({ engine: engine.label, error: err.message });

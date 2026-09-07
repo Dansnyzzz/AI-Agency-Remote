@@ -346,9 +346,12 @@ const PROBES = {
     });
   },
   async google(key, model, signal) {
-    return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${key}`, {
+    // In a header rather than `?key=`: a query string lands in proxy logs and
+    // error traces, and this probe exists to be run when something is already
+    // going wrong. Same call, same result — see embedGoogle in rag.js.
+    return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
         generationConfig: { maxOutputTokens: 1 },

@@ -413,7 +413,7 @@ section('connector token cannot be redirected');
 // ── keeping credentials out of long-lived notes ─────────────────────
 section('secret redaction');
 {
-  const gone = (text) => !redactSecrets(text).text.includes(text.match(/\S{20,}/)?.[0] ?? ' ');
+  const gone = (text) => !redactSecrets(text).text.includes(text.match(/\S{20,}/)?.[0] ?? '\u0000');
   const caught = (text) => redactSecrets(text).found.length > 0;
 
   check('an OpenRouter key is stripped', gone('key is sk-or-v1-' + 'a'.repeat(40)));
@@ -1408,6 +1408,79 @@ section('spend that never went through the agent loop is still counted');
   const roles = await store.usageByRole(ledgerUser.id, 30);
   const named = new Set(roles.map((r) => r.role));
   check('the usage page can say which part of the system spent it', named.has('compaction') && named.has('research.propose'), [...named].join(', '));
+}
+
+section('a write refuses on its own, not because of a check above it');
+{
+  // These statements were keyed on id alone, with ownership proven by a SELECT
+  // several lines earlier. Nothing was reachable across accounts — the check
+  // was there and it was correct — but the safety lived at the call site rather
+  // than in the statement, and one of them deletes every later message in a
+  // conversation. Driving the store directly with the wrong account is what
+  // tells the two apart.
+  // Fresh accounts: the ones created at the top of this file are deleted by the
+  // cascade test above, and a foreign key failure here would look like a bug in
+  // what is being tested rather than in the fixture.
+  const owner = await store.createUser({
+    id: 'u-owner', email: 'owner@example.com', passwordHash: 'x', name: 'Owner', role: 'user',
+  });
+  const other = await store.createUser({
+    id: 'u-other', email: 'other@example.com', passwordHash: 'x', name: 'Other', role: 'user',
+  });
+
+  const chat = await store.createChat(owner.id, { id: 'c-scope', title: 'Owner', model: 'm' });
+  await store.appendMessage(owner.id, chat.id, { id: 'm-1', role: 'user', text: 'first' });
+  await store.appendMessage(owner.id, chat.id, { id: 'm-2', role: 'assistant', text: 'second' });
+
+  const stolen = await store.editUserMessage(other.id, chat.id, 'm-1', 'rewritten by the other account');
+  check('another account cannot edit a message', stolen === null, JSON.stringify(stolen));
+
+  const after = await store.listMessages(owner.id, chat.id);
+  check('the message is untouched', after.find((m) => m.id === 'm-1')?.text === 'first');
+  check('and nothing after it was deleted', after.length === 2, `${after.length} messages`);
+
+  // The owner can still do it, or the guard would be a wall rather than a fence.
+  const mine = await store.editUserMessage(owner.id, chat.id, 'm-1', 'rewritten by the owner');
+  check('the owner can still edit', mine?.text === 'rewritten by the owner', JSON.stringify(mine));
+  const trimmed = await store.listMessages(owner.id, chat.id);
+  check('and editing still rewinds the conversation', trimmed.length === 1, `${trimmed.length} messages`);
+}
+
+section('concurrent writes to one setting compose instead of racing');
+{
+  // Artifact storage was read-all, mutate, setUserSetting — the read-modify-write
+  // that mergeUserSetting exists to prevent, and whose own doc comment describes
+  // this bug being fixed for memory_append: two writes in one step both read the
+  // same object, the second erased the first, and *both* reported success.
+  //
+  // The agent runs up to four tool calls at once, so a page storing two values
+  // is the ordinary case rather than an unlucky one.
+  const racer = await store.createUser({
+    id: 'u-race', email: 'race@example.com', passwordHash: 'x', name: 'Race', role: 'user',
+  });
+
+  // Two artifacts writing at the same moment must not collide at all.
+  await Promise.all([
+    store.mergeUserSettingIn(racer.id, 'artifactStorage', 'art-one', { alpha: '"1"' }),
+    store.mergeUserSettingIn(racer.id, 'artifactStorage', 'art-two', { beta: '"2"' }),
+  ]);
+  const both = await store.getUserSetting(racer.id, 'artifactStorage');
+  check('two artifacts both survive', !!both?.['art-one']?.alpha && !!both?.['art-two']?.beta, JSON.stringify(both));
+
+  // Two different keys inside one artifact must also both survive — this is the
+  // case a top-level merge would still have lost.
+  await Promise.all([
+    store.mergeUserSettingIn(racer.id, 'artifactStorage', 'art-one', { gamma: '"3"' }),
+    store.mergeUserSettingIn(racer.id, 'artifactStorage', 'art-one', { delta: '"4"' }),
+  ]);
+  const inner = await store.getUserSetting(racer.id, 'artifactStorage');
+  check(
+    'and two keys inside one artifact do too',
+    inner?.['art-one']?.gamma === '"3"' && inner?.['art-one']?.delta === '"4"',
+    JSON.stringify(inner?.['art-one']),
+  );
+  check('without losing what was already there', inner?.['art-one']?.alpha === '"1"', JSON.stringify(inner?.['art-one']));
+  check('or the other artifact', inner?.['art-two']?.beta === '"2"', JSON.stringify(inner?.['art-two']));
 }
 
 console.log(

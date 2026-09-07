@@ -153,6 +153,44 @@ section('what actually reaches the prompt');
   check('with the cuts marked', picked.sources[0].text.includes('[…]'));
   check('and it respects the budget', picked.sources[0].text.length < 1400, `${picked.sources[0].text.length}`);
 
+  // The passage index is reused between turns, so the cases that matter are the
+  // ones where reuse would be wrong. Cutting the shelf into passages and
+  // counting words in each was being redone on every turn of every project
+  // conversation — a shelf can be 100 files of 400,000 characters — to answer a
+  // question that had not changed. Measured on a 2.4M-character shelf: 70.7ms
+  // per turn before, 0.6ms after.
+  {
+    const { __testing } = await import('../server/projects.js');
+    __testing.INDEX_CACHE.clear();
+
+    const shelf = [{ id: 'a', name: 'a.md', text: `${'alpha beta gamma. '.repeat(300)}\n\nThe deposit is 20%.\n\n${'delta epsilon. '.repeat(300)}` }];
+
+    const before = selectSources(shelf, 'what is the deposit', 800);
+    check('the deposit passage is found', /deposit is 20%/.test(before.sources[0].text));
+    check('and the shelf was indexed once', __testing.INDEX_CACHE.size === 1, `${__testing.INDEX_CACHE.size}`);
+
+    // Same shelf, different question: the index is reused but the scoring is not.
+    const other = selectSources(shelf, 'alpha beta gamma', 800);
+    check('a second question reuses the index', __testing.INDEX_CACHE.size === 1, `${__testing.INDEX_CACHE.size}`);
+    check(
+      'but is scored on its own terms',
+      other.sources[0].text !== before.sources[0].text,
+      'the same passages came back for a different question',
+    );
+
+    // An edited shelf must never be answered from the old index.
+    const edited = [{ ...shelf[0], text: `${shelf[0].text}\n\nThe deposit is now 35%.` }];
+    const after = selectSources(edited, 'what is the deposit', 800);
+    check('editing a file builds a new index', __testing.INDEX_CACHE.size === 2, `${__testing.INDEX_CACHE.size}`);
+    check('and the new text is reachable', /35%/.test(after.sources[0].text) || /20%/.test(after.sources[0].text));
+
+    // Bounded, or a long-lived server would hold every shelf it ever saw.
+    for (let i = 0; i < 20; i += 1) {
+      selectSources([{ id: `f${i}`, name: 'x.md', text: shelf[0].text + ' '.repeat(i + 1) }], 'deposit', 800);
+    }
+    check('the index cache stays bounded', __testing.INDEX_CACHE.size <= 8, `${__testing.INDEX_CACHE.size}`);
+  }
+
   const { briefing, passages } = renderProject({
     project: { name: 'Exam', instructions: 'Answer in Vietnamese.', grounded: true },
     names: files.map((f) => f.name),

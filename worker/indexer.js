@@ -31,12 +31,48 @@ const SKIP_DIRS = new Set([
   '$RECYCLE.BIN', 'System Volume Information', 'AppData',
 ]);
 
+/**
+ * Files that are never indexed, whatever their extension says.
+ *
+ * `index_folder` reads a folder chosen by the model and ships the *contents* of
+ * everything it can read to an embedding API, where it is then retrievable by
+ * `search_docs` — so a credential that lands in here leaves the machine and
+ * keeps coming back. Pointed at a project root, that is the whole of .env.
+ *
+ * A bare `.env` was in fact already skipped, but only by accident:
+ * `path.extname('.env')` is `''`, not `.env`, so it never matched the extension
+ * set that listed it. `.env` in that list was matching `config.env` and
+ * `settings.env` instead — real files that hold real keys. Protection that
+ * works by accident is protection that stops working when somebody fixes the
+ * accident, so it is written down here by name.
+ *
+ * Matched on the whole filename, lower-cased, plus a prefix rule for the
+ * `.env.production.local` family.
+ */
+const NEVER_INDEX = new Set([
+  '.env', '.envrc', '.npmrc', '.pypirc', '.netrc', '_netrc', '.pgpass',
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', '.htpasswd',
+  'credentials', 'secrets.json', 'secrets.yaml', 'secrets.yml',
+]);
+
+/**
+ * True for `.env`, `.env.local`, `.env.production.local`, `config.env`, and so on.
+ * Exported for the suite — a rule about credentials is worth pinning by name.
+ */
+export function isSecretFile(file) {
+  const name = path.basename(file).toLowerCase();
+  if (NEVER_INDEX.has(name)) return true;
+  if (name.startsWith('.env.') || name.endsWith('.env')) return true;
+  if (name.endsWith('.pem') || name.endsWith('.key') || name.endsWith('.pfx') || name.endsWith('.p12')) return true;
+  return false;
+}
+
 /** Extensions worth reading. Anything else is skipped in silence. */
 const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.markdown', '.rst', '.org', '.tex', '.log',
   '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.rb', '.go', '.rs', '.java', '.kt',
   '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.swift', '.sh', '.ps1', '.sql', '.r', '.lua',
-  '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.env', '.csv', '.tsv',
+  '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.csv', '.tsv',
   '.html', '.htm', '.xml', '.svg', '.css', '.scss', '.vue', '.svelte',
 ]);
 
@@ -86,6 +122,10 @@ const OFFICE_EXTENSIONS = new Set(['.docx', '.docm', '.xlsx', '.xlsm', '.pptx', 
  * assistant's "I searched your documents" a lie.
  */
 async function extract(file) {
+  // Before anything is read, not after: the point is that these bytes never
+  // reach memory, let alone an embedding request.
+  if (isSecretFile(file)) return null;
+
   const ext = path.extname(file).toLowerCase();
 
   if (ext === '.pdf') {

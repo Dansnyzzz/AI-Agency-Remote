@@ -108,9 +108,36 @@ export const branch = () => git(['rev-parse', '--abbrev-ref', 'HEAD']);
  * more honest than hashing file contents: it moves the moment anything in the
  * tree does, which is precisely when a stamp stops meaning anything.
  */
+/**
+ * A fingerprint of the *source* that is uncommitted, ignoring everything a test
+ * run does not depend on.
+ *
+ * This used to hash the whole of `git status --porcelain`, which quietly
+ * contradicted `isSource` twenty lines below — and `isSource` exists precisely
+ * to say that a README is not worth twenty-four suites. So `note()` honoured the
+ * exemption and this did not: writing one line of documentation expired the
+ * stamp and demanded a full re-run, which is the exact behaviour the comment on
+ * NOT_SOURCE warns turns a gate into something people switch off.
+ *
+ * The path is taken from each porcelain line after the two status characters,
+ * with the rename arrow handled — `R  old -> new` is a change to `new`.
+ */
 export function dirtyHash() {
-  const porcelain = git(['status', '--porcelain']);
-  return crypto.createHash('sha256').update(porcelain).digest('hex').slice(0, 16);
+  const relevant = git(['status', '--porcelain'])
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const entry = line.slice(2).trim();
+      const target = entry.includes(' -> ') ? entry.split(' -> ').pop() : entry;
+      // Quoted when the name has spaces or non-ASCII; the quotes are not part
+      // of the path and would defeat the extension test.
+      return isSource(target.replace(/^"(.*)"$/, '$1'));
+    })
+    .sort()
+    .join('\n');
+
+  return crypto.createHash('sha256').update(relevant).digest('hex').slice(0, 16);
 }
 
 /**
@@ -127,7 +154,25 @@ const NOT_SOURCE = [
 ];
 
 export function isSource(rel) {
-  if (!rel || rel.startsWith('..')) return false;
+  if (!rel) return false;
+
+  /**
+   * Outside the project is not project source — including on another drive.
+   *
+   * `startsWith('..')` is the right test on one filesystem, and silently the
+   * wrong one on Windows across two. `path.relative('D:\\AI remote', 'C:\\Users
+   * \\…\\scratch.mjs')` cannot express the hop as `..`, so it returns the
+   * absolute `C:\Users\…` instead — which does not start with `..`, so this
+   * said yes.
+   *
+   * The consequence was live in this repository: editing a scratch file under
+   * the system temp directory put it in the pending list, and `verify-stop`
+   * then refused a completion claim over an "unproven" file the suites could
+   * never prove, because it is not part of the project. A guard that cries wolf
+   * is the guard people switch off — the same argument NOT_SOURCE is built on.
+   */
+  if (path.isAbsolute(rel) || rel.startsWith('..')) return false;
+
   return !NOT_SOURCE.some((re) => re.test(rel));
 }
 
@@ -152,10 +197,22 @@ export function note(file) {
   return rel;
 }
 
-/** Write the green stamp. Only ever called after a real, successful run. */
-export function stamp(scope) {
+/**
+ * Write the green stamp. Only ever called after a real, successful run.
+ *
+ * `tested` is the fingerprint taken **before** the suites started, and passing it
+ * is what makes the stamp honest. This used to call `dirtyHash()` here, at the
+ * end — so a file edited while the suites were running was recorded as covered
+ * by a run that never saw it. The window is however long the gate takes, which
+ * is minutes, and an agent working alongside it will happily fill that.
+ *
+ * Recording what was tested rather than what is on disk now means `status()`
+ * compares the two and reports "no longer matches this tree", which is exactly
+ * right: the run was real, it just does not describe the tree any more.
+ */
+export function stamp(scope, tested = dirtyHash()) {
   const ledger = readLedger();
-  ledger.lastGreen = { at: new Date().toISOString(), head: head(), dirty: dirtyHash(), scope };
+  ledger.lastGreen = { at: new Date().toISOString(), head: head(), dirty: tested, scope };
   ledger.pending = [];
   writeLedger(ledger);
   return ledger.lastGreen;
@@ -191,7 +248,26 @@ export function status() {
 
 /* ---------------------------------------------------------------- CLI ----- */
 
-/** The gate itself, in the order that fails cheapest first. */
+/**
+ * The gate itself, in the order that fails cheapest first.
+ *
+ * `full` has to match what CI blocks a merge on, or the stamp says something CI
+ * will later contradict. It did not: it ran lint, the suites and the hook tests,
+ * and skipped type-checking entirely — so a tree with seven type errors CI would
+ * reject was stamped `verified: true`, which is the one thing this file exists to
+ * make impossible. `npm run check` had always included it; the gate had not.
+ *
+ * `eval` is here for the same reason and costs seconds: it is deterministic, needs
+ * no key, and asserts that the agent is still *able* to choose well — that the
+ * right tool is on offer, that the rule telling it to stop at a sign-in page is
+ * still in the prompt.
+ *
+ * Two of CI's steps are deliberately still out: `test:ui` and `test:sandbox` both
+ * need a real browser and skip themselves without one, and a step that silently
+ * passes by not running is worse here than a step that is honestly absent. CI
+ * installs Chromium explicitly and runs them there. That gap is the reason the
+ * green stamp says `full` rather than `everything`.
+ */
 const STEPS = {
   fast: [
     ['run', 'lint'],
@@ -199,14 +275,21 @@ const STEPS = {
   ],
   full: [
     ['run', 'lint'],
-    ['test'],
     ['run', 'test:hooks'],
+    ['run', 'eval'],
+    ['run', 'typecheck'],
+    ['test'],
   ],
 };
 
 function runGate(fast) {
   const scope = fast ? 'fast' : 'full';
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
+  // What is about to be tested, captured before a single suite runs. See
+  // `stamp`: recording this at the end instead would certify whatever happened
+  // to be on disk when the run finished, edits included.
+  const tested = dirtyHash();
 
   for (const args of STEPS[scope]) {
     process.stdout.write(`\n[1m› npm ${args.join(' ')}[0m\n`);
@@ -227,7 +310,7 @@ function runGate(fast) {
     }
   }
 
-  const green = stamp(scope);
+  const green = stamp(scope, tested);
   process.stdout.write(
     `\n[32mGate green (${scope}).[0m Stamped at ${green.at} on ${green.head.slice(0, 7) || 'no commit'}.\n` +
       (fast

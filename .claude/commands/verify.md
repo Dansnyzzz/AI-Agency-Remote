@@ -3,16 +3,52 @@ description: Run the full Definition of Done gate from CLAUDE.md §5 and report 
 allowed-tools: Bash, PowerShell, Read, Grep, Glob
 ---
 
+## If you are about to claim something got better, measure it first
+
+A performance or cost change needs a number from *before* it, or "faster" is an
+opinion. This repository froze two numbers and no more: `.typecheck-baseline.json`
+and the thresholds in `.c8rc.json`. There is no recorded latency, token or
+throughput baseline, so anything outside those two has to be measured on the spot
+— and measured before the change, because afterwards is too late.
+
+The cheapest honest version, and enough for almost everything here:
+
+```
+node -e "const t=process.hrtime.bigint(); /* the thing */ ; console.log(Number(process.hrtime.bigint()-t)/1e6,'ms')"
+```
+
+Run it against the old code, keep the number, run it against the new code, and
+put both in the commit. A ratio with no absolute figures behind it is not a
+measurement. If it cannot be measured, say that instead of implying it improved.
+
+---
+
 Run the quality gate. **Run the commands — do not predict their output.**
 
 ```
-npm run lint
-npm test
-npm run test:hooks
+npm run gate
 ```
 
-`npm test` runs 24 suites sequentially and takes a few minutes. Let it finish.
-`npm run check` does all three in one go if you prefer.
+That is lint, the hook suite, the agent eval, type-check, then the 31 suites —
+in that order, cheapest failure first — and it stamps the evidence ledger only
+if every one of them passes. It takes a few minutes. Let it finish.
+
+If you would rather run them by hand, the same set is:
+
+```
+npm run lint
+npm run test:hooks
+npm run eval
+npm run typecheck
+npm test
+```
+
+`npm run check` runs those five plus `test:sandbox`.
+
+**Type-checking is not optional here.** It used to be missing from both this
+command and `npm run gate`, and a tree with seven type errors that CI rejected
+was stamped green locally. It is a ratchet against `.typecheck-baseline.json`:
+it fails only when the count goes *up*, so there is never a reason to skip it.
 
 Two suites are not in `npm test` and are worth knowing about:
 
@@ -25,6 +61,7 @@ Two suites are not in `npm test` and are worth knowing about:
 Then walk CLAUDE.md §5 item by item and report against **what actually ran**:
 
 - [ ] lint clean
+- [ ] type-check within baseline — say the number, and say if the baseline moved
 - [ ] all suites pass — say how many, and name any that were skipped
 - [ ] diff read line by line: no dead code, no debug `console.log`, no unused vars
 - [ ] no secret or API key added to tracked files (`.env` is gitignored; `.env.example` must stay valueless)

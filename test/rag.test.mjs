@@ -71,7 +71,7 @@ globalThis.fetch = async (url, options) => {
 const { initStore, getStore } = await import('../server/store/index.js');
 await initStore();
 const { ingestBatch, searchDocs, listSources, forgetSource, knownStamps } = await import('../server/rag.js');
-const { chunk } = await import('../worker/indexer.js');
+const { chunk, isSecretFile } = await import('../worker/indexer.js');
 
 const store = getStore();
 const alice = await store.createUser({ id: 'u-alice', email: 'alice@example.com', passwordHash: 'x', role: 'admin' });
@@ -423,6 +423,100 @@ section('hybrid reranking');
     lexicalScore(['deposit'], 'the deposit is 10%') >
       lexicalScore(['deposit'], `the deposit is 10%. ${'padding text. '.repeat(400)}`),
   );
+}
+
+// ── credentials do not travel in a URL ────────────────────────────────
+
+section('no API key is put in a query string');
+{
+  // A query string is the part of a request that ends up where nobody chose:
+  // proxy logs, error traces, an exception quoting the URL it failed on.
+  // Google documents `?key=…` and also accepts `x-goog-api-key`, so there is no
+  // reason to take the first.
+  const files = ['../server/rag.js', '../server/models.js'];
+  for (const rel of files) {
+    const src = fs.readFileSync(new URL(rel, import.meta.url), 'utf8');
+    // Comments are allowed to mention it; code is not. Strip line comments and
+    // block comments before looking.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    check(`${rel.split('/').pop()} sends no key in a URL`, !/\?key=|&key=/.test(code), code.match(/.{0,40}[?&]key=.{0,30}/)?.[0]);
+  }
+}
+
+// ── the query-vector cache ────────────────────────────────────────────
+
+section('a query is embedded once, not once per search');
+{
+  const { __testing } = await import('../server/rag.js');
+  const { queryVector, QUERY_VECTORS, QUERY_CACHE_TTL_MS, QUERY_CACHE_MAX } = __testing;
+
+  QUERY_VECTORS.clear();
+  let calls = 0;
+  const stub = async () => { calls += 1; return Float32Array.from([1, 0]); };
+  const openai = { provider: 'openai', model: 'text-embedding-3-small' };
+
+  // Every search embedded its query over the network — a round trip with a
+  // 60-second ceiling before a single row is read — and the agent asks the same
+  // question more than once often: a retry after a narrow result, a sub-agent
+  // covering the same ground, someone rephrasing one word.
+  await queryVector('u1', 'the deposit', openai, stub);
+  await queryVector('u1', 'the deposit', openai, stub);
+  await queryVector('u1', 'the deposit', openai, stub);
+  check('the same question embeds once', calls === 1, `${calls} calls`);
+
+  await queryVector('u1', 'the refund', openai, stub);
+  check('a different question embeds again', calls === 2, `${calls} calls`);
+
+  // Vectors from two models are not comparable — the file says so at the top —
+  // so the model has to be part of the key or a change of embedder would serve
+  // answers from the wrong space.
+  await queryVector('u1', 'the deposit', { provider: 'google', model: 'gemini-embedding-001' }, stub);
+  check('another model is a different vector, not a cache hit', calls === 3, `${calls} calls`);
+
+  // Stale entries must not be served, or a re-index would be invisible.
+  const key = 'openai:text-embedding-3-small:the deposit';
+  QUERY_VECTORS.set(key, { vector: Float32Array.from([9, 9]), at: Date.now() - QUERY_CACHE_TTL_MS - 1 });
+  await queryVector('u1', 'the deposit', openai, stub);
+  check('an entry past its TTL is re-embedded', calls === 4, `${calls} calls`);
+
+  // Bounded, or a long-lived process holds every question ever asked.
+  for (let i = 0; i < QUERY_CACHE_MAX + 40; i += 1) {
+    await queryVector('u1', `q${i}`, openai, stub);
+  }
+  check('the cache stays bounded', QUERY_VECTORS.size <= QUERY_CACHE_MAX, String(QUERY_VECTORS.size));
+}
+
+// ── credentials are never indexed ─────────────────────────────────────
+
+section('secrets are skipped before they are read');
+{
+  // index_folder reads a folder the model chose and ships the contents to an
+  // embedding API, where search_docs can retrieve it afterwards. Pointed at a
+  // project root, that used to include env files.
+  //
+  // A bare `.env` was in fact already skipped — but only because
+  // path.extname('.env') is '' rather than '.env', so it never matched the
+  // extension list that named it. What `.env` in that list actually matched was
+  // `config.env` and `settings.env`, which hold the same things. Protection by
+  // accident stops working the day somebody fixes the accident, so the rule is
+  // written down by name and pinned here.
+  for (const f of [
+    '.env', '.env.local', '.env.production.local', 'worker/.env',
+    'config.env', 'settings.env', 'a/b/.env.vercel-paste.local',
+    'id_rsa', 'id_ed25519', 'server.key', 'cert.pem', 'store.pfx',
+    '.npmrc', '.netrc', '.pgpass', 'secrets.json',
+  ]) {
+    check(`skipped: ${f}`, isSecretFile(f) === true);
+  }
+
+  // The other half matters as much: a filter that skips everything would make
+  // "I searched your documents" a lie in the other direction.
+  for (const f of [
+    'README.md', 'app.js', 'notes.txt', 'data.csv', 'package.json', 'schema.sql',
+    'environment.md', 'envelope.md',
+  ]) {
+    check(`still indexed: ${f}`, isSecretFile(f) === false);
+  }
 }
 
 await store.close?.();

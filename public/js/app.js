@@ -1,6 +1,6 @@
 import { api, runAgent } from './api.js';
 import { follow } from './mirror.js';
-import { wireCopyButtons } from './markdown.js';
+import { wireCopyButtons, escapeHtml } from './markdown.js';
 import {
   assistantMessage,
   userMessage,
@@ -20,6 +20,7 @@ import { createPages } from './pages.js';
 import { createProjectPage } from './project-page.js';
 import { t, applyI18n, adoptLanguage, setLanguage, currentLanguage, LANGUAGES } from './i18n.js';
 import { createOnboarding } from './onboarding.js';
+import { humanSize, readAsBase64 } from './format.js';
 
 // Before anything is drawn. The language is guessed from storage and the browser
 // at module load, so the first paint is already right rather than a page of
@@ -199,10 +200,10 @@ const EFFORT_IDS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const efforts = () => EFFORT_IDS.map((id) => [id, t(`effort.${id}`)]);
 
 const SUGGESTIONS = [
-  'Show me what is in my workspace and summarise the project.',
-  'Search the web for what changed in this library recently.',
-  'Find every TODO in the codebase and group them by file.',
-  'Run the test suite and explain any failures.',
+  t('suggest.workspace'),
+  t('suggest.library'),
+  t('suggest.todos'),
+  t('suggest.tests'),
 ];
 
 /* ── boot ──────────────────────────────────────────────────────── */
@@ -276,9 +277,11 @@ function rememberEmail(email) {
  * than one switch for the form: revealing the box you are typing in should not
  * also uncover a different one.
  */
-for (const button of document.querySelectorAll('[data-reveal]')) {
+for (const button of /** @type {NodeListOf<HTMLElement>} */ (
+  document.querySelectorAll('[data-reveal]')
+)) {
   button.addEventListener('click', () => {
-    const input = $(button.dataset.reveal);
+    const input = /** @type {HTMLInputElement} */ ($(button.dataset.reveal));
     setRevealed(input, input.type === 'password');
     input.focus();
     // Put the caret back at the end; switching type sends it to the front in
@@ -288,12 +291,16 @@ for (const button of document.querySelectorAll('[data-reveal]')) {
   });
 }
 
+/**
+ * @param {HTMLInputElement} input  the password box this eye belongs to
+ * @param {boolean} revealed
+ */
 function setRevealed(input, revealed) {
-  const button = document.querySelector(`[data-reveal="${input.id}"]`);
+  const button = /** @type {HTMLElement} */ (document.querySelector(`[data-reveal="${input.id}"]`));
   input.type = revealed ? 'text' : 'password';
   button.setAttribute('aria-pressed', String(revealed));
-  button.setAttribute('aria-label', revealed ? 'Hide password' : 'Show password');
-  button.title = revealed ? 'Hide password' : 'Show password';
+  button.setAttribute('aria-label', revealed ? t('gate.hidePassword') : t('gate.showPassword'));
+  button.title = revealed ? t('gate.hidePassword') : t('gate.showPassword');
 }
 
 function showGate() {
@@ -326,14 +333,14 @@ function renderGateMode() {
   const reset = gateMode === 'reset';
 
   $('gate-sub').textContent = reset
-    ? 'Enter the code from your email and choose a new password.'
+    ? t('gate.sub.reset')
     : forgot
-      ? 'Enter your email and we will send you a reset code.'
+      ? t('gate.sub.forgot')
       : needsSetup
-        ? 'Create the first account — it becomes the administrator.'
+        ? t('gate.sub.first')
         : signup
-          ? 'Create your account.'
-          : 'Sign in to continue.';
+          ? t('gate.sub.signup')
+          : t('gate.sub.signin');
 
   // Reset needs the email (to find the account), the code, and a new password.
   // Following the emailed link fills the token in instead, so the code box hides.
@@ -356,11 +363,11 @@ function renderGateMode() {
   setRevealed($('gate-newpassword'), false);
 
   $('gate-submit').textContent = reset
-    ? 'Set new password'
+    ? t('gate.submit.reset')
     : forgot
-      ? 'Send reset link'
+      ? t('gate.submit.forgot')
       : signup
-        ? 'Create account'
+        ? t('gate.submit.signup')
         : 'Sign in';
 
   // Always offer the other direction. Someone whose session expired lands here
@@ -370,7 +377,7 @@ function renderGateMode() {
   const canSignUp = session.signupOpen !== false || session.needsSetup;
   $('gate-switch').hidden = reset || (!signup && !forgot && !canSignUp);
   $('gate-switch').textContent =
-    signup || forgot ? 'Already have an account? Sign in' : 'Need an account? Sign up';
+    signup || forgot ? t('gate.switch.toSignin') : t('gate.switch.toSignup');
   $('gate-forgot').hidden = signup || forgot || reset;
 }
 
@@ -393,7 +400,7 @@ $('gate-switch').addEventListener('click', async () => {
     session = await api.session();
     renderGateMode();
     if (session.needsSetup) {
-      note('Nobody has registered on this deployment yet. Create the first account instead.');
+      note(t('gate.note.firstAccount'));
     }
   } catch {
     // Offline or the server restarted; the form still works, so say nothing.
@@ -414,7 +421,7 @@ $('gate-form').addEventListener('submit', async (event) => {
       await api.forgotPassword($('gate-email').value.trim());
       setGateMode('reset');
       // Deliberately identical whether or not the address exists.
-      note('If that address has an account, a reset code is on its way. Enter it below.');
+      note(t('gate.note.resetSent'));
       submit.disabled = false;
       return;
     } else if (gateMode === 'reset') {
@@ -426,7 +433,7 @@ $('gate-form').addEventListener('submit', async (event) => {
       });
       resetToken = null;
       setGateMode('signin');
-      note('Password updated. Sign in with your new password.');
+      note(t('gate.note.passwordUpdated'));
       submit.disabled = false;
       return;
     } else if (gateMode === 'signup') {
@@ -436,7 +443,7 @@ $('gate-form').addEventListener('submit', async (event) => {
         password: $('gate-password').value,
       });
       if (result.emailBackend === 'console') {
-        toast('No mail provider configured — the confirmation code is in the server log.');
+        toast(t('gate.note.noMail'));
       }
     } else {
       const email = $('gate-email').value.trim();
@@ -464,7 +471,7 @@ $('gate-form').addEventListener('submit', async (event) => {
     } else {
       needsTotp = false;
       renderGateMode();
-      fail(err.message || 'That did not work.');
+      fail(err.message || t('gate.error.generic'));
     }
   } finally {
     submit.disabled = false;
@@ -537,7 +544,7 @@ async function start() {
       await openChat(handoff);
       if (shouldRun) await stream();
     } catch {
-      toast('That conversation could not be opened.', 'error');
+      toast(t('chat.openFailed'), 'error');
     }
   }
 
@@ -570,7 +577,7 @@ async function refreshChats() {
   if (!chats.length) {
     list.append(Object.assign(document.createElement('div'), {
       className: 'chats__label',
-      textContent: 'No conversations yet',
+      textContent: t('nav.noConversations'),
     }));
     return;
   }
@@ -642,7 +649,7 @@ function openRowMenu(chat, anchor, titleButton) {
     el.type = 'button';
     el.className = `menu__item${danger ? ' menu__item--danger' : ''}`;
     el.setAttribute('role', 'menuitem');
-    el.innerHTML = `${icon}<span>${escapeText(label)}</span><span class="menu__key">${key}</span>`;
+    el.innerHTML = `${icon}<span>${escapeHtml(label)}</span><span class="menu__key">${key}</span>`;
     el.addEventListener('click', (event) => {
       event.stopPropagation();
       onPick(el);
@@ -687,12 +694,12 @@ function openRowMenu(chat, anchor, titleButton) {
         if (chat.id === state.chatId) {
           state.chatId = null;
           $('messages').innerHTML = '';
-          $('chat-title').textContent = 'New chat';
+          $('chat-title').textContent = t('nav.newChat');
           setEmpty(true);
           hideApproval();
         }
         await refreshChats();
-        toast('Conversation deleted.');
+        toast(t('chat.deleted'));
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -709,11 +716,25 @@ function openRowMenu(chat, anchor, titleButton) {
   const top = below + size.height > window.innerHeight - 8 ? box.top - size.height - 6 : below;
   rowMenu.style.left = `${Math.max(8, left)}px`;
   rowMenu.style.top = `${Math.max(8, top)}px`;
+  anchor.setAttribute('aria-expanded', 'true');
   rowMenu.querySelector('.menu__item')?.focus();
 
   const onKey = (event) => {
     const key = event.key.toLowerCase();
     if (event.key === 'Escape') return closeRowMenu();
+
+    // Up and Down move between the items. This menu had letter shortcuts and
+    // nothing else, so the only way through it was the three letters somebody
+    // had to already know about.
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const items = [...rowMenu.querySelectorAll('.menu__item')];
+      if (!items.length) return;
+      const at = items.indexOf(/** @type {HTMLElement} */ (document.activeElement));
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      event.preventDefault();
+      /** @type {HTMLElement} */ (items[(at + step + items.length) % items.length]).focus();
+      return;
+    }
     const shortcut = { p: 0, r: 1, d: 3 }[key];
     if (shortcut === undefined || event.metaKey || event.ctrlKey) return;
     event.preventDefault();
@@ -726,10 +747,16 @@ function openRowMenu(chat, anchor, titleButton) {
 
   closeRowMenu = () => {
     rowMenu.hidden = true;
+    anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('mousedown', onOutside);
     window.removeEventListener('resize', closeRowMenu);
     closeRowMenu = () => {};
+    // Back to the ⋯ button rather than to <body>, which on a conversation list
+    // means restarting from the top of the sidebar.
+    if (anchor.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+      anchor.focus();
+    }
   };
   document.addEventListener('keydown', onKey);
   document.addEventListener('mousedown', onOutside);
@@ -753,6 +780,9 @@ function armed(button, warning, run) {
     ready = false;
     button.textContent = original;
     button.classList.remove('is-armed');
+    // Only a live region while it is asking. A button that stays one would
+    // announce its own label every time anything rewrote it.
+    button.removeAttribute('aria-live');
   };
 
   button.addEventListener('click', async () => {
@@ -760,6 +790,20 @@ function armed(button, warning, run) {
       ready = true;
       button.textContent = warning;
       button.classList.add('is-armed');
+      /**
+       * Say that the button changed its mind.
+       *
+       * The label going from "Delete" to "Really delete?" is the whole safety
+       * mechanism, and it was silent: a screen reader had already announced the
+       * button when it was pressed, and changing the text of a control that is
+       * not in a live region announces nothing. So the first press appeared to
+       * do nothing and the second one deleted.
+       *
+       * The button becomes its own polite live region while it is armed, which
+       * announces the new label without moving focus, and stops being one when
+       * it resets so an idle button is not a region for ever.
+       */
+      button.setAttribute('aria-live', 'polite');
       setTimeout(reset, 5000); // an unanswered warning should not linger
       return;
     }
@@ -879,6 +923,21 @@ async function openChat(id) {
   renderTopbar();
 
   const host = $('messages');
+
+  /**
+   * Do not read the whole conversation out again.
+   *
+   * `#messages` is `aria-live="polite"`, which is right for the one thing it is
+   * there for — a reply arriving a token at a time while the person waits. It
+   * is wrong for this, where the entire transcript is torn down and rebuilt:
+   * every message counts as an addition, so opening a chat announced all of it,
+   * from the top, every time.
+   *
+   * `aria-busy` is the mechanism for exactly this. Assistive technology holds
+   * off while it is true and takes the finished result as one change, rather
+   * than narrating the construction.
+   */
+  host.setAttribute('aria-busy', 'true');
   host.innerHTML = '';
 
   // Tool results live in their own message, so index them by call id first.
@@ -892,6 +951,10 @@ async function openChat(id) {
     else if (m.role === 'summary') host.append(summaryDivider(m.replaced || 0, m.text));
     else if (m.role === 'assistant') host.append(assistantMessage().hydrate(m, resultsByCallId).node);
   }
+
+  // Built. Anything appended from here — a streaming reply — is announced
+  // normally, which is what the live region exists for.
+  host.setAttribute('aria-busy', 'false');
 
   // Whether this conversation is actually waiting on a yes is a question about
   // the risk rules and the account's policy, both of which live on the server —
@@ -960,7 +1023,7 @@ function startBlankChat(project = null) {
   $('messages').innerHTML = '';
   $('status-host').innerHTML = '';
   hideApproval();
-  $('chat-title').textContent = project ? `New chat — ${project.name}` : 'New chat';
+  $('chat-title').textContent = project ? `New chat — ${project.name}` : t('nav.newChat');
   setEmpty(true);
   // Nothing in the sidebar is selected any more, because what you are looking
   // at is not in it.
@@ -990,7 +1053,7 @@ function renderProjectChip() {
   chip.textContent = project.name;
   chip.classList.toggle('is-grounded', !!project.grounded);
   chip.title = project.files
-    ? `${project.grounded ? 'Answers from' : 'Answers first from'} ${project.files} source${
+    ? `${project.grounded ? t('chat.answersFrom') : t('chat.answersFirstFrom')} ${project.files} source${
         project.files === 1 ? '' : 's'
       } in "${project.name}".`
     : `"${project.name}" has no sources yet, so this conversation answers like any other.`;
@@ -1196,7 +1259,7 @@ $('project-form-save').addEventListener('click', async () => {
   const name = $('project-form-name').value.trim();
   const error = $('project-form-error');
   if (!name) {
-    error.textContent = 'Give it a name — a subject, a client, a piece of coursework.';
+    error.textContent = t('project.namePrompt');
     return;
   }
   try {
@@ -1300,7 +1363,7 @@ $('messages').addEventListener('click', async (event) => {
     } catch {
       // Denied permission, or an insecure origin. Selecting it is the fallback
       // every browser still allows.
-      toast('Could not reach the clipboard — select the text and press Ctrl+C.', 'error');
+      toast(t('clipboard.failed'), 'error');
     }
     return;
   }
@@ -1319,12 +1382,12 @@ $('messages').addEventListener('click', async (event) => {
  */
 function beginEdit(message, text) {
   if (state.running) {
-    toast('Stop the run first — editing rewinds the conversation.', 'error');
+    toast(t('chat.stopBeforeEdit'), 'error');
     return;
   }
   const id = message.dataset.messageId;
   if (!id) {
-    toast('This message is still being saved. Try again in a moment.', 'error');
+    toast(t('chat.stillSaving'), 'error');
     return;
   }
   if (message.classList.contains('is-editing')) return;
@@ -1356,7 +1419,7 @@ function beginEdit(message, text) {
 
   const save = async () => {
     const next = box.value.trim();
-    if (!next) return toast('A message cannot be empty.', 'error');
+    if (!next) return toast(t('composer.empty'), 'error');
     if (next === text) return cancel();
 
     row.querySelectorAll('button').forEach((b) => (b.disabled = true));
@@ -1407,7 +1470,7 @@ $('composer').addEventListener('submit', async (event) => {
   const ready = staged.filter((f) => f.id);
   if (!text && !ready.length) return;
   if (staged.some((f) => !f.id && !f.failed)) {
-    toast('Still uploading — one moment.');
+    toast(t('composer.uploading'));
     return;
   }
 
@@ -1490,22 +1553,22 @@ function renderQueue() {
       <div class="queue__item${item.open ? ' is-open' : ''}">
         <span class="queue__wait" aria-hidden="true"></span>
         <div class="queue__body">
-          <p class="queue__text" id="queue-text-${i}">${escapeText(
+          <p class="queue__text" id="queue-text-${i}">${escapeHtml(
             item.text || `${item.files.length} file${item.files.length === 1 ? '' : 's'}`,
           )}</p>
           <button class="queue__more" data-more="${i}" type="button" hidden
                   aria-expanded="${item.open ? 'true' : 'false'}" aria-controls="queue-text-${i}">${
-                    escapeText(t(item.open ? 'queue.less' : 'queue.more'))
+                    escapeHtml(t(item.open ? 'queue.less' : 'queue.more'))
                   }</button>
         </div>
         <div class="queue__actions">
           ${item.files.length ? `<span class="queue__files">${item.files.length} 📎</span>` : ''}
-          <button class="queue__now" data-now="${i}" type="button" data-i18n-title="queue.nowHint" title="${escapeText(
+          <button class="queue__now" data-now="${i}" type="button" data-i18n-title="queue.nowHint" title="${escapeHtml(
             t('queue.nowHint'),
-          )}">${escapeText(t('queue.now'))}</button>
-          <button class="queue__drop" data-drop="${i}" type="button" aria-label="${escapeText(
+          )}">${escapeHtml(t('queue.now'))}</button>
+          <button class="queue__drop" data-drop="${i}" type="button" aria-label="${escapeHtml(
             t('queue.remove'),
-          )}" title="${escapeText(t('queue.remove'))}">✕</button>
+          )}" title="${escapeHtml(t('queue.remove'))}">✕</button>
         </div>
       </div>`,
     )
@@ -2042,8 +2105,8 @@ function showApproval(toolCalls) {
         // names are safe, but an MCP tool name is chosen by a third-party server
         // the user connected — and this is the approval prompt, the one screen
         // whose whole job is to state accurately what is about to run.
-        `<div>${escapeText(c.name)} — ${escapeText(summariseToolInput(c.name, c.input))}` +
-        (c.needsApproval && c.reason ? `<br /><span class="warn-text">${escapeText(c.reason)}</span>` : '') +
+        `<div>${escapeHtml(c.name)} — ${escapeHtml(summariseToolInput(c.name, c.input))}` +
+        (c.needsApproval && c.reason ? `<br /><span class="warn-text">${escapeHtml(c.reason)}</span>` : '') +
         '</div>',
     )
     .join('');
@@ -2068,11 +2131,6 @@ function hideApproval() {
 $('allow').addEventListener('click', () => stream('allow'));
 $('deny').addEventListener('click', () => stream('deny'));
 
-function escapeText(value) {
-  const div = document.createElement('div');
-  div.textContent = value;
-  return div.innerHTML;
-}
 
 /* ── topbar, status, worker ────────────────────────────────────── */
 
@@ -2210,13 +2268,13 @@ function renderConnectSteps() {
   const command = remote && url ? `npm run connect -- ${url}` : 'npm start';
 
   const step = (html) => `<li>${html}</li>`;
-  const code = `<code class="connect__cmd">${escapeText(command)}</code>`;
+  const code = `<code class="connect__cmd">${escapeHtml(command)}</code>`;
 
   host.innerHTML = [
     step(`On that computer: clone this repo, then <code>npm install</code>.`),
     step(
       `Run ${code} <button class="btn btn--ghost btn--tiny" id="copy-connect" type="button" ` +
-        `data-command="${escapeText(command)}">${escapeText(t('worker.copy'))}</button>`,
+        `data-command="${escapeHtml(command)}">${escapeHtml(t('worker.copy'))}</button>`,
     ),
     step(
       remote
@@ -2253,19 +2311,19 @@ async function renderSetupLink(button, host) {
   try {
     const link = await api.enrolmentLink();
     const minutes = Math.max(1, Math.round((link.expiresInSec || 600) / 60));
-    const windows = escapeText(link.windows);
-    const unix = escapeText(link.unix);
+    const windows = escapeHtml(link.windows);
+    const unix = escapeHtml(link.unix);
 
     host.hidden = false;
     host.innerHTML =
-      `<p class="hint warn-text">${escapeText(t('setup.warning'))}</p>` +
+      `<p class="hint warn-text">${escapeHtml(t('setup.warning'))}</p>` +
       `<label class="device__label">Windows (PowerShell)</label>` +
       `<pre class="setup__cmd" data-copy="${windows}">${windows}</pre>` +
-      `<button class="btn btn--ghost btn--tiny" data-copy-setup="windows">${escapeText(t('worker.copy'))}</button>` +
+      `<button class="btn btn--ghost btn--tiny" data-copy-setup="windows">${escapeHtml(t('worker.copy'))}</button>` +
       `<label class="device__label">macOS / Linux</label>` +
       `<pre class="setup__cmd" data-copy="${unix}">${unix}</pre>` +
-      `<button class="btn btn--ghost btn--tiny" data-copy-setup="unix">${escapeText(t('worker.copy'))}</button>` +
-      `<p class="hint">${escapeText(t('setup.expires').replace('{n}', String(minutes)))}</p>`;
+      `<button class="btn btn--ghost btn--tiny" data-copy-setup="unix">${escapeHtml(t('worker.copy'))}</button>` +
+      `<p class="hint">${escapeHtml(t('setup.expires').replace('{n}', String(minutes)))}</p>`;
   } catch (err) {
     toast(err.message, 'error');
   } finally {
@@ -2291,7 +2349,7 @@ document.addEventListener('click', async (event) => {
         copySetup.textContent = t('worker.copy');
       }, 1400);
     } catch {
-      toast('Could not reach the clipboard — select the text and press Ctrl+C.', 'error');
+      toast(t('clipboard.failed'), 'error');
     }
     return;
   }
@@ -2305,7 +2363,7 @@ document.addEventListener('click', async (event) => {
       button.textContent = t('worker.copy');
     }, 1400);
   } catch {
-    toast('Could not reach the clipboard — select the text and press Ctrl+C.', 'error');
+    toast(t('clipboard.failed'), 'error');
   }
 });
 
@@ -2324,19 +2382,19 @@ function renderWorker() {
     const reach = worker.online
       ? [
           worker.info?.fullDisk
-            ? 'File tools: the whole disk'
+            ? t('worker.fullDisk')
             : `File tools: inside the workspace only`,
           worker.info?.desktop
             ? 'Desktop control: <strong>on</strong> — it can drive real applications'
-            : 'Desktop control: off',
+            : t('worker.desktopOff'),
         ].join('<br />')
       : '';
 
     card.innerHTML = worker.online
       ? `<div class="provider"><div class="provider__head"><span class="provider__name">Connected</span>
            <span class="badge badge--ok">online</span></div>
-           <div class="hint">${escapeText(worker.info?.platform || '')} · Node ${escapeText(worker.info?.node || '')}<br />
-           Workspace: <code>${escapeText(worker.info?.workspace || '')}</code><br />${reach}</div></div>`
+           <div class="hint">${escapeHtml(worker.info?.platform || '')} · Node ${escapeHtml(worker.info?.node || '')}<br />
+           Workspace: <code>${escapeHtml(worker.info?.workspace || '')}</code><br />${reach}</div></div>`
       : `<div class="provider"><div class="provider__head"><span class="provider__name">Not connected</span>
            <span class="badge">offline</span></div>
            <div class="hint">${
@@ -2346,7 +2404,7 @@ function renderWorker() {
                ? `This server is running on the administrator's computer, and its files and shell belong to
                   that account alone — that boundary is the point. Either ask an administrator to promote
                   your account, or pair a machine of your own below; the assistant will reach that one.`
-               : 'File and shell tools are hidden from the assistant until a worker connects.'
+               : t('worker.noTools')
            }</div></div>`;
   }
 }
@@ -2414,7 +2472,7 @@ function parseHeaders(text) {
 function renderMcp({ servers, status }) {
   const host = $('mcp-list');
   if (!servers.length) {
-    host.innerHTML = `<p class="hint">${escapeText(t('mcp.none'))}</p>`;
+    host.innerHTML = `<p class="hint">${escapeHtml(t('mcp.none'))}</p>`;
     return;
   }
 
@@ -2424,11 +2482,11 @@ function renderMcp({ servers, status }) {
     .map((server) => {
       const state = live.get(slugForMcp(server.name));
       const reach = server.enabled === false
-        ? `<span class="tag">${escapeText(t('mcp.off'))}</span>`
+        ? `<span class="tag">${escapeHtml(t('mcp.off'))}</span>`
         : state?.error
-          ? `<span class="tag tag--warn">${escapeText(t('mcp.broken'))}</span>`
+          ? `<span class="tag tag--warn">${escapeHtml(t('mcp.broken'))}</span>`
           : state
-            ? `<span class="tag tag--free">${escapeText(t('mcp.tools', { n: state.tools }))}</span>`
+            ? `<span class="tag tag--free">${escapeHtml(t('mcp.tools', { n: state.tools }))}</span>`
             : '';
 
       const where = server.transport === 'http'
@@ -2438,16 +2496,16 @@ function renderMcp({ servers, status }) {
       return `
         <div class="provider">
           <div class="provider__head">
-            <strong>${escapeText(server.name)}</strong> ${reach}
+            <strong>${escapeHtml(server.name)}</strong> ${reach}
           </div>
-          <div class="hint" style="word-break:break-all">${escapeText(where || '')}</div>
-          ${state?.error ? `<div class="hint" style="color:var(--warn)">${escapeText(state.error)}</div>` : ''}
+          <div class="hint" style="word-break:break-all">${escapeHtml(where || '')}</div>
+          ${state?.error ? `<div class="hint" style="color:var(--warn)">${escapeHtml(state.error)}</div>` : ''}
           <div class="row">
-            <button class="btn btn--ghost" data-mcp-toggle="${escapeText(server.id)}" type="button">
-              ${escapeText(server.enabled === false ? t('mcp.enable') : t('mcp.disable'))}
+            <button class="btn btn--ghost" data-mcp-toggle="${escapeHtml(server.id)}" type="button">
+              ${escapeHtml(server.enabled === false ? t('mcp.enable') : t('mcp.disable'))}
             </button>
-            <button class="btn btn--ghost" data-mcp-remove="${escapeText(server.id)}" type="button">
-              ${escapeText(t('mcp.remove'))}
+            <button class="btn btn--ghost" data-mcp-remove="${escapeHtml(server.id)}" type="button">
+              ${escapeHtml(t('mcp.remove'))}
             </button>
           </div>
         </div>`;
@@ -2499,10 +2557,10 @@ async function loadMcpCatalogue() {
     host.innerHTML = servers
       .map(
         (s) => `
-        <button class="mcp-cat__item" type="button" data-mcp-preset="${escapeText(s.id)}">
-          <span class="mcp-cat__name">${escapeText(s.label)}</span>
-          <span class="mcp-cat__blurb">${escapeText(s.blurb)}</span>
-          ${s.needs ? `<span class="mcp-cat__needs">${escapeText(t('mcp.needs'))}</span>` : ''}
+        <button class="mcp-cat__item" type="button" data-mcp-preset="${escapeHtml(s.id)}">
+          <span class="mcp-cat__name">${escapeHtml(s.label)}</span>
+          <span class="mcp-cat__blurb">${escapeHtml(s.blurb)}</span>
+          ${s.needs ? `<span class="mcp-cat__needs">${escapeHtml(t('mcp.needs'))}</span>` : ''}
         </button>`,
       )
       .join('');
@@ -2536,7 +2594,7 @@ async function loadMcp() {
   try {
     renderMcp(await api.mcpServers());
   } catch (err) {
-    $('mcp-list').innerHTML = `<p class="hint">${escapeText(err.message)}</p>`;
+    $('mcp-list').innerHTML = `<p class="hint">${escapeHtml(err.message)}</p>`;
   }
 }
 
@@ -2627,7 +2685,7 @@ function effortRow() {
   const row = document.createElement('div');
   row.className = 'menu__foot';
   row.setAttribute('role', 'group');
-  row.setAttribute('aria-label', 'Reasoning effort');
+  row.setAttribute('aria-label', t('settings.effort'));
 
   const name = document.createElement('span');
   name.className = 'menu__foot-name';
@@ -2692,10 +2750,25 @@ const effortLabel = (value) => (efforts().find(([v]) => v === value) || efforts(
  * settings belong.
  */
 
+/** Every settings tab, typed as what it is: a button, not a bare Element. */
+const settingsTabs = () =>
+  /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('.tab'));
+
 function selectTab(name) {
-  for (const tab of document.querySelectorAll('.tab')) {
+  for (const tab of settingsTabs()) {
     const active = tab.dataset.tab === name;
     tab.classList.toggle('is-active', active);
+    /**
+     * The state a screen reader reads, alongside the class the eye reads.
+     *
+     * These carried `role="tab"` and nothing else — no aria-selected, so ten
+     * tabs were announced and none of them said which one you were on. The
+     * roving tabindex is the other half: only the selected tab is in the tab
+     * order, so Tab moves past the whole strip rather than through ten stops,
+     * which is what the arrow keys below are for.
+     */
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
     if (active) revealInStrip(tab);
   }
   for (const panel of document.querySelectorAll('.panel')) {
@@ -2703,7 +2776,38 @@ function selectTab(name) {
   }
 }
 
-for (const tab of document.querySelectorAll('.tab')) {
+/**
+ * Left and right move between tabs, Home and End jump to the ends.
+ *
+ * This is the half of the tab pattern that cannot be expressed in markup, and
+ * without it `role="tablist"` promises a keyboard behaviour that is not there.
+ */
+function moveTab(from, step) {
+  const tabs = /** @type {HTMLButtonElement[]} */ ([...document.querySelectorAll('.sheet__tabs .tab')]);
+  if (!tabs.length) return;
+  const at = tabs.indexOf(from);
+  const next =
+    step === 'home' ? tabs[0]
+    : step === 'end' ? tabs[tabs.length - 1]
+    : tabs[(at + step + tabs.length) % tabs.length];
+  if (!next) return;
+  selectTab(next.dataset.tab);
+  next.focus();
+}
+
+for (const tab of settingsTabs()) {
+  tab.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+    const step =
+      event.key === 'ArrowRight' ? 1
+      : event.key === 'ArrowLeft' ? -1
+      : event.key === 'Home' ? 'home'
+      : event.key === 'End' ? 'end'
+      : null;
+    if (step === null) return;
+    event.preventDefault();
+    moveTab(tab, step);
+  });
+
   tab.addEventListener('click', () => {
     selectTab(tab.dataset.tab);
     // Reaching a server takes a moment, so this is done when the tab is opened
@@ -2741,10 +2845,10 @@ function fillSettings() {
   const keyRow = (provider, entry, spare) => `
     <div class="keyrow">
       <span class="keyrow__no">${entry.position}</span>
-      <span class="keyrow__hint">${escapeText(entry.hint || 'saved key')}</span>
-      <span class="keyrow__when">${entry.addedAt ? escapeText(relativeWhen(entry.addedAt)) : ''}</span>
+      <span class="keyrow__hint">${escapeHtml(entry.hint || 'saved key')}</span>
+      <span class="keyrow__when">${entry.addedAt ? escapeHtml(relativeWhen(entry.addedAt)) : ''}</span>
       ${entry.position === 1 && spare ? '<span class="keyrow__badge">in use</span>' : ''}
-      <button class="keyrow__drop" data-drop-key="${escapeText(provider)}" data-position="${entry.position}"
+      <button class="keyrow__drop" data-drop-key="${escapeHtml(provider)}" data-position="${entry.position}"
               type="button" aria-label="Remove key ${entry.position}">✕</button>
     </div>`;
 
@@ -2763,13 +2867,13 @@ function fillSettings() {
       return `
         <div class="provider">
           <div class="provider__head">
-            <span class="provider__name">${escapeText(meta.label)}</span>
-            <span class="badge ${status.own ? 'badge--ok' : ''}">${escapeText(label)}</span>
+            <span class="provider__name">${escapeHtml(meta.label)}</span>
+            <span class="badge ${status.own ? 'badge--ok' : ''}">${escapeHtml(label)}</span>
           </div>
           ${
             status.shared
               ? `<div class="hint">
-                   Falling back to this deployment's <code>${escapeText(status.envVar || '')}</code>, so the
+                   Falling back to this deployment's <code>${escapeHtml(status.envVar || '')}</code>, so the
                    usage is billed to whoever set it up — and your monthly token limit applies.
                    Save your own key below to remove both.
                  </div>`
@@ -2777,13 +2881,13 @@ function fillSettings() {
           }
           ${keys.length ? `<div class="keylist">${keys.map((entry) => keyRow(key, entry, keys.length > 1)).join('')}</div>` : ''}
           <div class="provider__row">
-            <input type="password" placeholder="${escapeText(meta.keyHint)}" data-key="${escapeText(key)}" autocomplete="off" />
-            <button class="btn btn--ghost" data-save-key="${escapeText(key)}" type="button">
+            <input type="password" placeholder="${escapeHtml(meta.keyHint)}" data-key="${escapeHtml(key)}" autocomplete="off" />
+            <button class="btn btn--ghost" data-save-key="${escapeHtml(key)}" type="button">
               ${keys.length ? 'Add' : 'Save'}
             </button>
           </div>
           <div class="hint">
-            <a href="${escapeText(meta.console)}" target="_blank" rel="noopener">Get a key →</a>
+            <a href="${escapeHtml(meta.console)}" target="_blank" rel="noopener">Get a key →</a>
             ${
               keys.length > 1
                 ? ` · tried in order — if key 1 is refused, key 2 answers`
@@ -2867,10 +2971,10 @@ function fillSettings() {
   $('account-card').innerHTML = `
     <div class="provider">
       <div class="provider__head">
-        <span class="provider__name">${escapeText(me.name || me.email)}</span>
-        <span class="badge ${me.role === 'admin' ? 'badge--ok' : ''}">${escapeText(me.role)}</span>
+        <span class="provider__name">${escapeHtml(me.name || me.email)}</span>
+        <span class="badge ${me.role === 'admin' ? 'badge--ok' : ''}">${escapeHtml(me.role)}</span>
       </div>
-      <div class="hint">${escapeText(me.email)}</div>
+      <div class="hint">${escapeHtml(me.email)}</div>
     </div>`;
   $('account-name').value = me.name || '';
   renderTwoFactor();
@@ -2905,15 +3009,15 @@ async function loadSkills() {
     ? `<div class="rows">${skills
         .map(
           (s) => `<div class="rows__item">
-            <span class="grow">${escapeText(s.name)}
-              <span class="muted">· ${escapeText(s.description)}${
+            <span class="grow">${escapeHtml(s.name)}
+              <span class="muted">· ${escapeHtml(s.description)}${
                 s.used_count ? ` · used ${s.used_count}×` : ''
               }</span>
             </span>
-            <button data-skill-toggle="${escapeText(s.id)}" data-on="${!!s.enabled}">${
+            <button data-skill-toggle="${escapeHtml(s.id)}" data-on="${!!s.enabled}">${
               s.enabled ? 'Disable' : 'Enable'
             }</button>
-            <button data-skill-del="${escapeText(s.id)}">Remove</button>
+            <button data-skill-del="${escapeHtml(s.id)}">Remove</button>
           </div>`,
         )
         .join('')}</div>`
@@ -2926,7 +3030,7 @@ async function loadSkills() {
     });
   }
   for (const btn of $('skill-list').querySelectorAll('[data-skill-del]')) {
-    armed(btn, 'Really remove?', async () => {
+    armed(btn, t('action.reallyRemove'), async () => {
       await api.deleteSkill(btn.dataset.skillDel);
       loadSkills();
     });
@@ -2956,19 +3060,19 @@ async function loadTasks() {
   $('task-list').innerHTML = tasks.length
     ? `<div class="rows">${tasks
         .map((t) => {
-          const when = t.cron ? `every ${escapeText(t.cron)}` : 'once';
-          const last = t.last_status ? ` · last: ${escapeText(t.last_status).slice(0, 40)}` : '';
+          const when = t.cron ? `every ${escapeHtml(t.cron)}` : 'once';
+          const last = t.last_status ? ` · last: ${escapeHtml(t.last_status).slice(0, 40)}` : '';
           return `<div class="rows__item">
-            <span class="grow">${escapeText(t.title)}
+            <span class="grow">${escapeHtml(t.title)}
               <span class="muted">· ${when} · ${
-                t.enabled ? `next ${escapeText(relativeWhen(t.next_run_at))}` : 'paused'
+                t.enabled ? `next ${escapeHtml(relativeWhen(t.next_run_at))}` : 'paused'
               }${last}</span>
             </span>
-            ${t.last_chat ? `<button data-task-open="${escapeText(t.last_chat)}">Open result</button>` : ''}
-            <button data-task-toggle="${escapeText(t.id)}" data-on="${!!t.enabled}">${
+            ${t.last_chat ? `<button data-task-open="${escapeHtml(t.last_chat)}">Open result</button>` : ''}
+            <button data-task-toggle="${escapeHtml(t.id)}" data-on="${!!t.enabled}">${
               t.enabled ? 'Pause' : 'Resume'
             }</button>
-            <button data-task-del="${escapeText(t.id)}">Remove</button>
+            <button data-task-del="${escapeHtml(t.id)}">Remove</button>
           </div>`;
         })
         .join('')}</div>`
@@ -2987,7 +3091,7 @@ async function loadTasks() {
     });
   }
   for (const btn of $('task-list').querySelectorAll('[data-task-del]')) {
-    armed(btn, 'Really remove?', async () => {
+    armed(btn, t('action.reallyRemove'), async () => {
       await api.deleteTask(btn.dataset.taskDel);
       loadTasks();
     });
@@ -3018,16 +3122,16 @@ async function loadConnectors() {
     .map(
       (c) => `<div class="provider">
         <div class="provider__head">
-          <span class="provider__name">${escapeText(c.label)}</span>
+          <span class="provider__name">${escapeHtml(c.label)}</span>
           <span class="badge ${c.connected ? 'badge--ok' : ''}">${
-            c.connected ? escapeText(c.account || 'connected') : 'not connected'
+            c.connected ? escapeHtml(c.account || 'connected') : 'not connected'
           }</span>
         </div>
-        <div class="hint">${escapeText(c.help)}</div>
+        <div class="hint">${escapeHtml(c.help)}</div>
         <div class="provider__row">
-          <input type="password" data-token="${escapeText(c.id)}" placeholder="${escapeText(c.placeholder)}" autocomplete="off" />
-          <button data-connect="${escapeText(c.id)}">${c.connected ? 'Replace' : 'Connect'}</button>
-          ${c.connected ? `<button data-disconnect="${escapeText(c.id)}">Disconnect</button>` : ''}
+          <input type="password" data-token="${escapeHtml(c.id)}" placeholder="${escapeHtml(c.placeholder)}" autocomplete="off" />
+          <button data-connect="${escapeHtml(c.id)}">${c.connected ? 'Replace' : 'Connect'}</button>
+          ${c.connected ? `<button data-disconnect="${escapeHtml(c.id)}">Disconnect</button>` : ''}
         </div>
       </div>`,
     )
@@ -3082,7 +3186,7 @@ function renderUsagePanel(host, usage) {
       ? `<div class="rows">${byModel
           .map(
             (m) => `<div class="rows__item">
-              <span class="grow">${escapeText(m.model)}
+              <span class="grow">${escapeHtml(m.model)}
                 <span class="muted">· ${m.calls} calls</span>
               </span>
               <span class="muted">${(
@@ -3099,7 +3203,7 @@ $('save-name').addEventListener('click', async () => {
     const { user } = await api.updateAccount({ name: $('account-name').value.trim() });
     state.boot.user = user;
     fillSettings();
-    toast('Name updated.');
+    toast(t('account.nameUpdated'));
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -3120,7 +3224,7 @@ function renderTwoFactor() {
         </div>
         <div class="hint">Your authenticator app is required at every sign-in.</div>
         <div class="provider__row">
-          <input type="password" id="twofa-password" placeholder="Your password" autocomplete="current-password" />
+          <input type="password" id="twofa-password" placeholder="${escapeHtml(t('account.yourPassword'))}" aria-label="${escapeHtml(t('account.yourPassword'))}" autocomplete="current-password" />
           <input type="text" id="twofa-off-code" placeholder="Code" inputmode="numeric" autocomplete="one-time-code" />
           <button class="btn btn--ghost" id="twofa-disable" type="button">Turn off</button>
         </div>
@@ -3130,7 +3234,7 @@ function renderTwoFactor() {
         await api.disableTwoFactor($('twofa-password').value, $('twofa-off-code').value.trim());
         state.boot = await api.bootstrap();
         fillSettings();
-        toast('Two-factor authentication turned off.');
+        toast(t('account.totpOff'));
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -3162,11 +3266,11 @@ function renderTwoFactor() {
           <div class="qr">${qr}</div>
           <div class="hint">
             Can't scan? Enter this key by hand:<br />
-            <span class="secret" style="display:inline-block;margin-top:6px">${escapeText(secret)}</span><br />
-            On a phone, <a href="${escapeText(uri)}">tap here</a> to open your authenticator directly.
+            <span class="secret" style="display:inline-block;margin-top:6px">${escapeHtml(secret)}</span><br />
+            On a phone, <a href="${escapeHtml(uri)}">tap here</a> to open your authenticator directly.
           </div>
           <div class="provider__row">
-            <input type="text" id="twofa-verify" placeholder="Enter the 6-digit code" inputmode="numeric" autocomplete="one-time-code" />
+            <input type="text" id="twofa-verify" placeholder="${escapeHtml(t('account.enterCode'))}" aria-label="${escapeHtml(t('account.enterCode'))}" inputmode="numeric" autocomplete="one-time-code" />
             <button class="btn btn--primary" id="twofa-confirm" type="button">Confirm</button>
           </div>
         </div>`;
@@ -3185,7 +3289,7 @@ function renderTwoFactor() {
                 <strong>Save these recovery codes now.</strong> Each works once, and they are the only
                 way back in if you lose your phone. They will not be shown again.
               </div>
-              <div class="codes">${recoveryCodes.map((c) => escapeText(c)).join('')}</div>
+              <div class="codes">${recoveryCodes.map((c) => escapeHtml(c)).join('')}</div>
               <button class="btn btn--ghost" id="twofa-done" type="button">I have saved them</button>
             </div>`;
           $('twofa-done').addEventListener('click', async () => {
@@ -3214,8 +3318,8 @@ $('save-password').addEventListener('click', async () => {
     $('new-password').value = '';
     toast(
       signedOutOtherDevices
-        ? 'Password updated. Every other device has been signed out.'
-        : 'Password updated.',
+        ? t('account.passwordUpdatedAll')
+        : t('account.passwordUpdated'),
     );
   } catch (err) {
     toast(err.message, 'error');
@@ -3243,24 +3347,24 @@ async function loadAdmin() {
 
         const self = u.id === state.boot.user.id;
         return `<div class="rows__item">
-          <span class="grow">${escapeText(u.name || u.email)}
-            <span class="muted">· ${escapeText(u.email)} · ${tags.join(' · ')}</span>
+          <span class="grow">${escapeHtml(u.name || u.email)}
+            <span class="muted">· ${escapeHtml(u.email)} · ${tags.join(' · ')}</span>
           </span>
           ${
             self
               ? '<span class="muted">you</span>'
-              : `<button data-limit-user="${escapeText(u.id)}">Limit</button>
-                 <button data-suspend-user="${escapeText(u.id)}" data-suspended="${!!u.suspended_at}">
+              : `<button data-limit-user="${escapeHtml(u.id)}">Limit</button>
+                 <button data-suspend-user="${escapeHtml(u.id)}" data-suspended="${!!u.suspended_at}">
                    ${u.suspended_at ? 'Unsuspend' : 'Suspend'}
                  </button>
-                 <button data-del-user="${escapeText(u.id)}">Remove</button>`
+                 <button data-del-user="${escapeHtml(u.id)}">Remove</button>`
           }
         </div>`;
       })
       .join('')}</div>`;
 
     for (const btn of document.querySelectorAll('[data-del-user]')) {
-      armed(btn, 'Really remove?', async () => {
+      armed(btn, t('action.reallyRemove'), async () => {
         await api.deleteUser(btn.dataset.delUser);
         loadAdmin();
       });
@@ -3285,7 +3389,7 @@ async function loadAdmin() {
         field.className = 'chat-item--editing';
         field.style.width = '9rem';
         field.placeholder = 'tokens / month, 0 = none';
-        field.title = 'Monthly token limit while using the shared API key. 0 means no limit.';
+        field.title = t('admin.tokenLimit');
         btn.replaceWith(field);
         field.focus();
 
@@ -3371,7 +3475,7 @@ $('add-model-btn').addEventListener('click', async () => {
   const id = input.value.trim();
   if (!id) return;
 
-  status.textContent = 'Verifying with OpenRouter…';
+  status.textContent = t('models.verifying');
   try {
     const { model } = await api.addModel(id);
     input.value = '';
@@ -3397,7 +3501,7 @@ $('audit-models').addEventListener('click', async () => {
   const host = $('audit-results');
 
   button.disabled = true;
-  status.textContent = 'Calling each one…';
+  status.textContent = t('devices.calling');
   host.innerHTML = '';
 
   try {
@@ -3422,9 +3526,9 @@ $('audit-models').addEventListener('click', async () => {
         const [cls, label] = badge[model.state] || ['', model.state];
         return `
           <div class="audit">
-            <span class="audit__id">${escapeText(model.id)}</span>
-            <span class="badge ${cls}">${escapeText(label)}</span>
-            ${model.reason ? `<span class="audit__why">${escapeText(model.reason)}</span>` : ''}
+            <span class="audit__id">${escapeHtml(model.id)}</span>
+            <span class="badge ${cls}">${escapeHtml(label)}</span>
+            ${model.reason ? `<span class="audit__why">${escapeHtml(model.reason)}</span>` : ''}
           </div>`;
       })
       .join('');
@@ -3477,18 +3581,18 @@ function renderPairChip() {
   const count = worker?.machines?.length || 0;
 
   let label;
-  if (!online) label = 'Add a computer';
+  if (!online) label = t('devices.add');
   // The app is running on the machine it works on, so there is nothing to pair
   // for *this* account — but somebody else can still pair a computer of theirs.
-  else if (worker.local) label = 'This computer';
+  else if (worker.local) label = t('devices.thisOne');
   else if (count > 1) label = `${count} computers`;
   else label = worker.activeName || 'Computer';
 
   $('pair-dot').className = `dot ${online ? 'is-online' : 'is-offline'}`;
   $('pair-chip-label').textContent = label;
   $('pair-chip').title = online
-    ? 'Your computers — add another, or switch which one is in use'
-    : 'No computer connected. Click to add one.';
+    ? t('devices.yours')
+    : t('devices.none');
 }
 
 /**
@@ -3506,7 +3610,7 @@ function renderLocalCode(local) {
   $('pair-offer-code').textContent = local.code;
   $('pair-offer-note').textContent = local.name
     ? `Waiting to be added as "${local.name}".`
-    : 'Waiting to be added.';
+    : t('devices.waiting');
 }
 
 $('pair-copy').addEventListener('click', async () => {
@@ -3553,7 +3657,7 @@ async function loadDevices() {
         d.online ? null : `last seen ${d.lastSeen ? relativeAgo(d.lastSeen) : 'never'}`,
       ]
         .filter(Boolean)
-        .map(escapeText)
+        .map(escapeHtml)
         .join(' · ');
 
       // Asked for but not adopted: either the machine has not checked in yet, or
@@ -3561,41 +3665,41 @@ async function loadDevices() {
       // quietly not in use.
       const pending = d.wanted && d.workspace && d.wanted !== d.workspace;
 
-      return `<div class="provider" data-device="${escapeText(d.id)}">
+      return `<div class="provider" data-device="${escapeHtml(d.id)}">
         <div class="provider__head">
           <span class="provider__name">
             <span class="dot ${d.online ? 'is-online' : 'is-offline'}"></span>
-            ${escapeText(d.name)}
+            ${escapeHtml(d.name)}
             ${d.id === activeId ? '<span class="tag">in use</span>' : ''}
           </span>
           <span class="badge ${d.online ? 'badge--ok' : ''}">${d.online ? 'online' : 'offline'}</span>
         </div>
         <div class="hint">${facts}</div>
 
-        <label class="device__label" for="ws-${escapeText(d.id)}">Working folder</label>
+        <label class="device__label" for="ws-${escapeHtml(d.id)}">Working folder</label>
         <div class="provider__row">
-          <input id="ws-${escapeText(d.id)}" type="text" spellcheck="false"
-                 value="${escapeText(d.wanted || d.workspace || '')}"
-                 placeholder="D:\\projects" data-ws="${escapeText(d.id)}" />
-          <button class="btn btn--ghost" data-ws-save="${escapeText(d.id)}" type="button">Save</button>
+          <input id="ws-${escapeHtml(d.id)}" type="text" spellcheck="false"
+                 value="${escapeHtml(d.wanted || d.workspace || '')}"
+                 placeholder="D:\\projects" data-ws="${escapeHtml(d.id)}" />
+          <button class="btn btn--ghost" data-ws-save="${escapeHtml(d.id)}" type="button">Save</button>
         </div>
-        <p class="hint" data-ws-status="${escapeText(d.id)}">${
+        <p class="hint" data-ws-status="${escapeHtml(d.id)}">${
           d.workspaceError
-            ? `<span class="warn-text">${escapeText(d.workspaceError)}</span>`
+            ? `<span class="warn-text">${escapeHtml(d.workspaceError)}</span>`
             : pending
-              ? `Currently working in <code>${escapeText(d.workspace)}</code> — waiting for it to pick up the change.`
+              ? `Currently working in <code>${escapeHtml(d.workspace)}</code> — waiting for it to pick up the change.`
               : d.workspace
-                ? `Currently working in <code>${escapeText(d.workspace)}</code>. Clear the box to hand it back to the machine's own setting.`
-                : 'It will report where it is working once it connects.'
+                ? `Currently working in <code>${escapeHtml(d.workspace)}</code>. Clear the box to hand it back to the machine's own setting.`
+                : t('devices.willReport')
         }</p>
 
         <div class="row">
           ${
             d.online && d.id !== activeId
-              ? `<button class="btn btn--ghost" data-use-device="${escapeText(d.id)}" type="button">Work on this one</button>`
+              ? `<button class="btn btn--ghost" data-use-device="${escapeHtml(d.id)}" type="button">Work on this one</button>`
               : ''
           }
-          <button class="btn btn--ghost" data-unpair="${escapeText(d.id)}" type="button">Unpair</button>
+          <button class="btn btn--ghost" data-unpair="${escapeHtml(d.id)}" type="button">Unpair</button>
         </div>
       </div>`;
     })
@@ -3611,10 +3715,10 @@ async function loadDevices() {
        * and clearing it is one button.
        */
       state.boot.prefs?.activeDevice
-        ? `<p class="hint">${escapeText(t('devices.pinned'))}
-             <button class="btn btn--ghost btn--tiny" id="unpin-device" type="button">${escapeText(t('devices.unpin'))}</button></p>`
+        ? `<p class="hint">${escapeHtml(t('devices.pinned'))}
+             <button class="btn btn--ghost btn--tiny" id="unpin-device" type="button">${escapeHtml(t('devices.unpin'))}</button></p>`
         : devices.filter((d) => d.online).length > 1
-          ? `<p class="hint">${escapeText(t('devices.followsYou'))}</p>`
+          ? `<p class="hint">${escapeHtml(t('devices.followsYou'))}</p>`
           : ''
     }`;
 
@@ -3627,8 +3731,8 @@ async function loadDevices() {
       try {
         await api.setDeviceWorkspace(id, field.value.trim());
         status.textContent = field.value.trim()
-          ? 'Saved. That computer will move within about fifteen seconds.'
-          : "Saved. It will go back to the machine's own setting.";
+          ? t('devices.moved')
+          : t('devices.revertedToOwn');
         // Long enough for a heartbeat to land and report where it really is.
         setTimeout(loadDevices, 16_000);
       } catch (err) {
@@ -3656,7 +3760,7 @@ async function loadDevices() {
         state.boot.prefs = await api.savePrefs({ activeDevice: btn.dataset.useDevice });
         await refreshWorker();
         await loadDevices();
-        toast('Switched computer.');
+        toast(t('devices.switched'));
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -3665,7 +3769,7 @@ async function loadDevices() {
 
   // Unpairing cuts a machine off mid-task if one is running, so it asks twice.
   for (const btn of host.querySelectorAll('[data-unpair]')) {
-    armed(btn, 'Really unpair?', async () => {
+    armed(btn, t('devices.reallyUnpair'), async () => {
       const { name } = await api.unpairDevice(btn.dataset.unpair);
       toast(`Unpaired ${name}. That computer can no longer be reached.`);
       await refreshWorker();
@@ -3746,7 +3850,7 @@ function showModelNews(model) {
     ['Released', model.releasedAt ? new Date(model.releasedAt).toLocaleDateString(undefined, {
       year: 'numeric', month: 'long', day: 'numeric',
     }) : 'not stated'],
-    ['Context window', fmtTokens(model.context) || 'not stated'],
+    [t('news.contextWindow'), fmtTokens(model.context) || 'not stated'],
     [
       'Price',
       model.isFree
@@ -3755,19 +3859,19 @@ function showModelNews(model) {
           ? `$${model.price.in} in · $${model.price.out} out per 1M tokens`
           : 'not published',
     ],
-    ['Runs on', 'Your OpenRouter key'],
+    ['Runs on', t('news.yourKey')],
   ];
 
   $('news-facts').innerHTML = facts
-    .map(([term, value]) => `<dt>${escapeText(term)}</dt><dd>${escapeText(String(value))}</dd>`)
+    .map(([term, value]) => `<dt>${escapeHtml(term)}</dt><dd>${escapeHtml(String(value))}</dd>`)
     .join('');
 
   $('news-description').textContent = model.description || '';
   $('news-description').hidden = !model.description;
 
   $('news-note').textContent = model.isFree
-    ? 'This one is free — it costs nothing to try.'
-    : 'Billed to your own OpenRouter key at the rate above.';
+    ? t('news.free')
+    : t('news.billed');
 
   const decide = async (action) => {
     $('news-apply').disabled = true;
@@ -3862,8 +3966,8 @@ function openMenu(host, anchor, items) {
     button.innerHTML =
       // `item.icon` is our own markup, never anything typed by a person.
       (item.icon ? `<span class="menu__icon">${item.icon}</span>` : '') +
-      `<span class="menu__body"><span>${escapeText(item.label)}</span>` +
-      (item.hint ? `<span class="menu__hint">${escapeText(item.hint)}</span>` : '') +
+      `<span class="menu__body"><span>${escapeHtml(item.label)}</span>` +
+      (item.hint ? `<span class="menu__hint">${escapeHtml(item.hint)}</span>` : '') +
       '</span>' +
       (item.active ? '<span class="menu__check" aria-hidden="true">✓</span>' : '');
 
@@ -3895,12 +3999,28 @@ function openMenu(host, anchor, items) {
     if (!host.contains(event.target) && event.target !== anchor) closeMenu();
   };
 
+  /**
+   * Put focus back on the button that opened this.
+   *
+   * The menu never focused anything on open and never restored anything on
+   * close, so a keyboard user pressing the policy chip got a menu they could
+   * only reach by carrying on tabbing forward through the document — and
+   * closing it left focus wherever that had ended up. `aria-haspopup="menu"`
+   * on the chip promised a state that nothing ever set.
+   */
+  anchor.setAttribute('aria-expanded', 'true');
+  host.querySelector('button:not([disabled])')?.focus();
+
   closeMenu = () => {
     host.hidden = true;
+    anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('mousedown', onOutside);
     window.removeEventListener('resize', closeMenu);
     closeMenu = () => {};
+    if (anchor.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+      anchor.focus();
+    }
   };
   document.addEventListener('keydown', onKey);
   document.addEventListener('mousedown', onOutside);
@@ -3963,26 +4083,26 @@ $('context-gauge').addEventListener('click', () => {
       static: true,
     },
     {
-      label: state.boot.prefs.autoCompact === false ? 'Turn on auto-compacting' : 'Turn off auto-compacting',
+      label: state.boot.prefs.autoCompact === false ? t('compact.turnOn') : t('compact.turnOff'),
       hint:
         state.boot.prefs.autoCompact === false
-          ? 'Fold the older turns up automatically before the window fills.'
-          : 'The conversation will stop working once the window is full.',
+          ? t('compact.onHint')
+          : t('compact.offHint'),
       async run() {
         state.boot.prefs = await api.savePrefs({ autoCompact: state.boot.prefs.autoCompact === false });
         toast(
           state.boot.prefs.autoCompact
-            ? 'Auto-compacting is on.'
-            : 'Auto-compacting is off. Long conversations will hit the window.',
+            ? t('compact.isOn')
+            : t('compact.isOff'),
         );
       },
     },
     {
-      label: 'Compact now',
-      hint: 'Summarise the earlier turns and carry on with the room that frees up.',
+      label: t('compact.now'),
+      hint: t('compact.nowHint'),
       async run() {
-        if (!state.chatId) return toast('Nothing to compact yet.');
-        toast('Folding the earlier turns up…');
+        if (!state.chatId) return toast(t('compact.nothing'));
+        toast(t('compact.working'));
         const { summary, context } = await api.compactChat(state.chatId);
         renderContext(context);
         toast(`Summarised ${summary.replaced} earlier messages.`);
@@ -4021,12 +4141,12 @@ function renderStaged() {
             : `<span class="attachment__icon">${file.name.split('.').pop().slice(0, 4).toUpperCase()}</span>`
         }
         <span class="attachment__body">
-          <span class="attachment__name" title="${escapeText(file.name)}">${escapeText(file.name)}</span>
+          <span class="attachment__name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
           <span class="attachment__meta">${
-            file.failed ? escapeText(file.failed) : file.id ? escapeText(humanSize(file.size)) : 'Uploading…'
+            file.failed ? escapeHtml(file.failed) : file.id ? escapeHtml(humanSize(file.size)) : 'Uploading…'
           }</span>
         </span>
-        <button class="attachment__remove" data-drop="${i}" type="button" aria-label="Remove ${escapeText(file.name)}">✕</button>
+        <button class="attachment__remove" data-drop="${i}" type="button" aria-label="Remove ${escapeHtml(file.name)}">✕</button>
       </div>`,
     )
     .join('');
@@ -4042,18 +4162,8 @@ function renderStaged() {
   }
 }
 
-const humanSize = (bytes) =>
-  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 /** A File as base64, without the `data:…;base64,` preamble the server does not want. */
-function readAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.readAsDataURL(file);
-  });
-}
 
 async function stageFiles(files) {
   const limits = state.boot?.attachments || { maxBytes: 5 * 1024 * 1024, maxPerMessage: 6 };
@@ -4461,7 +4571,7 @@ function renderProgress(steps) {
       // aloud the glyph is just a shape.
       return (
         `<li class="${cls}"${s.status === 'in_progress' ? ' aria-current="step"' : ''}>` +
-        `<span aria-hidden="true">${mark}</span><span>${escapeText(s.title)}</span></li>`
+        `<span aria-hidden="true">${mark}</span><span>${escapeHtml(s.title)}</span></li>`
       );
     })
     .join('');
@@ -4512,7 +4622,7 @@ function setRail(collapsed) {
   const toggle = $('sidebar-toggle');
   toggle.disabled = !collapsed;
   if (collapsed) {
-    toggle.setAttribute('aria-label', 'Expand menu');
+    toggle.setAttribute('aria-label', t('action.expandMenu'));
     toggle.setAttribute('aria-expanded', 'false');
   } else {
     // Not a control in this state; leaving the words on it would have a screen
@@ -4576,22 +4686,22 @@ async function runSearch() {
   try {
     ({ chats } = await api.searchChats(query));
   } catch (err) {
-    results.innerHTML = `<p class="hint">${escapeText(err.message)}</p>`;
+    results.innerHTML = `<p class="hint">${escapeHtml(err.message)}</p>`;
     return;
   }
 
   if (!chats.length) {
-    results.innerHTML = `<p class="hint">Nothing matched “${escapeText(query)}”.</p>`;
+    results.innerHTML = `<p class="hint">Nothing matched “${escapeHtml(query)}”.</p>`;
     return;
   }
 
   results.innerHTML = chats
     .map((c) => {
       const snippet = snippetAround(c.snippet, query);
-      return `<button class="model-card" data-chat="${escapeText(c.id)}" type="button">
+      return `<button class="model-card" data-chat="${escapeHtml(c.id)}" type="button">
         <span class="model-card__main">
-          <span class="model-card__name">${escapeText(c.title || 'Untitled')}</span>
-          ${snippet ? `<span class="model-card__meta">${escapeText(snippet)}</span>` : ''}
+          <span class="model-card__name">${escapeHtml(c.title || 'Untitled')}</span>
+          ${snippet ? `<span class="model-card__meta">${escapeHtml(snippet)}</span>` : ''}
         </span>
       </button>`;
     })
