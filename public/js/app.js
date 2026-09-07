@@ -20,7 +20,11 @@ import { createPages } from './pages.js';
 import { createProjectPage } from './project-page.js';
 import { t, applyI18n, adoptLanguage, setLanguage, currentLanguage, LANGUAGES } from './i18n.js';
 import { createOnboarding } from './onboarding.js';
-import { humanSize, readAsBase64 } from './format.js';
+import { humanSize } from './format.js';
+import { createAttachments } from './attachments.js';
+import { createModelNews } from './model-news.js';
+import { createDevices } from './devices.js';
+import { createTwoFactor } from './two-factor.js';
 
 // Before anything is drawn. The language is guessed from storage and the browser
 // at module load, so the first paint is already right rather than a page of
@@ -63,7 +67,7 @@ const screenPanel = createScreen();
  */
 const onboarding = createOnboarding({
   providers: () => state.boot?.providers || {},
-  isFree: () => modelIsFree,
+  isFree: () => attachments.isFree(),
   onOpenKeys: () => openSettings('providers'),
   onPickModel: () => browser.open(state.model),
   onTryPrompt: (text) => setComposerText(text),
@@ -563,7 +567,7 @@ async function start() {
     // Marked now rather than on finish: reloading the page or closing it halfway
     // is not a reason to be shown it all over again tomorrow.
     markOnboarded();
-  } else checkModelNews();
+  } else modelNews.check();
 }
 
 /* ── chats ─────────────────────────────────────────────────────── */
@@ -2148,8 +2152,8 @@ function renderTopbar() {
    * that stops halfway — looks exactly like the app being broken unless something
    * says which kind of model is answering.
    */
-  chip.classList.toggle('chip--free', modelIsFree);
-  chip.title = modelIsFree ? t('model.free.tooltip', { model: state.model }) : state.model;
+  chip.classList.toggle('chip--free', attachments.isFree());
+  chip.title = attachments.isFree() ? t('model.free.tooltip', { model: state.model }) : state.model;
   renderPolicy();
 }
 
@@ -3211,122 +3215,7 @@ $('save-name').addEventListener('click', async () => {
 
 /* ── two-factor ────────────────────────────────────────────────── */
 
-function renderTwoFactor() {
-  const me = state.boot.user;
-  const card = $('twofa-card');
-
-  if (me.twoFactor) {
-    card.innerHTML = `
-      <div class="provider">
-        <div class="provider__head">
-          <span class="provider__name">Enabled</span>
-          <span class="badge badge--ok">${me.recoveryCodesLeft} recovery codes left</span>
-        </div>
-        <div class="hint">Your authenticator app is required at every sign-in.</div>
-        <div class="provider__row">
-          <input type="password" id="twofa-password" placeholder="${escapeHtml(t('account.yourPassword'))}" aria-label="${escapeHtml(t('account.yourPassword'))}" autocomplete="current-password" />
-          <input type="text" id="twofa-off-code" placeholder="Code" inputmode="numeric" autocomplete="one-time-code" />
-          <button class="btn btn--ghost" id="twofa-disable" type="button">Turn off</button>
-        </div>
-      </div>`;
-    $('twofa-disable').addEventListener('click', async () => {
-      try {
-        await api.disableTwoFactor($('twofa-password').value, $('twofa-off-code').value.trim());
-        state.boot = await api.bootstrap();
-        fillSettings();
-        toast(t('account.totpOff'));
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    });
-    return;
-  }
-
-  card.innerHTML = `
-    <div class="provider">
-      <div class="provider__head">
-        <span class="provider__name">Not enabled</span>
-        <span class="badge">off</span>
-      </div>
-      <div class="hint">
-        Ask for a code from an authenticator app at every sign-in, so a stolen password is not
-        enough on its own.
-      </div>
-      <button class="btn btn--primary" id="twofa-start" type="button">Set up two-factor</button>
-    </div>`;
-
-  $('twofa-start').addEventListener('click', async () => {
-    try {
-      const { secret, uri, qr } = await api.startTwoFactor();
-      // Nothing is switched on until a code proves the app was set up, so a
-      // half-finished enrolment cannot lock anyone out.
-      card.innerHTML = `
-        <div class="provider">
-          <div class="provider__name">Scan this with your authenticator app</div>
-          <div class="qr">${qr}</div>
-          <div class="hint">
-            Can't scan? Enter this key by hand:<br />
-            <span class="secret" style="display:inline-block;margin-top:6px">${escapeHtml(secret)}</span><br />
-            On a phone, <a href="${escapeHtml(uri)}">tap here</a> to open your authenticator directly.
-          </div>
-          <div class="provider__row">
-            <input type="text" id="twofa-verify" placeholder="${escapeHtml(t('account.enterCode'))}" aria-label="${escapeHtml(t('account.enterCode'))}" inputmode="numeric" autocomplete="one-time-code" />
-            <button class="btn btn--primary" id="twofa-confirm" type="button">Confirm</button>
-          </div>
-        </div>`;
-
-      $('twofa-confirm').addEventListener('click', async () => {
-        try {
-          const { recoveryCodes } = await api.confirmTwoFactor($('twofa-verify').value.trim());
-          // Shown once — the server keeps only digests.
-          card.innerHTML = `
-            <div class="provider">
-              <div class="provider__head">
-                <span class="provider__name">Two-factor is on</span>
-                <span class="badge badge--ok">enabled</span>
-              </div>
-              <div class="hint">
-                <strong>Save these recovery codes now.</strong> Each works once, and they are the only
-                way back in if you lose your phone. They will not be shown again.
-              </div>
-              <div class="codes">${recoveryCodes.map((c) => escapeHtml(c)).join('')}</div>
-              <button class="btn btn--ghost" id="twofa-done" type="button">I have saved them</button>
-            </div>`;
-          $('twofa-done').addEventListener('click', async () => {
-            state.boot = await api.bootstrap();
-            fillSettings();
-          });
-        } catch (err) {
-          toast(err.message, 'error');
-        }
-      });
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
-}
-
-$('save-password').addEventListener('click', async () => {
-  const button = $('save-password');
-  button.disabled = true;
-  try {
-    const { signedOutOtherDevices } = await api.changePassword(
-      $('current-password').value,
-      $('new-password').value,
-    );
-    $('current-password').value = '';
-    $('new-password').value = '';
-    toast(
-      signedOutOtherDevices
-        ? t('account.passwordUpdatedAll')
-        : t('account.passwordUpdated'),
-    );
-  } catch (err) {
-    toast(err.message, 'error');
-  } finally {
-    button.disabled = false;
-  }
-});
+const { renderTwoFactor } = createTwoFactor({ state, fillSettings: () => fillSettings() });
 
 /* ── admin ─────────────────────────────────────────────────────── */
 
@@ -3559,368 +3448,20 @@ $('save-behaviour').addEventListener('click', async () => {
 
 /* ── your computers ────────────────────────────────────────────── */
 
-const pairDialog = $('pair');
-
-$('pair-chip').addEventListener('click', () => openPair());
-$('open-pair').addEventListener('click', () => {
-  $('settings').close();
-  openPair();
+const devices = createDevices({
+  state,
+  refreshWorker: () => refreshWorker(),
+  armed,
 });
-
-function openPair() {
-  pairDialog.showModal();
-  $('pair-status').textContent = '';
-  loadDevices();
-  if (!matchMedia('(hover: none)').matches) $('pair-code').focus();
-}
-
-/** The header chip says at a glance whether anything is connected. */
-function renderPairChip() {
-  const worker = state.boot?.worker;
-  const online = !!worker?.online;
-  const count = worker?.machines?.length || 0;
-
-  let label;
-  if (!online) label = t('devices.add');
-  // The app is running on the machine it works on, so there is nothing to pair
-  // for *this* account — but somebody else can still pair a computer of theirs.
-  else if (worker.local) label = t('devices.thisOne');
-  else if (count > 1) label = `${count} computers`;
-  else label = worker.activeName || 'Computer';
-
-  $('pair-dot').className = `dot ${online ? 'is-online' : 'is-offline'}`;
-  $('pair-chip-label').textContent = label;
-  $('pair-chip').title = online
-    ? t('devices.yours')
-    : t('devices.none');
-}
-
-/**
- * The code this machine is offering, when the app happens to be running on it.
- *
- * Eight characters is not much to retype, but it is enough to get wrong — and
- * when the terminal showing them is on the same screen as the browser, making
- * somebody read across is a small indignity with an obvious fix.
- */
-function renderLocalCode(local) {
-  const box = $('pair-offer');
-  box.hidden = !local;
-  if (!local) return;
-
-  $('pair-offer-code').textContent = local.code;
-  $('pair-offer-note').textContent = local.name
-    ? `Waiting to be added as "${local.name}".`
-    : t('devices.waiting');
-}
-
-$('pair-copy').addEventListener('click', async () => {
-  const label = $('pair-copy-label');
-  try {
-    await navigator.clipboard.writeText($('pair-offer-code').textContent);
-    label.textContent = 'Copied';
-    setTimeout(() => {
-      label.textContent = 'Copy';
-    }, 1600);
-  } catch {
-    // Refused, usually because the page is not on a secure origin. Selecting it
-    // for them is the next best thing.
-    const range = document.createRange();
-    range.selectNodeContents($('pair-offer-code'));
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    label.textContent = 'Press Ctrl+C';
-  }
-});
-
-async function loadDevices() {
-  const { devices, localCode } = await api.devices();
-  renderLocalCode(localCode);
-  const host = $('device-list');
-  const activeId = state.boot.worker?.activeId ?? null;
-
-  if (!devices.length) {
-    host.innerHTML =
-      '<p class="hint">No computers paired yet. Run AI Remote on the machine you want to use and type its code above.</p>';
-    return;
-  }
-
-  host.innerHTML = `${devices
-    .map((d) => {
-      const facts = [
-        d.platform,
-        d.desktop ? 'desktop control on' : null,
-        // The reach and the root are different questions, and the answer to the
-        // first decides what the second is worth: confined to the folder, or
-        // free of it.
-        d.fullDisk ? 'can reach the whole disk' : 'confined to the workspace',
-        d.online ? null : `last seen ${d.lastSeen ? relativeAgo(d.lastSeen) : 'never'}`,
-      ]
-        .filter(Boolean)
-        .map(escapeHtml)
-        .join(' · ');
-
-      // Asked for but not adopted: either the machine has not checked in yet, or
-      // the folder is not there. Say which rather than showing a path that is
-      // quietly not in use.
-      const pending = d.wanted && d.workspace && d.wanted !== d.workspace;
-
-      return `<div class="provider" data-device="${escapeHtml(d.id)}">
-        <div class="provider__head">
-          <span class="provider__name">
-            <span class="dot ${d.online ? 'is-online' : 'is-offline'}"></span>
-            ${escapeHtml(d.name)}
-            ${d.id === activeId ? '<span class="tag">in use</span>' : ''}
-          </span>
-          <span class="badge ${d.online ? 'badge--ok' : ''}">${d.online ? 'online' : 'offline'}</span>
-        </div>
-        <div class="hint">${facts}</div>
-
-        <label class="device__label" for="ws-${escapeHtml(d.id)}">Working folder</label>
-        <div class="provider__row">
-          <input id="ws-${escapeHtml(d.id)}" type="text" spellcheck="false"
-                 value="${escapeHtml(d.wanted || d.workspace || '')}"
-                 placeholder="D:\\projects" data-ws="${escapeHtml(d.id)}" />
-          <button class="btn btn--ghost" data-ws-save="${escapeHtml(d.id)}" type="button">Save</button>
-        </div>
-        <p class="hint" data-ws-status="${escapeHtml(d.id)}">${
-          d.workspaceError
-            ? `<span class="warn-text">${escapeHtml(d.workspaceError)}</span>`
-            : pending
-              ? `Currently working in <code>${escapeHtml(d.workspace)}</code> — waiting for it to pick up the change.`
-              : d.workspace
-                ? `Currently working in <code>${escapeHtml(d.workspace)}</code>. Clear the box to hand it back to the machine's own setting.`
-                : t('devices.willReport')
-        }</p>
-
-        <div class="row">
-          ${
-            d.online && d.id !== activeId
-              ? `<button class="btn btn--ghost" data-use-device="${escapeHtml(d.id)}" type="button">Work on this one</button>`
-              : ''
-          }
-          <button class="btn btn--ghost" data-unpair="${escapeHtml(d.id)}" type="button">Unpair</button>
-        </div>
-      </div>`;
-    })
-    .join('')}
-    ${
-      /**
-       * Say which rule is deciding, and offer the way back.
-       *
-       * Pinning a machine is deliberate and has to stick — software that quietly
-       * overrides an explicit choice is a worse bug than choosing the wrong
-       * machine. But a pin made last month is invisible, and the symptom is a
-       * file opening on a computer in another building. So the state is stated,
-       * and clearing it is one button.
-       */
-      state.boot.prefs?.activeDevice
-        ? `<p class="hint">${escapeHtml(t('devices.pinned'))}
-             <button class="btn btn--ghost btn--tiny" id="unpin-device" type="button">${escapeHtml(t('devices.unpin'))}</button></p>`
-        : devices.filter((d) => d.online).length > 1
-          ? `<p class="hint">${escapeHtml(t('devices.followsYou'))}</p>`
-          : ''
-    }`;
-
-  for (const btn of host.querySelectorAll('[data-ws-save]')) {
-    btn.addEventListener('click', async () => {
-      const id = btn.dataset.wsSave;
-      const field = host.querySelector(`[data-ws="${id}"]`);
-      const status = host.querySelector(`[data-ws-status="${id}"]`);
-      btn.disabled = true;
-      try {
-        await api.setDeviceWorkspace(id, field.value.trim());
-        status.textContent = field.value.trim()
-          ? t('devices.moved')
-          : t('devices.revertedToOwn');
-        // Long enough for a heartbeat to land and report where it really is.
-        setTimeout(loadDevices, 16_000);
-      } catch (err) {
-        status.textContent = err.message;
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  }
-
-  host.querySelector('#unpin-device')?.addEventListener('click', async () => {
-    try {
-      state.boot.prefs = await api.savePrefs({ activeDevice: null });
-      await refreshWorker();
-      await loadDevices();
-      toast(t('devices.unpinned'));
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
-
-  for (const btn of host.querySelectorAll('[data-use-device]')) {
-    btn.addEventListener('click', async () => {
-      try {
-        state.boot.prefs = await api.savePrefs({ activeDevice: btn.dataset.useDevice });
-        await refreshWorker();
-        await loadDevices();
-        toast(t('devices.switched'));
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    });
-  }
-
-  // Unpairing cuts a machine off mid-task if one is running, so it asks twice.
-  for (const btn of host.querySelectorAll('[data-unpair]')) {
-    armed(btn, t('devices.reallyUnpair'), async () => {
-      const { name } = await api.unpairDevice(btn.dataset.unpair);
-      toast(`Unpaired ${name}. That computer can no longer be reached.`);
-      await refreshWorker();
-      await loadDevices();
-    });
-  }
-}
-
-const relativeAgo = (iso) => {
-  const mins = Math.round((Date.now() - new Date(iso)) / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins} min ago`;
-  if (mins < 60 * 24) return `${Math.round(mins / 60)}h ago`;
-  return new Date(iso).toLocaleDateString();
-};
-
-$('pair-submit').addEventListener('click', async () => {
-  const field = $('pair-code');
-  const status = $('pair-status');
-  const code = field.value.trim();
-  if (!code) return;
-
-  $('pair-submit').disabled = true;
-  status.textContent = 'Pairing…';
-  try {
-    const { device } = await api.pairDevice(code);
-    field.value = '';
-    status.textContent = `Added "${device.name}". It should connect within a few seconds.`;
-    toast(`${device.name} is now yours.`);
-    await loadDevices();
-    // The machine polls every two seconds; give it a moment, then show it live.
-    setTimeout(async () => {
-      await refreshWorker();
-      await loadDevices();
-      renderPairChip();
-    }, 3000);
-  } catch (err) {
-    status.textContent = err.message;
-  } finally {
-    $('pair-submit').disabled = false;
-  }
-});
-
-// Typing the code is the whole interaction, so Enter should finish it.
-$('pair-code').addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    $('pair-submit').click();
-  }
-});
+const { renderPairChip, loadDevices } = devices;
 
 /* ── a new model has arrived ───────────────────────────────────── */
 
-const newsDialog = $('model-news');
-
-const fmtTokens = (n) => {
-  if (!n) return null;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M tokens`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)}K tokens`;
-  return `${n} tokens`;
-};
-
-/**
- * Tell somebody about a model worth knowing about, once.
- *
- * Deliberately a modal rather than a toast: it asks a question, and the two
- * answers do different things. Deliberately detailed, too — "a new model is
- * available" is not enough to decide with, so it carries who made it, when they
- * released it, how much context it holds, what it costs, and what it is for.
- */
-function showModelNews(model) {
-  $('news-vendor').textContent = model.vendor || model.family || '';
-  $('news-title').textContent = model.label;
-  $('news-id').textContent = model.id;
-
-  const facts = [
-    ['Made by', model.vendor || model.family],
-    ['Released', model.releasedAt ? new Date(model.releasedAt).toLocaleDateString(undefined, {
-      year: 'numeric', month: 'long', day: 'numeric',
-    }) : 'not stated'],
-    [t('news.contextWindow'), fmtTokens(model.context) || 'not stated'],
-    [
-      'Price',
-      model.isFree
-        ? 'Free'
-        : model.price
-          ? `$${model.price.in} in · $${model.price.out} out per 1M tokens`
-          : 'not published',
-    ],
-    ['Runs on', t('news.yourKey')],
-  ];
-
-  $('news-facts').innerHTML = facts
-    .map(([term, value]) => `<dt>${escapeHtml(term)}</dt><dd>${escapeHtml(String(value))}</dd>`)
-    .join('');
-
-  $('news-description').textContent = model.description || '';
-  $('news-description').hidden = !model.description;
-
-  $('news-note').textContent = model.isFree
-    ? t('news.free')
-    : t('news.billed');
-
-  const decide = async (action) => {
-    $('news-apply').disabled = true;
-    $('news-decline').disabled = true;
-    try {
-      const { prefs } = await api.decideModelNews(model.id, action);
-      state.boot.prefs = prefs;
-      if (action === 'apply') {
-        state.model = prefs.defaultModel;
-        renderTopbar();
-        refreshModelFacts();
-        toast(`${model.label} is now your default model.`);
-      }
-      newsDialog.close();
-    } catch (err) {
-      toast(err.message, 'error');
-    } finally {
-      $('news-apply').disabled = false;
-      $('news-decline').disabled = false;
-    }
-  };
-
-  $('news-apply').onclick = () => decide('apply');
-  $('news-decline').onclick = () => decide('decline');
-
-  // Dismissing with Escape is not an answer, so it would come back next visit.
-  // Closing without deciding is a fair thing to want, so let it — and treat it
-  // as "not now", which is what it plainly means.
-  newsDialog.addEventListener('cancel', (event) => {
-    event.preventDefault();
-    decide('decline');
-  }, { once: true });
-
-  newsDialog.showModal();
-}
-
-async function checkModelNews() {
-  try {
-    const { model } = await api.modelNews();
-    if (!model) return;
-    showModelNews(model);
-    // Only now is the twenty-hour quiet period spent — see markAnnouncementShown.
-    // Not awaited: the dialog is up either way, and a failed acknowledgement
-    // should mean being told again, not losing the dialog.
-    api.decideModelNews(model.id, 'shown').catch(() => {});
-  } catch {
-    /* never worth interrupting a session over */
-  }
-}
+const modelNews = createModelNews({
+  state,
+  renderTopbar: () => renderTopbar(),
+  refreshModelFacts: () => refreshModelFacts(),
+});
 
 /* ── small menus ───────────────────────────────────────────────── */
 
@@ -4115,206 +3656,18 @@ $('context-gauge').addEventListener('click', () => {
 /* ── photos and files ──────────────────────────────────────────── */
 
 /**
- * What is attached to the message being written.
- *
- * Uploaded as soon as they are picked, so pressing send is instant and a slow
- * upload happens while you are still typing the question. Each entry keeps a
- * local object URL for its thumbnail — the browser already has the file, and
- * fetching the same megabytes back from the server to draw a 44px square would
- * be absurd.
+ * Staging, uploading and the vision warning all live in `attachments.js`.
+ * Created here rather than at the top of the file because it needs the model
+ * browser and the onboarding guide, and those are built further up.
  */
-const staged = [];
-
-const isImage = (type) => /^image\//i.test(type || '');
-
-function renderStaged() {
-  const host = $('attachments');
-  host.hidden = staged.length === 0;
-
-  host.innerHTML = staged
-    .map(
-      (file, i) => `
-      <div class="attachment${file.failed ? ' attachment--failed' : ''}">
-        ${
-          file.preview
-            ? `<img class="attachment__thumb" src="${file.preview}" alt="" />`
-            : `<span class="attachment__icon">${file.name.split('.').pop().slice(0, 4).toUpperCase()}</span>`
-        }
-        <span class="attachment__body">
-          <span class="attachment__name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-          <span class="attachment__meta">${
-            file.failed ? escapeHtml(file.failed) : file.id ? escapeHtml(humanSize(file.size)) : 'Uploading…'
-          }</span>
-        </span>
-        <button class="attachment__remove" data-drop="${i}" type="button" aria-label="Remove ${escapeHtml(file.name)}">✕</button>
-      </div>`,
-    )
-    .join('');
-
-  for (const btn of host.querySelectorAll('[data-drop]')) {
-    btn.addEventListener('click', () => {
-      const [gone] = staged.splice(Number(btn.dataset.drop), 1);
-      if (gone?.preview) URL.revokeObjectURL(gone.preview);
-      renderStaged();
-      refreshSendState();
-      renderVisionWarning();
-    });
-  }
-}
-
-
-/** A File as base64, without the `data:…;base64,` preamble the server does not want. */
-
-async function stageFiles(files) {
-  const limits = state.boot?.attachments || { maxBytes: 5 * 1024 * 1024, maxPerMessage: 6 };
-
-  for (const file of files) {
-    if (staged.length >= limits.maxPerMessage) {
-      toast(`${limits.maxPerMessage} files at a time is the limit.`, 'error');
-      break;
-    }
-    // Refused here as well as on the server, so a 5MB mistake is not found out
-    // at the end of a 5MB upload.
-    if (file.size > limits.maxBytes) {
-      toast(`${file.name} is ${humanSize(file.size)}. The limit is ${humanSize(limits.maxBytes)}.`, 'error');
-      continue;
-    }
-
-    const entry = {
-      name: file.name,
-      size: file.size,
-      id: null,
-      isImage: isImage(file.type),
-      preview: isImage(file.type) ? URL.createObjectURL(file) : null,
-    };
-    staged.push(entry);
-    renderStaged();
-    refreshSendState();
-    renderVisionWarning();
-
-    try {
-      const { attachment } = await api.uploadAttachment({
-        name: file.name,
-        mime: file.type,
-        data: await readAsBase64(file),
-      });
-      entry.id = attachment.id;
-    } catch (err) {
-      entry.failed = err.message;
-    }
-    renderStaged();
-    refreshSendState();
-  }
-}
-
-function clearStaged() {
-  for (const file of staged) if (file.preview) URL.revokeObjectURL(file.preview);
-  staged.length = 0;
-  renderStaged();
-  renderVisionWarning();
-}
-
-/**
- * Whether the chosen model can be shown a picture.
- *
- * Asked of the server because only it knows the catalogue, and cached because
- * the answer changes only when the model does. `true` until told otherwise: the
- * warning must never be the thing that appears wrongly.
- */
-let modelSeesImages = true;
-
-/**
- * Whether the chosen model is a free one.
- *
- * Answered by the same request as the vision question, because both are facts
- * about the model that only the server knows and asking twice would be two round
- * trips for one answer.
- */
-let modelIsFree = false;
-
-async function refreshModelFacts() {
-  if (!state.model) return;
-  // `auto` is not a real model id, so there is nothing to resolve. It only ever
-  // picks a free model, and a turn carrying an image lifts vision by itself, so
-  // the free badge is on and the vision warning stays off.
-  if (state.model === 'auto') {
-    modelIsFree = true;
-    modelSeesImages = true;
-    renderVisionWarning();
-    renderTopbar();
-    return;
-  }
-  try {
-    const { model } = await api.resolveModel(state.model);
-    modelSeesImages = model.vision !== false;
-    modelIsFree = !!model.isFree;
-  } catch {
-    // `true` until told otherwise: the vision warning must never be the thing
-    // that appears wrongly. A missing free badge is the harmless direction.
-    modelSeesImages = true;
-    modelIsFree = false;
-  }
-  renderVisionWarning();
-  renderTopbar();
-  onboarding.refresh();
-}
-
-/**
- * Say it before the send, not after the failure.
- *
- * Attaching a screenshot to a text-only model does not produce a worse answer —
- * the provider rejects the entire request, and on OpenRouter that arrives as a
- * bare "not found" with nothing to connect it to the image. Which is exactly how
- * it was reported: pasted a screenshot, got "not found".
- */
-function renderVisionWarning() {
-  const images = staged.filter((f) => f.isImage).length;
-  const show = images > 0 && !modelSeesImages;
-
-  $('vision-warning').hidden = !show;
-  if (!show) return;
-
-  const name = String(state.model || '').split('/').pop();
-  $('vision-warning-text').textContent =
-    `${name} cannot read images, so ${images === 1 ? 'it' : 'they'} will be left out.`;
-}
-
-$('vision-switch').addEventListener('click', () => browser.open(state.model));
-
-$('attach').addEventListener('click', () => $('file-input').click());
-
-$('file-input').addEventListener('change', async (event) => {
-  const files = [...event.target.files];
-  // Reset first: picking the same file twice in a row fires no change event
-  // otherwise, which looks exactly like the button being broken.
-  event.target.value = '';
-  await stageFiles(files);
+const attachments = createAttachments({
+  state,
+  refreshSendState: () => refreshSendState(),
+  renderTopbar: () => renderTopbar(),
+  onboarding,
+  openModelBrowser: (model) => browser.open(model),
 });
-
-// Pasting a screenshot is how most images actually arrive.
-$('input').addEventListener('paste', async (event) => {
-  const files = [...(event.clipboardData?.files || [])];
-  if (!files.length) return;
-  event.preventDefault();
-  await stageFiles(files);
-});
-
-// And dragging one onto the window is the other way.
-for (const type of ['dragover', 'drop']) {
-  document.addEventListener(type, (event) => {
-    if (!event.dataTransfer?.types?.includes('Files')) return;
-    event.preventDefault();
-    if (type === 'dragover') {
-      $('app').classList.add('is-dropping');
-      return;
-    }
-    $('app').classList.remove('is-dropping');
-    stageFiles([...event.dataTransfer.files]);
-  });
-}
-document.addEventListener('dragleave', (event) => {
-  if (event.relatedTarget === null) $('app').classList.remove('is-dropping');
-});
+const { staged, renderStaged, clearStaged, refreshModelFacts, renderVisionWarning } = attachments;
 
 /* ── appearance ────────────────────────────────────────────────── */
 
