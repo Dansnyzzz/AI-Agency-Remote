@@ -273,12 +273,12 @@ export function createProjectPage({ openChat, startChat, onBack }) {
           editingInstructions
             ? `<textarea id="pp-instructions">${escapeHtml(project.instructions || '')}</textarea>
                <div class="panel-card__foot">
-                 <button class="btn btn--primary" id="pp-save-instructions" type="button">Save</button>
+                 <button class="btn btn--primary" id="pp-save-instructions" type="button">${escapeHtml(t('action.save'))}</button>
                </div>`
             : `<p class="panel-card__say">${
                 project.instructions
                   ? escapeHtml(project.instructions)
-                  : 'Nothing standing yet. Anything written here is carried into every conversation in this project, so it never has to be re-explained.'
+                  : escapeHtml(t('project.noInstructions'))
               }</p>`
         }
       </section>

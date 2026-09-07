@@ -44,7 +44,7 @@ export const counted = (n, key) => (n === 1 ? t(`${key}One`) : t(key)).replace('
 export function readAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.onerror = () => reject(new Error(t('format.couldNotRead', { name: file.name })));
     reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
     reader.readAsDataURL(file);
   });

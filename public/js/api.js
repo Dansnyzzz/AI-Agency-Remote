@@ -274,7 +274,7 @@ export async function runAgent({ chatId, model, decision, runId, signal, handler
     // The refusal carries a reason — a 409 from the run lock, say — and losing
     // it to a generic "HTTP 409" is how a deliberate answer looks like a bug.
     const detail = await res.json().catch(() => ({}));
-    const err = new Error(detail.error || `Stream failed with HTTP ${res.status}`);
+    const err = new Error(detail.error || t('api.streamFailed', { status: res.status }));
     err.code = detail.code;
     err.status = res.status;
     throw err;

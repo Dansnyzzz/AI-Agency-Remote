@@ -411,7 +411,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
           query || order !== 'all' ? t('pages.artifacts.noneMatch') : t('pages.artifacts.none'),
           query || order !== 'all'
             ? ''
-            : 'Ask for a report, a quotation, a spreadsheet or a small page and it appears here — and stays, whichever conversation it came from.',
+            : t('pages.artifacts.empty'),
         );
       }
       return `<div class="cards">${list
@@ -460,8 +460,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
       get what() { return t('pages.idea.briefing.what'); },
       get when() { return t('pages.idea.briefing.when'); },
       cron: '08:00',
-      prompt:
-        'Search the web for what changed in the last 24 hours on the topics I follow, and write me a short briefing. Lead with anything that actually matters; say plainly if nothing did.',
+      get prompt() { return t('pages.idea.briefing.prompt'); },
       mark: '☀',
     },
     {
@@ -469,8 +468,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
       get what() { return t('pages.idea.watch.what'); },
       get when() { return t('pages.idea.watch.when'); },
       cron: '09:00',
-      prompt:
-        'Search for news about [topic] since yesterday. If nothing material has happened, say so in one line and stop — do not pad it out.',
+      get prompt() { return t('pages.idea.watch.prompt'); },
       mark: '◎',
     },
     {
@@ -478,8 +476,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
       get what() { return t('pages.idea.report.what'); },
       get when() { return t('pages.idea.report.when'); },
       cron: 'fri 16:00',
-      prompt:
-        'Summarise what we worked on this week and make it a .docx with create_file: what was done, what is outstanding, and what needs a decision.',
+      get prompt() { return t('pages.idea.report.prompt'); },
       mark: '▤',
     },
     {
@@ -487,8 +484,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
       get what() { return t('pages.idea.tests.what'); },
       get when() { return t('pages.idea.tests.when'); },
       cron: '09:00',
-      prompt:
-        'In my workspace, run the test suite and report the result. If anything failed, show the relevant output and say what you think is wrong.',
+      get prompt() { return t('pages.idea.tests.prompt'); },
       mark: '⟨⟩',
     },
   ];

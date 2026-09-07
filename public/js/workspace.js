@@ -2,7 +2,7 @@ import { api } from './api.js';
 import { t } from './i18n.js';
 import { escapeHtml } from './markdown.js';
 import { toast } from './render.js';
-import { humanSize } from './format.js';
+import { humanSize, counted } from './format.js';
 
 /**
  * The folder on the machine, from here.
@@ -26,10 +26,10 @@ const $ = (id) => document.getElementById(id);
 const ago = (ms) => {
   if (!ms) return '';
   const seconds = Math.round((Date.now() - ms) / 1000);
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86400)}d ago`;
+  if (seconds < 60) return t('time.justNow');
+  if (seconds < 3600) return t('time.minShort', { n: Math.round(seconds / 60) });
+  if (seconds < 86400) return t('time.hoursShort', { n: Math.round(seconds / 3600) });
+  return t('time.daysShort', { n: Math.round(seconds / 86400) });
 };
 
 /** Two presses to delete, and the second one has to be deliberate. */
@@ -131,7 +131,7 @@ export function createWorkspace() {
 
     body.innerHTML = rows.length
       ? `<div class="entries">${rows.join('')}</div>`
-      : '<p class="hint">This folder is empty.</p>';
+      : `<p class="hint">${escapeHtml(t('ws.empty'))}</p>`;
 
     for (const button of body.querySelectorAll('[data-open-dir]')) {
       button.addEventListener('click', () => open(button.dataset.openDir));
@@ -273,7 +273,7 @@ export function createWorkspace() {
 
   async function open(path = '.') {
     editing = null;
-    body.innerHTML = '<div class="viewer__loading"><span class="spinner"></span> Reading the folder…</div>';
+    body.innerHTML = `<div class="viewer__loading"><span class="spinner"></span> ${escapeHtml(t('ws.readingFolder'))}</div>`;
     if (!dialog.open) dialog.showModal();
 
     try {
@@ -286,7 +286,7 @@ export function createWorkspace() {
       // The commonest reason by far, and the one with something to do about it.
       const offline = /no computer is connected/i.test(err.message);
       body.innerHTML = `<p class="hint">${escapeHtml(err.message)}${
-        offline ? '<br><br>Start the worker on the machine you want to work on — Settings → Computers.' : ''
+        offline ? `<br><br>${escapeHtml(t('ws.startWorker'))}` : ''
       }</p>`;
     }
   }
@@ -305,7 +305,7 @@ export function createWorkspace() {
     editing = null;
     crumbs.hidden = false;
     crumbs.innerHTML =
-      `<button class="crumbs__step" type="button" data-go="${escapeHtml(at)}">← back to ${escapeHtml(at)}</button>` +
+      `<button class="crumbs__step" type="button" data-go="${escapeHtml(at)}">${escapeHtml(t('ws.backTo', { where: at }))}</button>` +
       `<span class="crumbs__sep">/</span><span class="crumbs__here">"${escapeHtml(query)}"</span>`;
     for (const button of crumbs.querySelectorAll('[data-go]')) {
       button.addEventListener('click', () => open(button.dataset.go));
@@ -322,14 +322,19 @@ export function createWorkspace() {
     }
 
     if (!found.files.length) {
-      body.innerHTML = `<p class="hint">Nothing in ${escapeHtml(at)} contains “${escapeHtml(query)}”. ${found.scanned} files read.</p>`;
+      body.innerHTML = `<p class="hint">${escapeHtml(t('ws.noMatch', { where: at, query, scanned: found.scanned }))}</p>`;
       return;
     }
 
     body.innerHTML =
-      `<p class="hint hits__count">${found.matches} match${found.matches === 1 ? '' : 'es'} in ${
-        found.files.length
-      } file${found.files.length === 1 ? '' : 's'}${found.truncated ? ', and more beyond the limit' : ''}.</p>` +
+      `<p class="hint hits__count">${escapeHtml(
+        // Two counts, each plural in its own right — `counted` picks the form
+        // for each rather than one sentence guessing at both.
+        t('ws.hits', {
+          matches: counted(found.matches, 'ws.matches'),
+          files: counted(found.files.length, 'ws.files'),
+        }) + (found.truncated ? t('ws.hitsMore') : ''),
+      )}</p>` +
       found.files
         .map(
           (file) => `

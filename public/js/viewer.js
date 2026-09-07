@@ -99,8 +99,8 @@ const ago = (value) => {
   const then = new Date(value).getTime();
   if (!Number.isFinite(then)) return '';
   const seconds = Math.round((Date.now() - then) / 1000);
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 60) return t('time.justNow');
+  if (seconds < 3600) return t('time.minShort', { n: Math.round(seconds / 60) });
   if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
   return new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
@@ -174,7 +174,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
   /* ── drawing ──────────────────────────────────────────────────── */
 
   function renderSheets(sheets) {
-    if (!sheets.length) return '<p class="viewer__empty">This workbook has no sheets.</p>';
+    if (!sheets.length) return `<p class="viewer__empty">${escapeHtml(t('viewer.noSheets'))}</p>`;
     const sheet = sheets[Math.min(sheetIndex, sheets.length - 1)];
     const columns = Math.max(sheet.columns || 0, 1);
 
@@ -199,13 +199,13 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     return (
       `<div class="grid-wrap"><table class="grid"><thead>${head}</thead><tbody>${rows}</tbody></table></div>` +
       (sheet.truncated
-        ? '<p class="viewer__note">This sheet is larger than the preview shows. Download it to see the rest.</p>'
+        ? `<p class="viewer__note">${escapeHtml(t('viewer.sheetTruncated'))}</p>`
         : '')
     );
   }
 
   function renderSlides(slides) {
-    if (!slides.length) return '<p class="viewer__empty">This deck has no slides.</p>';
+    if (!slides.length) return `<p class="viewer__empty">${escapeHtml(t('viewer.noSlides'))}</p>`;
     return `<div class="slides">${slides
       .map((slide) => {
         const bullets = (slide.bullets || [])
@@ -268,7 +268,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     // Everything else is shown as what it is. An .html file is deliberately not
     // rendered: it would be a page from a stranger running inside this session.
     return `<pre class="viewer__code">${escapeHtml(preview.text)}</pre>${
-      format === 'html' ? '<p class="viewer__note">Shown as source. Download it to open the page itself.</p>' : ''
+      format === 'html' ? `<p class="viewer__note">${escapeHtml(t('viewer.asSource'))}</p>` : ''
     }`;
   }
 
@@ -322,7 +322,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
             : t('viewer.versionNote')
         }</span>` +
         (editable()
-          ? '<button class="btn btn--primary editor__save" id="viewer-save" type="button">Save</button>'
+          ? `<button class="btn btn--primary editor__save" id="viewer-save" type="button">${escapeHtml(t('action.save'))}</button>`
           : '') +
         '</div></div>'
       );
@@ -330,7 +330,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     if (tab === 'text') {
       return preview.text
         ? `<pre class="viewer__code">${escapeHtml(preview.text)}</pre>`
-        : '<p class="viewer__empty">There is no text in this document to show — it is a scan, or pictures of pages.</p>';
+        : `<p class="viewer__empty">${escapeHtml(t('viewer.noText'))}</p>`;
     }
 
     switch (preview.kind) {
@@ -368,10 +368,10 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
       case 'unreadable':
         return (
           `<p class="viewer__empty">${escapeHtml(preview.message || t('viewer.unreadable'))}</p>` +
-          '<p class="viewer__note">The file itself is intact — download it and open it in the application it came from.</p>'
+          `<p class="viewer__note">${escapeHtml(t('viewer.intact'))}</p>`
         );
       default:
-        return '<p class="viewer__empty">There is nothing to preview for this kind of file.</p>';
+        return `<p class="viewer__empty">${escapeHtml(t('viewer.noPreview'))}</p>`;
     }
   }
 
@@ -454,7 +454,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     const live = history.current;
     const on = showingRevision ?? live;
     versionsNode.innerHTML =
-      '<span class="filepane__vlabel">Versions</span>' +
+      `<span class="filepane__vlabel">${escapeHtml(t('viewer.versions'))}</span>` +
       versions
         .map(
           (v) =>
@@ -465,7 +465,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
         )
         .join('') +
       (showingRevision !== null
-        ? '<button class="vchip vchip--restore" id="viewer-restore" type="button">Restore this version</button>'
+        ? `<button class="vchip vchip--restore" id="viewer-restore" type="button">${escapeHtml(t('viewer.restore'))}</button>`
         : '');
   }
 
@@ -743,8 +743,8 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
       const { path, app } = await api.openFileOnMachine(current.file.id, how);
       toast(
         how === 'folder'
-          ? `Showing it in ${path.replace(/[\\/][^\\/]+$/, '')}.`
-          : `Opened in ${app || 'the default application'}.`,
+          ? t('viewer.showingIn', { where: path.replace(/[\\/][^\\/]+$/, '') })
+          : t('viewer.openedIn', { app: app || t('viewer.defaultApp') }),
       );
     } catch (err) {
       toast(err.message, 'error');
@@ -845,7 +845,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
       restore.disabled = true;
       try {
         await api.restoreFileVersion(current.file.id, showingRevision);
-        toast(`v${showingRevision} is the current version now.`);
+        toast(t('viewer.nowCurrent', { revision: showingRevision }));
         await load(current.file.id, { keepTab: true });
         onChange?.();
       } catch (err) {
@@ -864,7 +864,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
 
   async function showRevision() {
     const id = current.file.id;
-    bodyNode.innerHTML = '<div class="viewer__loading"><span class="spinner"></span> Reading…</div>';
+    bodyNode.innerHTML = `<div class="viewer__loading"><span class="spinner"></span> ${escapeHtml(t('viewer.reading'))}</div>`;
     try {
       current =
         showingRevision === null ? await api.filePreview(id) : await api.fileVersion(id, showingRevision);
@@ -1023,7 +1023,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
       tabsNode.hidden = true;
       versionsNode.hidden = true;
       $('viewer-sheets').hidden = true;
-      bodyNode.innerHTML = '<div class="viewer__loading"><span class="spinner"></span> Reading the document…</div>';
+      bodyNode.innerHTML = `<div class="viewer__loading"><span class="spinner"></span> ${escapeHtml(t('viewer.readingDoc'))}</div>`;
       pane.hidden = false;
       onOpen?.();
 

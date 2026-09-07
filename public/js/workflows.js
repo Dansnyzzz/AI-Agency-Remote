@@ -21,22 +21,29 @@ import { escapeHtml } from './markdown.js';
  * that came from a person or a model goes through `escapeHtml`.
  */
 
-/** How a step reads on screen, and what it means. */
-const STEP_LOOK = {
-  pending: { mark: '○', say: 'waiting' },
-  running: { mark: '◐', say: 'running' },
-  done: { mark: '●', say: 'done' },
-  failed: { mark: '✕', say: 'failed' },
-  unknown: { mark: '?', say: 'interrupted — not repeated' },
+/**
+ * How a step reads on screen, and what it means.
+ *
+ * Keys, not sentences: an object literal calling `t()` is evaluated once at
+ * import and would freeze this whole shelf in whichever language loaded first.
+ */
+const STEP_MARK = {
+  pending: '○',
+  running: '◐',
+  done: '●',
+  failed: '✕',
+  unknown: '?',
 };
 
-const RUN_LOOK = {
-  running: 'in progress',
-  done: 'finished',
-  failed: 'stopped on a failure',
-  needs_attention: 'waiting for you',
-  cancelled: 'cancelled',
-};
+const stepLook = (status) => ({
+  mark: STEP_MARK[status] || STEP_MARK.pending,
+  say: t(`wf.step.${STEP_MARK[status] ? status : 'pending'}`),
+});
+
+const RUN_STATES = ['running', 'done', 'failed', 'needs_attention', 'cancelled'];
+
+/** A run's status in words, or the raw status when the server invents a new one. */
+const runSay = (status) => (RUN_STATES.includes(status) ? t(`wf.run.${status}`) : status);
 
 const clip = (text, max = 140) => {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
@@ -83,12 +90,10 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
     get orderLabel() {
       return t('pages.sortBy');
     },
-    lede:
-      'Several steps, in order, run without anyone watching. Each step sees what the last one produced, ' +
-      'and a run that is interrupted carries on where it stopped rather than starting again.',
+    lede: t('wf.lede'),
     orders: [
       { id: 'recent', label: t('wf.order.recent') },
-      { id: 'name', label: 'Name' },
+      { id: 'name', label: t('wf.order.name') },
     ],
 
     load: async () => (await api.workflows()).workflows,
@@ -131,7 +136,7 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
           const trail = steps
             .map((step, i) => {
               const status = state[i]?.status || 'pending';
-              const look = STEP_LOOK[status] || STEP_LOOK.pending;
+              const look = stepLook(status);
               const why = state[i]?.error ? ` — ${clip(state[i].error, 120)}` : '';
               return `
                 <li class="wf__step wf__step--${escapeHtml(status)}">
@@ -157,9 +162,9 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
             <div>
               <div class="wf__name">${escapeHtml(wf.title)}</div>
               <div class="wf__when">
-                ${escapeHtml(wf.cron ? `every ${wf.cron}` : 'runs when you press it')}
+                ${escapeHtml(wf.cron ? t('wf.everyCron', { cron: wf.cron }) : t('wf.onDemand'))}
                 ${wf.enabled ? '' : ` · ${escapeHtml(t('wf.paused'))}`}
-                ${run ? ` · ${escapeHtml(t('wf.lastRun').replace('{status}', RUN_LOOK[run.status] || run.status))}` : ` · ${escapeHtml(t('wf.neverRun'))}`}
+                ${run ? ` · ${escapeHtml(t('wf.lastRun', { status: runSay(run.status) }))}` : ` · ${escapeHtml(t('wf.neverRun'))}`}
               </div>
             </div>
             <div class="wf__acts">
@@ -213,7 +218,7 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
                 ? t('wf.finished')
                 : run?.status === 'running'
                   ? t('wf.startedBackground')
-                  : `Stopped: ${RUN_LOOK[run?.status] || run?.status || 'unknown'}.`,
+                  : t('wf.stopped', { status: runSay(run?.status) || t('wf.run.unknown') }),
             );
           } catch (err) {
             toast(err.message);

@@ -20,7 +20,7 @@ import { createPages } from './pages.js';
 import { createProjectPage } from './project-page.js';
 import { t, applyI18n, adoptLanguage, setLanguage, currentLanguage, LANGUAGES } from './i18n.js';
 import { createOnboarding } from './onboarding.js';
-import { humanSize } from './format.js';
+import { humanSize, counted } from './format.js';
 import { createAttachments } from './attachments.js';
 import { createModelNews } from './model-news.js';
 import { createDevices } from './devices.js';
@@ -372,7 +372,7 @@ function renderGateMode() {
       ? t('gate.submit.forgot')
       : signup
         ? t('gate.submit.signup')
-        : 'Sign in';
+        : t('gate.submit.signin');
 
   // Always offer the other direction. Someone whose session expired lands here
   // too, and on a fresh deployment they would otherwise have no way through.
@@ -689,7 +689,7 @@ function openRowMenu(chat, anchor, titleButton) {
     item('Delete', ICON.trash, 'D', async (el) => {
       if (!armed) {
         armed = true;
-        el.querySelector('span').textContent = 'Really delete?';
+        el.querySelector('span').textContent = t('action.reallyDelete');
         return;
       }
       closeRowMenu();
@@ -1027,7 +1027,7 @@ function startBlankChat(project = null) {
   $('messages').innerHTML = '';
   $('status-host').innerHTML = '';
   hideApproval();
-  $('chat-title').textContent = project ? `New chat — ${project.name}` : t('nav.newChat');
+  $('chat-title').textContent = project ? t('chat.newIn', { project: project.name }) : t('nav.newChat');
   setEmpty(true);
   // Nothing in the sidebar is selected any more, because what you are looking
   // at is not in it.
@@ -1057,10 +1057,12 @@ function renderProjectChip() {
   chip.textContent = project.name;
   chip.classList.toggle('is-grounded', !!project.grounded);
   chip.title = project.files
-    ? `${project.grounded ? t('chat.answersFrom') : t('chat.answersFirstFrom')} ${project.files} source${
-        project.files === 1 ? '' : 's'
-      } in "${project.name}".`
-    : `"${project.name}" has no sources yet, so this conversation answers like any other.`;
+    ? t('chat.sourceCount', {
+        how: project.grounded ? t('chat.answersFrom') : t('chat.answersFirstFrom'),
+        sources: counted(project.files, 'chat.sources'),
+        project: project.name,
+      })
+    : t('chat.noSources', { project: project.name });
 }
 
 $('project-chip').addEventListener('click', () => {
@@ -1408,8 +1410,8 @@ function beginEdit(message, text) {
   const row = document.createElement('div');
   row.className = 'bubble__editrow';
   row.innerHTML =
-    '<button class="btn btn--ghost btn--small" type="button" data-edit="cancel">Cancel</button>' +
-    '<button class="btn btn--primary btn--small" type="button" data-edit="save">Save and ask again</button>';
+    `<button class="btn btn--ghost btn--small" type="button" data-edit="cancel">${escapeHtml(t('action.cancel'))}</button>` +
+    `<button class="btn btn--primary btn--small" type="button" data-edit="save">${escapeHtml(t('chat.saveAndAsk'))}</button>`;
 
   bubble.innerHTML = '';
   bubble.append(box, row);
@@ -2275,16 +2277,16 @@ function renderConnectSteps() {
   const code = `<code class="connect__cmd">${escapeHtml(command)}</code>`;
 
   host.innerHTML = [
-    step(`On that computer: clone this repo, then <code>npm install</code>.`),
+    step(t('connect.step.clone')),
     step(
-      `Run ${code} <button class="btn btn--ghost btn--tiny" id="copy-connect" type="button" ` +
+      t('connect.step.run', { code }) +
+        ` <button class="btn btn--ghost btn--tiny" id="copy-connect" type="button" ` +
         `data-command="${escapeHtml(command)}">${escapeHtml(t('worker.copy'))}</button>`,
     ),
     step(
       remote
-        ? `It shows a pairing code. Enter it below, or from the <strong>Computers</strong> button in the header.`
-        : `It shows a pairing code — unless this is the same machine, in which case it is already connected. ` +
-          `To add a <em>different</em> computer, run <code>npm run connect -- &lt;this app's address&gt;</code> there instead.`,
+        ? t('connect.step.codeRemote')
+        : `${t('connect.step.codeLocal')} ${t('connect.step.codeLocalMore')}`,
     ),
   ].join('');
 }
@@ -2387,9 +2389,9 @@ function renderWorker() {
       ? [
           worker.info?.fullDisk
             ? t('worker.fullDisk')
-            : `File tools: inside the workspace only`,
+            : t('worker.workspaceOnly'),
           worker.info?.desktop
-            ? 'Desktop control: <strong>on</strong> — it can drive real applications'
+            ? t('worker.desktopOn')
             : t('worker.desktopOff'),
         ].join('<br />')
       : '';
@@ -2849,11 +2851,11 @@ function fillSettings() {
   const keyRow = (provider, entry, spare) => `
     <div class="keyrow">
       <span class="keyrow__no">${entry.position}</span>
-      <span class="keyrow__hint">${escapeHtml(entry.hint || 'saved key')}</span>
+      <span class="keyrow__hint">${escapeHtml(entry.hint || t('keys.saved'))}</span>
       <span class="keyrow__when">${entry.addedAt ? escapeHtml(relativeWhen(entry.addedAt)) : ''}</span>
-      ${entry.position === 1 && spare ? '<span class="keyrow__badge">in use</span>' : ''}
+      ${entry.position === 1 && spare ? `<span class="keyrow__badge">${escapeHtml(t('devices.inUse'))}</span>` : ''}
       <button class="keyrow__drop" data-drop-key="${escapeHtml(provider)}" data-position="${entry.position}"
-              type="button" aria-label="Remove key ${entry.position}">✕</button>
+              type="button" aria-label="${escapeHtml(t('keys.removeAria', { position: entry.position }))}">✕</button>
     </div>`;
 
   $('provider-list').innerHTML = Object.entries(providerMeta)
@@ -2863,10 +2865,10 @@ function fillSettings() {
       const label = status.own
         ? keys.length > 1
           ? `${keys.length} keys`
-          : 'your key'
+          : t('keys.yours')
         : status.shared
-          ? 'shared key'
-          : 'not set';
+          ? t('keys.shared')
+          : t('keys.notSet');
 
       return `
         <div class="provider">
@@ -2894,9 +2896,9 @@ function fillSettings() {
             <a href="${escapeHtml(meta.console)}" target="_blank" rel="noopener">Get a key →</a>
             ${
               keys.length > 1
-                ? ` · tried in order — if key 1 is refused, key 2 answers`
+                ? ` · ${escapeHtml(t('keys.triedInOrder'))}`
                 : keys.length
-                  ? ' · add a second key and it becomes the fallback for this one'
+                  ? ` · ${escapeHtml(t('keys.addFallback'))}`
                   : ''
             }
           </div>
@@ -2921,7 +2923,7 @@ function fillSettings() {
         // sheet, so telling somebody to paste a key they have just pasted would
         // be the guide arguing with them.
         onboarding.refresh();
-        toast(value ? `${providerMeta[provider].label} key saved.` : `${providerMeta[provider].label} key removed.`);
+        toast(t(value ? 'keys.savedFor' : 'keys.removedFor', { provider: providerMeta[provider].label }));
         fillSettings();
       } catch (err) {
         toast(err.message, 'error');
@@ -2934,7 +2936,7 @@ function fillSettings() {
       const provider = btn.dataset.dropKey;
       try {
         state.boot.providers = await api.removeKey(provider, Number(btn.dataset.position));
-        toast(`Key removed from ${providerMeta[provider].label}.`);
+        toast(t('keys.removedFrom', { provider: providerMeta[provider].label }));
         fillSettings();
       } catch (err) {
         toast(err.message, 'error');
@@ -3025,7 +3027,7 @@ async function loadSkills() {
           </div>`,
         )
         .join('')}</div>`
-    : '<p class="hint">Nothing taught yet.</p>';
+    : `<p class="hint">${escapeHtml(t('skills.empty'))}</p>`;
 
   for (const btn of $('skill-list').querySelectorAll('[data-skill-toggle]')) {
     btn.addEventListener('click', async () => {
@@ -3063,24 +3065,34 @@ async function loadTasks() {
   const { tasks } = await api.tasks();
   $('task-list').innerHTML = tasks.length
     ? `<div class="rows">${tasks
-        .map((t) => {
-          const when = t.cron ? `every ${escapeHtml(t.cron)}` : 'once';
-          const last = t.last_status ? ` · last: ${escapeHtml(t.last_status).slice(0, 40)}` : '';
+        // Named `task`, not `t` — the parameter used to shadow the translator,
+        // which is why every string in this block stayed English.
+        .map((task) => {
+          const when = task.cron ? t('tasks.everyCron', { cron: escapeHtml(task.cron) }) : t('tasks.once');
+          const last = task.last_status
+            ? ` · ${t('tasks.last', { status: escapeHtml(task.last_status).slice(0, 40) })}`
+            : '';
           return `<div class="rows__item">
-            <span class="grow">${escapeHtml(t.title)}
+            <span class="grow">${escapeHtml(task.title)}
               <span class="muted">· ${when} · ${
-                t.enabled ? `next ${escapeHtml(relativeWhen(t.next_run_at))}` : 'paused'
+                task.enabled
+                  ? escapeHtml(t('tasks.next', { when: relativeWhen(task.next_run_at) }))
+                  : escapeHtml(t('tasks.paused'))
               }${last}</span>
             </span>
-            ${t.last_chat ? `<button data-task-open="${escapeHtml(t.last_chat)}">Open result</button>` : ''}
-            <button data-task-toggle="${escapeHtml(t.id)}" data-on="${!!t.enabled}">${
-              t.enabled ? 'Pause' : 'Resume'
-            }</button>
-            <button data-task-del="${escapeHtml(t.id)}">Remove</button>
+            ${
+              task.last_chat
+                ? `<button data-task-open="${escapeHtml(task.last_chat)}">${escapeHtml(t('tasks.openResult'))}</button>`
+                : ''
+            }
+            <button data-task-toggle="${escapeHtml(task.id)}" data-on="${!!task.enabled}">${escapeHtml(
+              task.enabled ? t('tasks.pause') : t('tasks.resume'),
+            )}</button>
+            <button data-task-del="${escapeHtml(task.id)}">${escapeHtml(t('action.remove'))}</button>
           </div>`;
         })
         .join('')}</div>`
-    : '<p class="hint">Nothing scheduled.</p>';
+    : `<p class="hint">${escapeHtml(t('tasks.empty'))}</p>`;
 
   for (const btn of $('task-list').querySelectorAll('[data-task-toggle]')) {
     btn.addEventListener('click', async () => {
@@ -3111,7 +3123,7 @@ $('task-save').addEventListener('click', async () => {
       when: $('task-when').value,
       repeat: $('task-repeat').checked,
     });
-    status.textContent = `Scheduled. First run ${relativeWhen(task.next_run_at)}.`;
+    status.textContent = t('tasks.scheduled', { when: relativeWhen(task.next_run_at) });
     $('task-title').value = '';
     $('task-prompt').value = '';
     loadTasks();
@@ -3128,7 +3140,7 @@ async function loadConnectors() {
         <div class="provider__head">
           <span class="provider__name">${escapeHtml(c.label)}</span>
           <span class="badge ${c.connected ? 'badge--ok' : ''}">${
-            c.connected ? escapeHtml(c.account || 'connected') : 'not connected'
+            c.connected ? escapeHtml(c.account || t('connectors.connected')) : escapeHtml(t('connectors.notConnected'))
           }</span>
         </div>
         <div class="hint">${escapeHtml(c.help)}</div>
@@ -3148,7 +3160,7 @@ async function loadConnectors() {
       btn.disabled = true;
       try {
         const { account } = await api.connect(service, field.value);
-        toast(`Connected as ${account}.`);
+        toast(t('connectors.connectedAs', { account }));
         loadConnectors();
       } catch (err) {
         toast(err.message, 'error');
@@ -3183,7 +3195,7 @@ function renderUsagePanel(host, usage) {
           ? `<div class="meter"><div class="meter__fill ${level}" style="width:${pct}%"></div></div>
              <div class="hint">${pct}% of your ${limit.toLocaleString()} shared-key tokens this month.
              Add your own API key to remove the limit.</div>`
-          : '<div class="hint">No limit — you are using your own API key.</div>'
+          : `<div class="hint">${escapeHtml(t('usage.noLimit'))}</div>`
       }
     </div>` +
     (byModel.length
@@ -3199,7 +3211,7 @@ function renderUsagePanel(host, usage) {
             </div>`,
           )
           .join('')}</div>`
-      : '<p class="hint">Nothing used in the last 30 days.</p>');
+      : `<p class="hint">${escapeHtml(t('usage.empty'))}</p>`);
 }
 
 $('save-name').addEventListener('click', async () => {
@@ -3226,12 +3238,12 @@ async function loadAdmin() {
     $('user-list').innerHTML = `<div class="rows">${users
       .map((u) => {
         const tags = [
-          `${u.chat_count} chats`,
-          `${Number(u.tokens_this_month || 0).toLocaleString()} tok this month`,
-          u.has_worker ? 'worker paired' : null,
-          u.email_verified_at ? null : 'unconfirmed',
-          u.suspended_at ? 'suspended' : null,
-          u.monthly_token_limit ? `limit ${Number(u.monthly_token_limit).toLocaleString()}` : null,
+          t('admin.chatCount', { n: u.chat_count }),
+          t('admin.tokensThisMonth', { n: Number(u.tokens_this_month || 0).toLocaleString() }),
+          u.has_worker ? t('admin.workerPaired') : null,
+          u.email_verified_at ? null : t('admin.unconfirmed'),
+          u.suspended_at ? t('admin.suspended') : null,
+          u.monthly_token_limit ? t('admin.limit', { n: Number(u.monthly_token_limit).toLocaleString() }) : null,
         ].filter(Boolean);
 
         const self = u.id === state.boot.user.id;
@@ -3369,7 +3381,9 @@ $('add-model-btn').addEventListener('click', async () => {
     const { model } = await api.addModel(id);
     input.value = '';
     // Shared on purpose: everyone on this deployment can now pick it.
-    status.textContent = `Added ${model.label}${model.isFree ? ' (free)' : ''} — everyone can select it now.`;
+    status.textContent = t('library.added', {
+      model: model.label + (model.isFree ? t('library.freeSuffix') : ''),
+    });
     state.boot.library = await api.models({ limit: 1 }).then((d) => d.status);
   } catch (err) {
     status.textContent = err.message;
@@ -3646,7 +3660,7 @@ $('context-gauge').addEventListener('click', () => {
         toast(t('compact.working'));
         const { summary, context } = await api.compactChat(state.chatId);
         renderContext(context);
-        toast(`Summarised ${summary.replaced} earlier messages.`);
+        toast(t('chat.summarised', { n: summary.replaced }));
         await openChat(state.chatId);
       },
     },
@@ -4030,7 +4044,7 @@ async function runSearch() {
   $('search-clear').hidden = !query;
 
   if (query.length < 2) {
-    results.innerHTML = '<p class="hint">Type at least two characters.</p>';
+    results.innerHTML = `<p class="hint">${escapeHtml(t('search.tooShort'))}</p>`;
     return;
   }
 
@@ -4044,7 +4058,7 @@ async function runSearch() {
   }
 
   if (!chats.length) {
-    results.innerHTML = `<p class="hint">Nothing matched “${escapeHtml(query)}”.</p>`;
+    results.innerHTML = `<p class="hint">${escapeHtml(t('search.noMatch', { query }))}</p>`;
     return;
   }
 
@@ -4073,7 +4087,7 @@ $('open-search').addEventListener('click', () => {
   searchDialog.showModal();
   $('search-input').value = '';
   $('search-clear').hidden = true;
-  $('search-results').innerHTML = '<p class="hint">Search your conversations by title, or by anything said in them.</p>';
+  $('search-results').innerHTML = `<p class="hint">${escapeHtml(t('search.lede'))}</p>`;
   // Opening the on-screen keyboard the instant a sheet appears is jarring on a
   // phone, so only autofocus where there is a real keyboard.
   if (!matchMedia('(hover: none)').matches) $('search-input').focus();

@@ -85,7 +85,7 @@ export function createModelBrowser({ onPick }) {
       const libraryProvider = isLibrary(provider) && provider !== 'all' ? provider : undefined;
       data = await api.models({ q: parsed.text, tier, family, sort: state.sort, provider: libraryProvider });
     } catch (err) {
-      results.innerHTML = `<p class="hint">Could not load models: ${escapeHtml(err.message)}</p>`;
+      results.innerHTML = `<p class="hint">${escapeHtml(t('models.loadFailed', { error: err.message }))}</p>`;
       return;
     }
 
@@ -180,7 +180,7 @@ export function createModelBrowser({ onPick }) {
     // The counts describe the shared library, so saying them while a first-party
     // provider is selected would be describing the wrong thing.
     if (provider && !isLibrary(provider)) {
-      statusLabel.textContent = `${PROVIDER_LABEL[provider]} models — billed to your own ${PROVIDER_LABEL[provider]} key.`;
+      statusLabel.textContent = t('models.billedToKey', { provider: PROVIDER_LABEL[provider] });
       return;
     }
     statusLabel.textContent = status.total
@@ -194,7 +194,7 @@ export function createModelBrowser({ onPick }) {
     if (isRecent(model.releasedAt)) tags.push('<span class="tag tag--new">new</span>');
     // The one capability that fails loudly rather than quietly: send a picture
     // to a model without it and the provider rejects the whole request.
-    if (model.vision !== false) tags.push('<span class="tag tag--vision">sees images</span>');
+    if (model.vision !== false) tags.push(`<span class="tag tag--vision">${escapeHtml(t('models.seesImages'))}</span>`);
     if (isBuiltin) tags.push('<span class="tag">built-in</span>');
 
     const meta = [
@@ -243,7 +243,7 @@ export function createModelBrowser({ onPick }) {
       // reason, and a generic "nothing matched" would leave people hunting.
       const why =
         tier === 'free' && provider && !isLibrary(provider)
-          ? `${PROVIDER_LABEL[provider]} has no free models — they bill to your own key. Try the Free tier under OpenRouter or OrcaRouter.`
+          ? t('models.noFreeHere', { provider: PROVIDER_LABEL[provider] })
           : t('models.noMatch');
       results.innerHTML = sections.join('') + `<p class="hint">${escapeHtml(why)}</p>`;
       return;
@@ -356,7 +356,7 @@ export function createModelBrowser({ onPick }) {
     btn.textContent = t('models.refreshing');
     try {
       const status = await api.refreshModels();
-      toast(`Library updated — ${status.total.toLocaleString()} models.`);
+      toast(t('models.libraryUpdated', { total: status.total.toLocaleString() }));
       await load();
     } catch (err) {
       toast(err.message, 'error');

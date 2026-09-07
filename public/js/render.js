@@ -90,10 +90,10 @@ export function summariseToolInput(name, input = {}) {
     case 'create_file':
       return `${input.name || 'document'}${input.format ? ` (${input.format})` : ''}`;
     case 'update_file':
-      return input.name || 'rewriting the document';
+      return input.name || t('tool.arg.rewriting');
     case 'memory_write':
     case 'memory_read':
-      return input.key || 'all notes';
+      return input.key || t('tool.arg.allNotes');
     case 'update_plan':
       return `${(input.steps || []).length} steps`;
     default: {

@@ -56,7 +56,7 @@ export function createScreen() {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `screen__tab${tab.active ? ' is-active' : ''}`;
-      button.textContent = tab.host || 'new tab';
+      button.textContent = tab.host || t('screen.newTab');
       button.title = `Tab ${tab.index}: ${tab.host}`;
       button.addEventListener('click', () => send({ type: 'tab', key: String(tab.index) }));
       tabStrip.append(button);
