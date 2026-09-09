@@ -439,6 +439,79 @@ console.log('\n[1mbrief[0m');
   is(/Branch/.test(parsed?.hookSpecificOutput?.additionalContext || ''), 'and says which branch this is');
   is(Boolean(parsed?.hookSpecificOutput?.sessionTitle), 'and titles the session');
 }
+
+/*
+ * The briefing has to describe the fence the guard is actually enforcing.
+ *
+ * It did not. `brief.js` built its own sentence and said "commits here are
+ * blocked by guard-bash.js" on every protected branch, unconditionally — so once
+ * `AI_REMOTE_ALLOW_MAIN` existed, every session opening on `main` was told a
+ * stop was in place that the guard was letting straight through. Both files read
+ * `branch.js` now, and these three cases are the reason it exists: the same
+ * branch, the same command, two switch states, and the sentence has to move with
+ * the guard rather than beside it.
+ *
+ * Each case states its environment rather than inheriting one. That is CFG-011's
+ * lesson: this repo sets the switch in `.claude/settings.json`, so a spread of
+ * `process.env` would have handed it to the very check that proves it is off.
+ */
+{
+  const briefOn = (branch, allow) => {
+    const env = { ...gateEnv, CLAUDE_GUARD_BRANCH: branch };
+    if (allow === undefined) delete env.AI_REMOTE_ALLOW_MAIN;
+    else env.AI_REMOTE_ALLOW_MAIN = allow;
+    const run = check(
+      'brief.js',
+      { hook_event_name: 'SessionStart', source: 'startup' },
+      ALLOW,
+      `briefing on \`${branch}\` with the switch ${allow === undefined ? 'unset' : `= ${allow}`}`,
+      env,
+    );
+    try {
+      return JSON.parse(run.stdout.trim())?.hookSpecificOutput?.additionalContext || '';
+    } catch {
+      return '';
+    }
+  };
+
+  const lifted = briefOn('main', '1');
+  is(/protection is LIFTED/.test(lifted), 'with the switch on it says the protection is lifted');
+  is(!/commits here are blocked/.test(lifted), 'and does not claim commits are blocked');
+
+  const fenced = briefOn('main');
+  is(/commits here are blocked/.test(fenced), 'with the switch unset it says commits are blocked');
+  is(!/LIFTED/.test(fenced), 'and does not claim the fence is open');
+
+  is(/commits here are blocked/.test(briefOn('master', '0')), '`0` is not consent, and master is protected too');
+
+  const feature = briefOn('audit/some-branch', '1');
+  is(!/LIFTED|blocked/.test(feature), 'an ordinary branch gets neither sentence, switch or no switch');
+
+  /*
+   * The point of the whole change, stated as one assertion: whatever the guard
+   * does with `git commit` on this branch, the briefing must be describing that
+   * same behaviour. If these two ever disagree again, this is the check that
+   * says so.
+   */
+  for (const allow of ['1', undefined]) {
+    const env = { ...gateEnv, CLAUDE_GUARD_BRANCH: 'main' };
+    if (allow === undefined) delete env.AI_REMOTE_ALLOW_MAIN;
+    else env.AI_REMOTE_ALLOW_MAIN = allow;
+    const guard = spawnSync(process.execPath, [path.join(here, 'guard-bash.js')], {
+      input: JSON.stringify(bash('git commit -m "x"')),
+      encoding: 'utf8',
+      cwd: root,
+      timeout: 90_000,
+      env,
+    });
+    const guardAllows = guard.status === ALLOW;
+    const briefSaysAllowed = /protection is LIFTED/.test(briefOn('main', allow));
+    is(
+      guardAllows === briefSaysAllowed,
+      `guard and briefing agree on main with the switch ${allow === undefined ? 'unset' : `= ${allow}`}`,
+    );
+  }
+}
 {
   const run = check(
     'brief.js',

@@ -22,6 +22,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readPayload, pass } from './io.js';
 import { ROOT, stateDir, status } from './gate.js';
+import { branchNote, currentBranch } from './branch.js';
 
 function git(args) {
   try {
@@ -45,12 +46,28 @@ try {
   state = null;
 }
 
-const onBranch = state?.branch || git(['rev-parse', '--abbrev-ref', 'HEAD']) || 'unknown';
+/*
+ * `currentBranch` first, `status()` second — the reverse of the old order.
+ *
+ * They agree in every ordinary case. They differ when a test names the branch it
+ * means via `CLAUDE_GUARD_BRANCH`, and in that case the named one is the answer:
+ * this line and the guard have to be describing the same branch, or the sentence
+ * below can be right about a branch the guard is not looking at.
+ */
+const onBranch = currentBranch(ROOT) || state?.branch || 'unknown';
 const dirty = git(['status', '--porcelain'])
   .split('\n')
   .filter(Boolean);
 
-lines.push(`Branch \`${onBranch}\`${onBranch === 'main' || onBranch === 'master' ? ' — commits here are blocked by guard-bash.js; branch before building.' : '.'}`);
+/*
+ * What this sentence says is now read from the same module the guard enforces
+ * from. It used to be built here, from nothing, and said "commits here are
+ * blocked" on every protected branch — including after the owner's switch was
+ * added, which lifts exactly that block. An agent told the stop is in place
+ * leans on it instead of on judgement, so a warning that is confidently wrong
+ * is worse than none. See CFG-012 and `branch.js`.
+ */
+lines.push(`Branch \`${onBranch}\`${branchNote(onBranch)}`);
 
 if (dirty.length) {
   const shown = dirty.slice(0, 8).map((l) => l.trim()).join('; ');

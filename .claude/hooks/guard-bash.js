@@ -15,58 +15,19 @@
  */
 
 import process from 'node:process';
-import { spawnSync } from 'node:child_process';
 
 /**
- * The branch HEAD is on, or '' when that cannot be answered.
+ * The fence around `main` — its definition, its switch, and how to ask which
+ * branch this is — now lives in `branch.js`, because `brief.js` announces the
+ * same fact and used to decide it independently. It got it wrong the moment the
+ * switch was added: see the header there, and CFG-012.
  *
- * Every rule below that uses this fails open when it is empty. A guard that
- * blocks because it could not run `git` is a guard that blocks in a worktree, in
- * a fresh clone, and on the day git is slow — which is to say, a guard that gets
- * removed.
+ * `currentBranch` returns '' when git cannot answer, and every rule below that
+ * uses it fails open on that. A guard that blocks because it could not run `git`
+ * is a guard that blocks in a worktree, in a fresh clone, and on the day git is
+ * slow — which is to say, a guard that gets removed.
  */
-function currentBranch(cwd) {
-  try {
-    const run = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: 5_000,
-    });
-    return run.status === 0 ? String(run.stdout || '').trim() : '';
-  } catch {
-    return '';
-  }
-}
-
-const PROTECTED_BRANCH = /^(main|master)$/;
-
-/**
- * Has the owner opened the gate on `main` for this session?
- *
- * Protection is on unless `AI_REMOTE_ALLOW_MAIN` is set in the environment
- * Claude Code itself runs in — `.claude/settings.json` under `env`, or an export
- * before `claude` starts.
- *
- * That the switch lives in the *environment* is the whole point, and it is worth
- * saying why, because the obvious alternative does not work.
- *
- * This file runs as a PreToolUse hook: Claude Code spawns it, hands it the
- * proposed command as JSON on stdin, and only runs the shell if it exits 0. The
- * hook's `process.env` is Claude Code's, not the shell's. So writing
- * `AI_REMOTE_ALLOW_MAIN=1 git push origin main` sets nothing here — that
- * assignment would be executed by a shell that has not started yet, by a command
- * this hook is deciding whether to permit. The model cannot type its way past
- * this the way it could past a flag in the command string.
- *
- * Turning it on is therefore a deliberate act by a person editing a file, and it
- * is visible in that file afterwards rather than buried in one command in a
- * transcript.
- *
- * It lifts exactly three rules — commit, merge and push on the protected branch.
- * Force-push, `reset --hard`, `rm -rf`, `DROP TABLE`, `npm publish` and
- * `vercel deploy` are not branch protection and are never lifted by it.
- */
-const mainWritesAllowed = () => /^(1|true|yes)$/i.test(String(process.env.AI_REMOTE_ALLOW_MAIN || ''));
+import { PROTECTED_BRANCH, mainWritesAllowed, currentBranch } from './branch.js';
 
 /**
  * Does this `git push` write to the protected branch?
@@ -269,7 +230,7 @@ process.stdin.on('end', () => {
   // most commands are not, and a subprocess on every shell call is a tax paid
   // all day for a rule that applies to a handful of them.
   if (!mainWritesAllowed() && /\bgit\s+(commit|merge|push)\b/.test(command)) {
-    const branch = process.env.CLAUDE_GUARD_BRANCH || currentBranch(cwd);
+    const branch = currentBranch(cwd);
     if (PROTECTED_BRANCH.test(branch)) {
       for (const [pattern, why] of BRANCH_RULES) {
         if (pattern.test(command)) refuse(`On branch \`${branch}\`. ${why}`);
