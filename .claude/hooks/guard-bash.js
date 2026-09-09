@@ -41,6 +41,34 @@ function currentBranch(cwd) {
 const PROTECTED_BRANCH = /^(main|master)$/;
 
 /**
+ * Has the owner opened the gate on `main` for this session?
+ *
+ * Protection is on unless `AI_REMOTE_ALLOW_MAIN` is set in the environment
+ * Claude Code itself runs in — `.claude/settings.json` under `env`, or an export
+ * before `claude` starts.
+ *
+ * That the switch lives in the *environment* is the whole point, and it is worth
+ * saying why, because the obvious alternative does not work.
+ *
+ * This file runs as a PreToolUse hook: Claude Code spawns it, hands it the
+ * proposed command as JSON on stdin, and only runs the shell if it exits 0. The
+ * hook's `process.env` is Claude Code's, not the shell's. So writing
+ * `AI_REMOTE_ALLOW_MAIN=1 git push origin main` sets nothing here — that
+ * assignment would be executed by a shell that has not started yet, by a command
+ * this hook is deciding whether to permit. The model cannot type its way past
+ * this the way it could past a flag in the command string.
+ *
+ * Turning it on is therefore a deliberate act by a person editing a file, and it
+ * is visible in that file afterwards rather than buried in one command in a
+ * transcript.
+ *
+ * It lifts exactly three rules — commit, merge and push on the protected branch.
+ * Force-push, `reset --hard`, `rm -rf`, `DROP TABLE`, `npm publish` and
+ * `vercel deploy` are not branch protection and are never lifted by it.
+ */
+const mainWritesAllowed = () => /^(1|true|yes)$/i.test(String(process.env.AI_REMOTE_ALLOW_MAIN || ''));
+
+/**
  * Does this `git push` write to the protected branch?
  *
  * The first version asked a regex whether the command ended in `main`, which
@@ -162,8 +190,9 @@ const RULES = [
     // Naming the protected branch as a destination reaches it from any branch.
     // Matched by parsing the refspecs rather than by pattern — see
     // `pushesToProtected`, and the three commands that walked past the pattern.
-    (command) => pushesToProtected(command),
-    'This pushes to the protected branch. Push the feature branch instead, and let the user decide what lands on main.',
+    (command) => !mainWritesAllowed() && pushesToProtected(command),
+    'This pushes to the protected branch. Push the feature branch instead, and let the user decide what lands on main. '
+      + '(The owner can lift this by setting AI_REMOTE_ALLOW_MAIN=1 in .claude/settings.json under `env`.)',
   ],
   [
     /\bnpm\s+publish\b/,
@@ -239,7 +268,7 @@ process.stdin.on('end', () => {
   // Only ask git which branch this is once something git-shaped has been typed —
   // most commands are not, and a subprocess on every shell call is a tax paid
   // all day for a rule that applies to a handful of them.
-  if (/\bgit\s+(commit|merge|push)\b/.test(command)) {
+  if (!mainWritesAllowed() && /\bgit\s+(commit|merge|push)\b/.test(command)) {
     const branch = process.env.CLAUDE_GUARD_BRANCH || currentBranch(cwd);
     if (PROTECTED_BRANCH.test(branch)) {
       for (const [pattern, why] of BRANCH_RULES) {

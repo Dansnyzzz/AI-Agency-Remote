@@ -101,7 +101,25 @@ const write = (file_path) => ({ cwd: root, tool_input: { file_path } });
  * is that only a green gate may stamp work as verified, so a gate that cannot
  * go green on the default branch disables the mechanism it exists to enforce.
  */
-const onBranch = (name) => ({ ...process.env, CLAUDE_GUARD_BRANCH: name });
+const onBranch = (name) => ({
+  ...process.env,
+  CLAUDE_GUARD_BRANCH: name,
+  /*
+   * Pinned off, not merely absent.
+   *
+   * `AI_REMOTE_ALLOW_MAIN` lifts every protected-branch rule, and this repo sets
+   * it in `.claude/settings.json`, so it is in `process.env` when the gate runs
+   * the suite. Spreading the environment therefore handed the switch to the very
+   * tests that exist to prove the switch is off — thirteen checks flipped from
+   * blocked to allowed in one go, and the suite would have reported the rules as
+   * working while measuring nothing.
+   *
+   * Which is the same fault as the `CLAUDE_GUARD_BRANCH` note above: a test that
+   * reads ambient state tests the machine it happens to run on. Both halves are
+   * fixed the same way — state the condition, do not inherit it.
+   */
+  AI_REMOTE_ALLOW_MAIN: '',
+});
 
 console.log('\n[1mguard-bash[0m');
 check('guard-bash.js', bash('npm test'), ALLOW, 'an ordinary command runs');
@@ -197,6 +215,58 @@ check(
   onBranch('feature/x'),
 );
 check('guard-bash.js', bash('git status'), ALLOW, 'reading status on main', onBranch('main'));
+
+/* ---------------------------------------------------------------------------
+ * The owner's switch: AI_REMOTE_ALLOW_MAIN.
+ *
+ * Every check above is the negative control for this section — with the switch
+ * unset they all still block, which is what makes "it allows things now" mean
+ * something. A permission flag with no test proving it is *off* by default is
+ * how a guard quietly stops guarding.
+ *
+ * Read alongside the note on `mainWritesAllowed` in guard-bash.js for why this
+ * is an environment variable and not something the model can put in a command:
+ * the hook is spawned by Claude Code before any shell runs, so an inline
+ * assignment never reaches it.
+ * ------------------------------------------------------------------------- */
+
+console.log('\n\x1b[1mguard-bash · the owner\'s switch\x1b[0m');
+
+/** Branch, plus the switch set to `value`. */
+const opened = (branch, value = '1') => ({ ...onBranch(branch), AI_REMOTE_ALLOW_MAIN: value });
+
+check('guard-bash.js', push('origin', 'ma' + 'in'), ALLOW, 'it lifts the push to main', opened('feature/x'));
+check('guard-bash.js', push('origin', 'HEAD:ma' + 'in'), ALLOW, 'including the HEAD: form', opened('feature/x'));
+check('guard-bash.js', bash('git push origin HEAD'), ALLOW, 'and pushing while on main', opened('main'));
+check('guard-bash.js', bash('git commit -m "x"'), ALLOW, 'it lifts committing on main', opened('main'));
+check('guard-bash.js', bash('git merge feature/x'), ALLOW, 'and merging into it', opened('main'));
+
+// What it must never lift. None of these is branch protection, and an owner
+// saying "you may land work on main" is not saying "you may rewrite history".
+check(
+  'guard-bash.js',
+  bash(['git', 'push', '--force', 'origin', 'main'].join(' ')),
+  BLOCK,
+  'force-push is still refused',
+  opened('feature/x'),
+);
+check('guard-bash.js', bash(['git', 'reset', '--hard'].join(' ')), BLOCK, 'so is discarding work', opened('main'));
+check('guard-bash.js', bash(['rm', '-rf', 'build'].join(' ')), BLOCK, 'so is recursive delete', opened('main'));
+check('guard-bash.js', bash(['npm', 'publish'].join(' ')), BLOCK, 'so is publishing', opened('main'));
+check(
+  'guard-bash.js',
+  bash(`psql -c "${['DROP', 'TABLE', 'users'].join(' ')}"`),
+  BLOCK,
+  'so is dropping a table',
+  opened('main'),
+);
+
+// Only a deliberate yes counts. Anything else reads as "not set", so a stray
+// `AI_REMOTE_ALLOW_MAIN=0` left in a settings file does not silently open it.
+check('guard-bash.js', push('origin', 'ma' + 'in'), BLOCK, '0 does not open it', opened('feature/x', '0'));
+check('guard-bash.js', push('origin', 'ma' + 'in'), BLOCK, 'nor does an empty value', opened('feature/x', ''));
+check('guard-bash.js', push('origin', 'ma' + 'in'), BLOCK, 'nor does anything else', opened('feature/x', 'maybe'));
+check('guard-bash.js', push('origin', 'ma' + 'in'), ALLOW, 'true opens it', opened('feature/x', 'true'));
 
 /* ---------------------------------------------------------------------------
  * The ledger and the completion gate.
