@@ -17,6 +17,7 @@ After = `integrate/2026-09-04`, merged with `origin/main`.
 | `test:ui` | **skipped itself — no browser installed** | **runs; exit 0, 0 failures** | `npm run test:ui` |
 | `test:sandbox` | skipped itself | runs; exit 0 | `npm run test:sandbox` |
 | Suites in `npm test` | 31 (documented as "24" in 5 places) | 31, and the docs no longer name a number | `p.scripts.test.split('&&').length` |
+| Hook checks | 114 | **128** — the protected-branch rules can now be *granted*, not only removed | `npm run test:hooks` |
 
 The first row is the one that mattered. A stamp reading `verified: true` over a
 tree CI would reject is worse than no stamp, and it is what let seven type errors
