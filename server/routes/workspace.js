@@ -37,7 +37,15 @@ export function mountWorkspaceRoutes(api, { wrap, body }) {
    * in their own file browser has already decided.
    */
   const workspaceTool = async (req, name, input) => {
-    const { content, isError } = await executeTool({ user: req.user, name, input });
+    /*
+     * `raw` for the same reason the approval policy is not inherited above: the
+     * reader here is a person looking at their own file browser, not the model.
+     * `executeTool` puts an untrusted envelope round anything carrying bytes the
+     * app did not write, which is right when the model is reading it and wrong
+     * here — `workspaceJson` below parses this string, and an envelope makes it
+     * unparseable.
+     */
+    const { content, isError } = await executeTool({ user: req.user, name, input, raw: true });
     if (isError) throw Object.assign(new Error(content), { status: 400 });
     return content;
   };

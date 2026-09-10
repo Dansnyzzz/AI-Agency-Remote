@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { getStore } from '../store/index.js';
 import { usesInProcessTools, inProcessImplementations, workerStatus } from '../localTools.js';
 import { getPrefs } from '../settings.js';
-import { TOOLS_BY_NAME } from './definitions.js';
+import { TOOLS_BY_NAME, returnsExternalContent, externalSource } from './definitions.js';
 import { CLOUD_IMPLEMENTATIONS } from './cloud.js';
 import { isMcpTool, callMcpTool, splitMcpName } from '../mcp/registry.js';
 import { keepStepShot } from '../attachments.js';
@@ -120,11 +120,6 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
 }
 
 /**
- * Run one tool call and return `{content, isError}` — never throws, because a
- * thrown error would break the agent loop where the model could otherwise read
- * the failure and adjust.
- */
-/**
  * Which of these a caller actually has to supply.
  *
  * Written down because it was not: the agent loop passes all seven and the
@@ -133,7 +128,7 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
  * abort it, no device hint and no deliverable to collect. Without the optional
  * markers those calls read as missing four required arguments.
  *
- * @param {{
+ * @typedef {{
  *   user: { id: string },
  *   name: string,
  *   input?: any,
@@ -141,9 +136,82 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
  *   signal?: AbortSignal,
  *   deviceHint?: string|null,
  *   deliverable?: any,
- * }} args
+ *   raw?: boolean,
+ * }} ToolCallArgs
  */
-export async function executeTool({ user, name, input, chatId, signal, deviceHint, deliverable }) {
+
+/**
+ * What every branch hands back.
+ *
+ * Spelled out because the three optional fields are the ones that go missing:
+ * `widget` was dropped by one branch and made two tools silently inert, and
+ * `shot` had to be taught to a second branch after the first learned it. Naming
+ * the shape once means the type checker notices the next time a branch forgets,
+ * instead of a person noticing months later that a chart was never drawn.
+ *
+ * @typedef {{
+ *   content: string,
+ *   isError: boolean,
+ *   file?: any,
+ *   widget?: any,
+ *   shot?: any,
+ * }} ToolResult
+ */
+
+/**
+ * Run one tool call and return `{content, isError}` — never throws, because a
+ * thrown error would break the agent loop where the model could otherwise read
+ * the failure and adjust.
+ *
+ * @param {ToolCallArgs} args
+ * @returns {Promise<ToolResult>}
+ */
+export async function executeTool(args) {
+  const result = await runTool(args);
+
+  /**
+   * One exit, and the envelope goes on here.
+   *
+   * Every other wrapping in this codebase happens at a call site — inside
+   * `web_fetch`, inside search, inside the MCP branch below — and the pattern
+   * failed exactly the way per-call-site rules do: the local branch and the
+   * worker branch were each written without one, so a web page read through
+   * `browser_look` reached the model as trusted text while the same page through
+   * `web_fetch` was enveloped. `search_docs` was added to the wrapped set on the
+   * explicit grounds that it was the last one missing. It was not.
+   *
+   * So this is the choke point. A tool named in `EXTERNAL_OUTPUT` gets the
+   * envelope wherever it ran — cloud, in-process, or out on the worker — and a
+   * new tool that returns somebody else's bytes is one line in a list rather
+   * than a call site somebody has to remember.
+   *
+   * Errors are left alone. Their text is this application's, and `SEC-018` is
+   * the separate question of what they may contain.
+   *
+   * `raw` is for the callers whose reader is not the model. The workspace routes
+   * run these same tools to draw a file browser and **parse the output as JSON**
+   * — an envelope round it is not a safety boundary there, it is a syntax error,
+   * and the suite said so within a minute of this being written. That route
+   * already opts out of the approval policy for the same underlying reason: a
+   * person pressing Save has already decided, and a person reading their own
+   * directory listing is not being told what to do by it.
+   *
+   * The default is to wrap. Forgetting `raw` costs a caller some noise;
+   * forgetting to wrap is the bug this whole change exists to close, so the
+   * safe direction is the one you get by saying nothing.
+   */
+  if (args?.raw || result?.isError || !returnsExternalContent(args?.name)) return result;
+  const content = String(result?.content ?? '');
+  if (!content.trim()) return result;
+
+  return { ...result, content: untrusted(externalSource(args.name, args.input), content) };
+}
+
+/**
+ * @param {ToolCallArgs} args
+ * @returns {Promise<ToolResult>}
+ */
+async function runTool({ user, name, input, chatId, signal, deviceHint, deliverable }) {
   const userId = user.id;
 
   /**

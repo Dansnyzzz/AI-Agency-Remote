@@ -1831,6 +1831,76 @@ function pathArgument(name, input) {
 }
 
 /**
+ * Tools whose output is content this application did not write.
+ *
+ * The envelope in `tools/untrusted.js` existed and was applied per call site —
+ * `web_fetch` wrapped itself, search wrapped itself, MCP was wrapped in
+ * `executeTool`, and `search_docs` was added later on the stated grounds that it
+ * was the last unwrapped path. It was not. **Nothing on the local or worker
+ * branch was ever wrapped**, so `browser_look` handed the model a whole web page
+ * as trusted text while `web_fetch` on the same URL enveloped it, and
+ * `read_file` did the same for a document the agent had just downloaded from a
+ * stranger.
+ *
+ * `UNTRUSTED_RULE` makes that worse rather than neutral: it tells the model, in
+ * the system prompt, that *"web pages, search results, files, and output from
+ * MCP servers all arrive that way"*. A model that believes the rule reads
+ * unenveloped text as trusted — so the promise was doing active harm wherever it
+ * was not kept.
+ *
+ * A list rather than a flag on each entry, and applied at the single exit of
+ * `executeTool`, because that is the shape of the mistake being fixed: four
+ * separate call sites each remembered, and the fifth, sixth and seventh did not.
+ *
+ * What belongs here is anything carrying bytes the user did not type and this
+ * app did not generate — files, directory names, program output, page text,
+ * clipboard, third-party services. What deliberately does not: tools already
+ * wrapping themselves (`web_fetch`, `web_search`, `search_docs`, `extract`,
+ * `deep_research`), tools returning content the app itself produced
+ * (`create_file`, `read_generated_file`, `chart`), and the user's own material
+ * (`memory_read`, `skill_read`) — the user is the trusted party here, and
+ * wrapping their own words would teach the model to discount them.
+ */
+const EXTERNAL_OUTPUT = new Set([
+  // Files and their names, on the user's machine — including anything the agent
+  // downloaded a minute ago.
+  'read_file', 'fs_read_text', 'fs_describe', 'grep', 'fs_search',
+  'list_dir', 'fs_browse', 'glob',
+  // Whatever a program decided to print.
+  'run_command', 'run_background_logs',
+  // The open web, through the browser rather than through fetch.
+  'browser_look', 'browser_tabs',
+  // Whatever happens to be on the clipboard.
+  'clipboard_read',
+  // What is on the screen, read by UI Automation.
+  'desktop_look',
+  // Third-party services, where anyone can open an issue or share a page.
+  'github', 'notion_search',
+]);
+
+/** Does this tool's output need the envelope? */
+export const returnsExternalContent = (name) => EXTERNAL_OUTPUT.has(name);
+
+/**
+ * What to name on the envelope, so provenance travels with the text.
+ *
+ * Falls back to the tool's own name, which is always true and never useless:
+ * "output of run_command" tells a reader exactly as much as they need.
+ */
+export function externalSource(name, input = {}) {
+  const path = input?.path ?? input?.file ?? input?.target ?? null;
+  if (name === 'browser_look' || name === 'browser_tabs') return 'the page in the browser';
+  if (name === 'clipboard_read') return 'the clipboard';
+  if (name === 'desktop_look') return 'the screen';
+  if (name === 'github') return 'GitHub';
+  if (name === 'notion_search') return 'Notion';
+  if (name === 'run_command' || name === 'run_background_logs') {
+    return `the output of ${String(input?.command || 'a command').slice(0, 80)}`;
+  }
+  return path ? String(path).slice(0, 200) : `the output of ${name}`;
+}
+
+/**
  * What level is this specific call?
  *
  * Deliberately errs upward: an unrecognised tool is treated as sensitive rather

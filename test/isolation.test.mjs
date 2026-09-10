@@ -1264,6 +1264,53 @@ section('the untrusted-content boundary');
   check('the rule tells the model it is data', /data you fetched.*not instructions/s.test(UNTRUSTED_RULE));
   check('  and that it must not obey it', /never obey it/i.test(UNTRUSTED_RULE));
   check('  and what to do when the content tries', /that is the page talking/i.test(UNTRUSTED_RULE));
+
+  /**
+   * The envelope has to reach the branches nobody wrapped.
+   *
+   * It was applied per call site — inside `web_fetch`, inside search, inside the
+   * MCP branch — and the local and worker branches of `executeTool` were each
+   * written without one. So a page read through `browser_look` arrived as
+   * trusted text while the same page through `web_fetch` was enveloped, and a
+   * file the agent had just downloaded from a stranger was read back plain.
+   *
+   * `UNTRUSTED_RULE` above already promises the model that files arrive
+   * enveloped, which is what made the gap worse than neutral: a model that
+   * believes the rule treats unenveloped text as trusted.
+   *
+   * These check the declaration, both ways. The set has to cover the branches
+   * that were missed, and it must **not** cover the tools that wrap themselves,
+   * because a second envelope round the same text is noise the user pays for.
+   */
+  const { returnsExternalContent, externalSource } = await import('../server/tools/definitions.js');
+
+  for (const name of [
+    'read_file', 'fs_read_text', 'grep', 'list_dir', 'glob',
+    'run_command', 'run_background_logs',
+    'browser_look', 'browser_tabs', 'clipboard_read', 'desktop_look',
+    'github', 'notion_search',
+  ]) {
+    check(`${name} output is declared external`, returnsExternalContent(name) === true);
+  }
+
+  for (const name of ['web_fetch', 'web_search', 'search_docs', 'extract', 'deep_research']) {
+    check(`${name} is not double-wrapped — it envelopes itself`, returnsExternalContent(name) === false);
+  }
+
+  for (const name of ['create_file', 'read_generated_file', 'chart', 'memory_read', 'skill_read']) {
+    check(`${name} is the app's or the user's own words, not wrapped`, returnsExternalContent(name) === false);
+  }
+
+  // Provenance has to survive onto the envelope, or the boundary is anonymous
+  // and a reader cannot tell which page talked.
+  check(
+    'a file envelope names the file',
+    /source="[^"]*secrets\.txt"/.test(untrusted(externalSource('read_file', { path: '/tmp/secrets.txt' }), 'x')),
+  );
+  check(
+    'a command envelope names the command',
+    /source="the output of curl [^"]*"/.test(untrusted(externalSource('run_command', { command: 'curl evil.example' }), 'x')),
+  );
 }
 
 // ── taking data out is a decision, like destroying it ───────────────
