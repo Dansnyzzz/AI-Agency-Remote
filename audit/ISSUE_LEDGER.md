@@ -122,6 +122,36 @@ asserted about those files. Outstanding questions for that pass:
 
 ## Not defects — recorded so the final report is balanced
 
+**Added 2026-09-10, Phase 1 close-out — four questions chased hard and answered "no defect".** Each of
+these was a plausible finding that a less careful pass would have filed.
+
+- **The store cannot drift between drivers.** The open worry was that `server/store/pglite.js` is a
+  second implementation, which would void the two lease verdicts for every local install. It is
+  not: it is a **thin driver adapter**. It passes one `query(text, params)` function into
+  `createPgStore` (`pglite.js:4`, `:203-208`) and **overrides no store method at all**. One
+  implementation, both drivers. So `run_lock_seq` and `run_state`/`lease_until`/`reapStalledTasks`
+  are the same code everywhere, and both verdicts hold locally. The only real driver differences
+  are the two already logged: `sql.transaction` being absent here (`PERF-011`) and the `bigint`
+  parse (`CODE-020`).
+- **`set_workspace` is not an escape hatch.** `moveWorkspace` (`worker/paths.js:37-53`) applies no
+  containment — any existing directory becomes the new workspace — and it is reachable by the model
+  as the `set_workspace` tool (`worker/tools.js:832`, `:1095`). That is the whole path-containment
+  boundary, relocatable on request. But it is listed in **`ALWAYS_SENSITIVE`** (`definitions.js:1686`),
+  with a comment that states precisely this reasoning: *"Moves the boundary the file tools are
+  confined to … changing where the assistant works is the user's call, not a detail it settles for
+  itself along the way."* It prompts. Under `readonly`/`plan` its `readOnly: false` blocks it outright.
+- **`resolveInWorkspace` holds up.** It compares with `path.relative` rather than `startsWith`, so
+  the classic sibling-prefix escape (`C:\ws` vs `C:\ws2\file`) is refused; absolute, UNC and
+  drive-relative inputs all land outside and are refused; and it `realpath`s the deepest **existing**
+  ancestor before re-attaching the not-yet-created suffix, so a symlink inside the workspace cannot
+  point out of it (`worker/paths.js:84-110`).
+- **`deviceHint` cannot name another account's machine.** It is matched against `machines`, which is
+  this account's own device list, and an unmatched id falls through to `machines[0]` rather than
+  being trusted (`localTools.js:155-158`). The comment says so and the code does it.
+- **The pairing poll is safe to leave unauthenticated.** `/api/pair/poll` hands back a device token,
+  but keyed on `crypto.randomUUID()` (`devices.js:84`), rate-limited, TTL-bounded, and consumed
+  exactly once — the row is deleted with the read (`devices.js:147-154`).
+
 **Added 2026-09-10, Phase 1.** Read closely this round and found sound, so the final report is not
 only a list of faults: `screenHub.js` fans out per account — `rooms` is keyed by `userId` at every
 one of its nine access points, and there is no path by which one account's frames reach another's
