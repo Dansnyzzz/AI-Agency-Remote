@@ -329,6 +329,68 @@ check(
   is(/qa-tester/.test(run.stderr || ''), 'and the block names which agent said it');
 }
 
+/**
+ * A read-only sub-agent is not answerable for the session's commits.
+ *
+ * The ledger is shared, so a sub-agent dispatched to read and report inherits a
+ * stamp the *parent* invalidated by committing. It has no diff to prove, and its
+ * brief usually forbids running the gate — so the block had no action that could
+ * clear it, and the agent's report was the message that got blocked. Its next
+ * message answered the hook instead, and that is what reached the parent: nine
+ * reports lost in one session, across six agents, every one recovered only by
+ * asking again.
+ *
+ * Steering around it did not work either. `CLAIMS` contains a bare
+ * `/\bverified\b/i`, which is the exact word an evidence-graded report carries.
+ *
+ * So a sub-agent is now held to the part of the ledger that can be about it:
+ * `pending`, the files edited since the last green run. Nothing edited, nothing
+ * to answer for. The case above still blocks, because there `pending` names a
+ * file — a sub-agent that touched source is still stopped, and so is the parent
+ * in this exact state, which is the pair that has to hold.
+ */
+{
+  writeLedger({
+    pending: [],
+    lastGreen: { at: '2026-09-01T00:00:00Z', head: 'a'.repeat(40), dirty: 'stale', scope: 'full' },
+  });
+
+  check(
+    'verify-stop.js',
+    { ...stop('The audit pass is complete.'), hook_event_name: 'SubagentStop', agent_type: 'security-auditor' },
+    ALLOW,
+    'a sub-agent that edited nothing is not held to the parent\'s commits',
+    gateEnv,
+  );
+  check(
+    'verify-stop.js',
+    { ...stop('Every finding is verified.'), hook_event_name: 'SubagentStop', agent_type: 'security-auditor' },
+    ALLOW,
+    'including when its report uses the word the guard matches on',
+    gateEnv,
+  );
+  check(
+    'verify-stop.js',
+    stop('All done — the change is finished.'),
+    BLOCK,
+    'while the parent in the very same state is still stopped',
+    gateEnv,
+  );
+
+  // And a sub-agent that did touch source is still answerable for it.
+  writeLedger({
+    pending: [{ file: 'server/agent.js', at: '2026-09-01T00:00:00Z' }],
+    lastGreen: { at: '2026-09-01T00:00:00Z', head: 'a'.repeat(40), dirty: 'stale', scope: 'full' },
+  });
+  check(
+    'verify-stop.js',
+    { ...stop('Implemented it, all tests pass.'), hook_event_name: 'SubagentStop', agent_type: 'backend-engineer' },
+    BLOCK,
+    'a sub-agent that edited source is still stopped',
+    gateEnv,
+  );
+}
+
 clearLedger();
 check('verify-stop.js', stop('Đã xong.'), ALLOW, 'a claim with nothing changed has nothing to prove', gateEnv);
 

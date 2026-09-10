@@ -99,6 +99,35 @@ const unproven =
 // Nothing changed, or the full gate already covers what did.
 if (!unproven || state.verified) pass();
 
+/**
+ * A sub-agent is answerable for its own work, not for the session's.
+ *
+ * `state` is the shared ledger, and it describes what the **parent** has been
+ * doing. So a read-only sub-agent — an audit pass, a research errand, anything
+ * dispatched to read and report — inherits a stale stamp it did not cause, has
+ * no diff to prove, and is usually forbidden from running the gate by its own
+ * brief. The block is then unsatisfiable by construction: there is no action
+ * that agent can take to clear it.
+ *
+ * What happens next is the expensive part, and it was measured rather than
+ * guessed. The agent's report is the message that gets blocked. Its *next*
+ * message answers the hook instead — an explanation about the gate — and that
+ * is what reaches the parent. Nine reports were lost that way in one session,
+ * across six agents and two dispatch rounds, roughly 750k tokens, every one
+ * recovered only by asking again. Telling the agents which words to avoid did
+ * not help: `CLAIMS` includes a bare `/\bverified\b/i`, which is the exact label
+ * an evidence-graded report is supposed to carry.
+ *
+ * So the question a sub-agent is held to is narrowed to the honest one: did
+ * *this* work leave source files unproven? `pending` names files edited since
+ * the last green run, which is the only part of the ledger that can be about
+ * the agent rather than about the session. A sub-agent that edited nothing
+ * passes; one that edited source is still stopped.
+ *
+ * The parent keeps the full rule. It is the parent that commits.
+ */
+if (event === 'SubagentStop' && state.pending.length === 0) pass();
+
 const names = state.pending.map((p) => p.file);
 const shown = names.slice(0, 6).join(', ');
 const more = names.length > 6 ? ` and ${names.length - 6} more` : '';
