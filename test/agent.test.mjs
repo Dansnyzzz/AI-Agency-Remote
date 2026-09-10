@@ -332,16 +332,76 @@ section('what the model is sent after a fold');
   const again = activeTranscript(twice);
   check('a second fold supersedes the first', again.length === 2, `${again.length} messages`);
   check('using the newer summary', /Second summary/.test(again[0].text));
+
+  /**
+   * The shape the loop actually produces — which is not the shape above.
+   *
+   * Every case before this one hands `activeTranscript` a summary sitting in the
+   * middle of the array, and against that input the function is correct. The
+   * agent loop never builds that. `compact()` summarises `live.slice(0, tailStart)`
+   * — deliberately leaving the last eight turns out — and then **appends** the
+   * summary, both to the store (`MAX(seq)+1`) and to the in-memory array. So the
+   * summary is the last element, `slice(last + 1)` is empty, and the model was
+   * sent the summary and nothing else: not the kept turns, and not the question
+   * the user had just asked.
+   *
+   * The function was tested, correctly, against an input the system does not
+   * generate. That is the whole reason this survived.
+   *
+   * `covers` is what fixes it: the `seq` of the newest message the summary
+   * stands for. The tail is then everything newer than that, wherever the
+   * summary happens to sit.
+   */
+  const appended = [
+    { id: 'm1', seq: 1, role: 'user', text: 'old question' },
+    { id: 'm2', seq: 2, role: 'assistant', text: 'old answer' },
+    { id: 'm3', seq: 3, role: 'user', text: 'kept turn' },
+    { id: 'm4', seq: 4, role: 'assistant', text: 'kept reply' },
+    { id: 'm5', seq: 5, role: 'user', text: 'THE QUESTION JUST ASKED' },
+    { id: 's1', seq: 6, role: 'summary', covers: 2, text: 'Summary of the first two turns.' },
+  ];
+  const live = activeTranscript(appended);
+  check(
+    'a summary appended last still sends the turns it does not cover',
+    live.length === 4,
+    `${live.length} messages`,
+  );
+  check(
+    'including the question the user just asked',
+    live.some((m) => m.text === 'THE QUESTION JUST ASKED'),
+  );
+  check('the summary still leads', /Summary of the first two turns/.test(live[0].text));
+  check(
+    'and the turns it does cover are gone',
+    !live.some((m) => m.text === 'old question' || m.text === 'old answer'),
+  );
+
+  // Chaining has to keep working: the newer summary supersedes the older one,
+  // and the older one is older than `covers`, so it drops out by the same rule.
+  const chained = [
+    ...appended,
+    { id: 'm6', seq: 7, role: 'assistant', text: 'reply to it' },
+    { id: 's2', seq: 8, role: 'summary', covers: 6, text: 'Second summary.' },
+    { id: 'm7', seq: 9, role: 'user', text: 'newest' },
+  ];
+  const rolled = activeTranscript(chained);
+  check('a chained fold keeps only what the newest summary leaves', rolled.length === 3, `${rolled.length}`);
+  check('and it is the newest summary that leads', /Second summary/.test(rolled[0].text));
+  check('the first summary is not sent twice', !rolled.some((m) => /first two turns/.test(m.text)));
 }
 
 section('folding a conversation');
 {
-  const { compact } = await import('../server/compact.js');
+  const { compact, activeTranscript } = await import('../server/compact.js');
   const chat = await store.createChat(user.id, { id: 'c-compact', title: 'Long one', model: 'm' });
 
   const messages = [];
   for (let i = 0; i < 14; i += 1) {
-    messages.push({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', text: `turn number ${i}` });
+    // `seq` because that is what `listMessages` returns and what the loop holds.
+    // Without it this array is not the shape production hands to `compact()`,
+    // and a test built on a shape the system does not produce is how the fold
+    // bug above went unseen through four audit rounds.
+    messages.push({ id: `m${i}`, seq: i, role: i % 2 ? 'assistant' : 'user', text: `turn number ${i}` });
   }
 
   const { stream, seen } = scriptedProvider([{ text: 'They worked through fourteen turns about X.' }]);
@@ -359,9 +419,36 @@ section('folding a conversation');
   check('it is a message of its own', summary.role === 'summary');
   check('carrying the text', /fourteen turns/.test(summary.text));
   check('and saying how much it stands in for', summary.replaced === 6, String(summary.replaced));
+  check('and where it stops, by seq', summary.covers === 5, String(summary.covers));
+
+  /**
+   * The end-to-end check, driven the way `agent.js` drives it.
+   *
+   * The unit tests above prove `activeTranscript` handles an appended summary.
+   * This proves the two halves agree: the real `compact()` output, pushed onto
+   * the real array exactly as the loop pushes it, still sends the turns the
+   * summary deliberately did not cover — and above all the newest one, which is
+   * the question the user is waiting on an answer to.
+   */
+  messages.push(summary);
+  const sentToModel = activeTranscript(messages);
+  check(
+    'after a real fold the model still gets the turns it kept',
+    sentToModel.length === 9,
+    `${sentToModel.length} messages`,
+  );
+  check(
+    'and the newest turn is among them',
+    sentToModel.some((m) => m.text === 'turn number 13'),
+  );
+  check('with the summary leading', /fourteen turns/.test(sentToModel[0].text));
 
   const saved = await store.listMessages(user.id, chat.id);
   check('it is written into the conversation', saved.some((m) => m.role === 'summary'));
+  check(
+    'and the boundary survives the round trip through the store',
+    saved.find((m) => m.role === 'summary')?.covers === 5,
+  );
   check(
     'the summariser gets no tools — it is a writing job',
     seen.tools?.length === 0,
