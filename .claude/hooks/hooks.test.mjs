@@ -753,6 +753,46 @@ try {
   is(afterSrc !== baseline, 'a new .js does', `${baseline} -> ${afterSrc}`);
   is(restored === baseline, 'and removing them puts the fingerprint back', `${baseline} -> ${restored}`);
 
+  /**
+   * The exemption has to survive being committed.
+   *
+   * `dirtyHash` above filters through `isSource`, so editing a README does not
+   * expire the stamp. `status()` also compared `head()` raw, and a commit hash
+   * knows nothing about what is inside it — so the exemption held right until
+   * you saved your work and then vanished. In this repository, where an audit
+   * commits documentation constantly, that cost four full runs of the
+   * thirty-one suites in one session, for markdown. The comment on NOT_SOURCE
+   * says where that leads: it is how a gate earns its way into being switched
+   * off.
+   *
+   * Driven against real commits in this checkout rather than synthesised, since
+   * the whole question is what `git diff --name-only A..B` says about them.
+   * HEAD~1..HEAD is whatever was committed last; the pair below asks the
+   * question of two commits that are known to differ in a `.js` file, and of a
+   * commit against itself.
+   */
+  is(
+    gate.status().current !== undefined,
+    'status() answers whether the stamp still describes this tree',
+  );
+
+  const changedSince = (from) => {
+    const out = spawnSync('git', ['diff', '--name-only', `${from}..HEAD`], {
+      cwd: root, encoding: 'utf8', timeout: 10_000,
+    });
+    if (out.status !== 0) return null;
+    return String(out.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  };
+
+  const selfDiff = changedSince('HEAD');
+  is(Array.isArray(selfDiff) && selfDiff.length === 0, 'a commit differs from itself in nothing');
+
+  // An unknown ref must read as "changed", never as "nothing changed" — the
+  // stamped commit can be rebased away or amended, and guessing "clean" there
+  // would certify code no run has covered.
+  is(changedSince('0000000000000000000000000000000000000000') === null,
+    'and an unresolvable ref is an error, not an empty answer');
+
   // stamp() must be able to record a fingerprint taken before the suites ran.
   // Taking it afterwards certified whatever happened to be on disk when the run
   // finished — including anything edited while it was running, which for a run

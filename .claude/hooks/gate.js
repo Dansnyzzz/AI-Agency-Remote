@@ -104,6 +104,48 @@ export const head = () => git(['rev-parse', 'HEAD']);
 export const branch = () => git(['rev-parse', '--abbrev-ref', 'HEAD']);
 
 /**
+ * Did anything a test run depends on change between that commit and this one?
+ *
+ * `dirtyHash` already filters uncommitted changes through `isSource`, so editing
+ * a README does not expire the stamp. Committing that README did — because
+ * `current` also compared `head()` raw, and a commit hash knows nothing about
+ * what is inside it. The exemption held right up to the moment you saved your
+ * work, and then evaporated.
+ *
+ * That is not a small annoyance in a repository like this one. An audit commits
+ * documentation constantly, and this cost four full runs of the thirty-one
+ * suites in a single session, for markdown. The comment on `NOT_SOURCE` says
+ * exactly where that leads: it is how a gate earns its way into being switched
+ * off.
+ *
+ * Unknown means changed. If git cannot answer — the stamped commit was rebased
+ * away, amended, or is on a branch that no longer exists — this returns true and
+ * the gate is re-proved. The cost of being wrong that way is minutes; the cost
+ * of being wrong the other way is a green stamp over code nothing has run.
+ */
+function sourceChangedSince(from) {
+  if (!from) return true;
+
+  let run;
+  try {
+    run = spawnSync('git', ['diff', '--name-only', `${from}..HEAD`], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+  } catch {
+    return true;
+  }
+  if (!run || run.status !== 0) return true;
+
+  return String(run.stdout || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .some(isSource);
+}
+
+/**
  * A fingerprint of everything git considers changed, tracked or not. Cheaper and
  * more honest than hashing file contents: it moves the moment anything in the
  * tree does, which is precisely when a stamp stops meaning anything.
@@ -230,7 +272,16 @@ export function stamp(scope, tested = dirtyHash()) {
 export function status() {
   const ledger = readLedger();
   const g = ledger.lastGreen;
-  const current = Boolean(g) && g.head === head() && g.dirty === dirtyHash();
+  /**
+   * The stamp is current while nothing a test depends on has moved.
+   *
+   * Both halves now ask the same question. `dirtyHash` asks it of the working
+   * tree and `sourceChangedSince` asks it of the commits in between; before, the
+   * second half compared commit hashes and a documentation commit was
+   * indistinguishable from a rewrite of the agent loop.
+   */
+  const current =
+    Boolean(g) && g.dirty === dirtyHash() && (g.head === head() || !sourceChangedSince(g.head));
   const clean = ledger.pending.length === 0;
 
   return {
