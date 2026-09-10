@@ -100,33 +100,48 @@ const unproven =
 if (!unproven || state.verified) pass();
 
 /**
- * A sub-agent is answerable for its own work, not for the session's.
+ * A sub-agent is never blocked. The parent that dispatched it still is.
  *
- * `state` is the shared ledger, and it describes what the **parent** has been
- * doing. So a read-only sub-agent — an audit pass, a research errand, anything
- * dispatched to read and report — inherits a stale stamp it did not cause, has
- * no diff to prove, and is usually forbidden from running the gate by its own
- * brief. The block is then unsatisfiable by construction: there is no action
- * that agent can take to clear it.
+ * The ledger is one file for the whole session, so it cannot say *who* made a
+ * change. `pending` is written by the PostToolUse hook on every edit in the
+ * session, parent and sub-agent alike, and `lastGreen` moves when the parent
+ * commits. A read-only sub-agent — an audit pass, a research errand — therefore
+ * inherits a state it had no part in, has no diff to prove, and is usually
+ * forbidden by its own brief from running the gate. The block is unsatisfiable
+ * by construction: there is no action that agent can take to clear it.
  *
- * What happens next is the expensive part, and it was measured rather than
- * guessed. The agent's report is the message that gets blocked. Its *next*
- * message answers the hook instead — an explanation about the gate — and that
- * is what reaches the parent. Nine reports were lost that way in one session,
- * across six agents and two dispatch rounds, roughly 750k tokens, every one
- * recovered only by asking again. Telling the agents which words to avoid did
- * not help: `CLAIMS` includes a bare `/\bverified\b/i`, which is the exact label
- * an evidence-graded report is supposed to carry.
+ * The first attempt at this narrowed the rule to `pending.length === 0`, and it
+ * did not work for the same reason. `pending` had a file in it that the *parent*
+ * had just edited, so every sub-agent dispatched during ordinary work was still
+ * blocked. There is no version of this test that separates the two, because the
+ * data to separate them is not recorded.
  *
- * So the question a sub-agent is held to is narrowed to the honest one: did
- * *this* work leave source files unproven? `pending` names files edited since
- * the last green run, which is the only part of the ledger that can be about
- * the agent rather than about the session. A sub-agent that edited nothing
- * passes; one that edited source is still stopped.
+ * What the block costs was measured, not guessed. The message it stops is the
+ * agent's report. The agent's *next* message answers the hook instead — a
+ * paragraph about the gate — and that is what reaches the parent. Eleven reports
+ * were lost that way in one session across six agents, every one recovered only
+ * by asking again, and two agents re-dispatched from scratch. Briefing them
+ * around it does not help either: `CLAIMS` contains a bare `/\bverified\b/i`,
+ * which is the exact word an evidence-graded report carries.
  *
- * The parent keeps the full rule. It is the parent that commits.
+ * Dropping the block here does not drop the requirement, and that is the whole
+ * argument. A sub-agent does not commit and does not ship. If it edited source,
+ * `pending` names those files, and the **parent** is stopped at its own Stop
+ * until the gate has run over them. The evidence rule is not weakened; it is
+ * enforced at the boundary where work becomes permanent and where it can
+ * actually be discharged.
+ *
+ * The sub-agent still gets told, through the context below, so an honest report
+ * can say what is unproven.
  */
-if (event === 'SubagentStop' && state.pending.length === 0) pass();
+if (event === 'SubagentStop') {
+  context(
+    event,
+    `Ledger: ${state.pending.length} file(s) changed in this session with no green run since. ` +
+      'That is the session\'s state, not necessarily yours — if this task edited nothing, say so ' +
+      'and report what you found. If it did edit source, say which parts are unproven.',
+  );
+}
 
 const names = state.pending.map((p) => p.file);
 const shown = names.slice(0, 6).join(', ');

@@ -318,15 +318,50 @@ check(
   'never block twice — the harness caps it and ends the turn anyway',
   gateEnv,
 );
+/**
+ * A sub-agent is not blocked. This assertion was reversed deliberately, with the
+ * owner's agreement, and the argument belongs here because reversing a safety
+ * check quietly is how one rots.
+ *
+ * The rule read the shared ledger, which cannot say *who* made a change.
+ * `pending` is written by the PostToolUse hook for every edit in the session,
+ * parent and sub-agent alike; `lastGreen` moves when the parent commits. So a
+ * read-only sub-agent inherited a state it had no part in, had no diff to prove,
+ * and was usually forbidden by its own brief from running the gate. Nothing it
+ * could do would clear the block.
+ *
+ * A first attempt narrowed it to `pending.length === 0` and failed for the same
+ * reason: `pending` held a file the *parent* had just edited, so every
+ * sub-agent dispatched during ordinary work was still blocked. The data needed
+ * to tell the two apart is not recorded anywhere.
+ *
+ * The cost was measured, not assumed. The message the hook blocks is the agent's
+ * report; its next message answers the hook instead, and that is what reaches
+ * the parent. Eleven reports were lost that way in one session across six
+ * agents, two of which had to be dispatched again from nothing.
+ *
+ * Dropping it is safe because the requirement moves rather than disappears. A
+ * sub-agent does not commit and does not ship. If it edited source, `pending`
+ * names those files and the **parent** is stopped at its own Stop until the gate
+ * has run over them. That is the pair asserted here: one ledger, one sentence,
+ * sub-agent through and parent held.
+ */
 {
-  const run = check(
+  check(
     'verify-stop.js',
     { ...stop('Xong rồi nhé.'), hook_event_name: 'SubagentStop', agent_type: 'qa-tester' },
-    BLOCK,
-    'a sub-agent claiming completion is the same failure',
+    ALLOW,
+    'a sub-agent is not held to a ledger that cannot say whose work it describes',
     gateEnv,
   );
-  is(/qa-tester/.test(run.stderr || ''), 'and the block names which agent said it');
+  const run = check(
+    'verify-stop.js',
+    stop('Xong rồi nhé.'),
+    BLOCK,
+    '  while the parent making that same claim, on that same ledger, still is',
+    gateEnv,
+  );
+  is(/agent\.js/.test(run.stderr || ''), '  and is told which file is unproven');
 }
 
 /**
@@ -377,7 +412,12 @@ check(
     gateEnv,
   );
 
-  // And a sub-agent that did touch source is still answerable for it.
+  /*
+   * And when a sub-agent *does* edit source, the requirement is not lost — it
+   * lands on the parent, which is the only party that can discharge it. This is
+   * the half that makes the reversal above safe rather than merely convenient,
+   * so it is asserted rather than argued.
+   */
   writeLedger({
     pending: [{ file: 'server/agent.js', at: '2026-09-01T00:00:00Z' }],
     lastGreen: { at: '2026-09-01T00:00:00Z', head: 'a'.repeat(40), dirty: 'stale', scope: 'full' },
@@ -385,8 +425,15 @@ check(
   check(
     'verify-stop.js',
     { ...stop('Implemented it, all tests pass.'), hook_event_name: 'SubagentStop', agent_type: 'backend-engineer' },
+    ALLOW,
+    'a sub-agent that edited source reports freely',
+    gateEnv,
+  );
+  check(
+    'verify-stop.js',
+    stop('Implemented it, all tests pass.'),
     BLOCK,
-    'a sub-agent that edited source is still stopped',
+    '  and the parent inherits the obligation for what it edited',
     gateEnv,
   );
 }
