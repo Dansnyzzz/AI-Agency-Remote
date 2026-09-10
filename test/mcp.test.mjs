@@ -224,6 +224,75 @@ section('an http server may not be pointed at a private address');
   check('and so is loopback', /private|public internet/i.test(loopback), loopback);
 }
 
+section('the http transport, against a server that answers');
+{
+  /**
+   * This path had no coverage at all, which is why it is here.
+   *
+   * Every http check before this one asserts a *refusal* — a private address is
+   * turned away — and none of them ever received a response. So `readSse`, the
+   * JSON branch, and the session-id handshake were three pieces of live
+   * integration code that no test had ever executed. That mattered the moment
+   * the transport had to move off the global `fetch`: `fetch` cannot be pinned
+   * to an address that was checked, which is the whole DNS-rebinding gap, and
+   * rewriting a stream loop with nothing behind it is not a fix, it is a
+   * different risk.
+   *
+   * The stub is loopback, so `ALLOW_PRIVATE_FETCH` has to be on for the duration
+   * — which does mean the *pinning* is not what is exercised here; the protocol
+   * plumbing over the real socket is. The refusals above are what cover the
+   * address check, and they still pass with the switch off.
+   */
+  const http = await import('node:http');
+  const saved = process.env.ALLOW_PRIVATE_FETCH;
+  process.env.ALLOW_PRIVATE_FETCH = '1';
+
+  let sawSession = null;
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      const msg = JSON.parse(raw || '{}');
+      sawSession = req.headers['mcp-session-id'] ?? sawSession;
+
+      if (msg.method === 'initialize') {
+        // A stateful server issues an id here and expects it back on every
+        // later call. Answered as plain JSON, the other of the two shapes.
+        res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'sess-42' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'stub-http', version: '1' } } }));
+        return;
+      }
+      if (msg.method === 'tools/list') {
+        // The SSE shape: the reply arrives as an event among possibly several,
+        // and the reader has to find the one matching this id.
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('event: message\ndata: {"jsonrpc":"2.0","id":"other","result":{}}\n\n');
+        res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'ping', description: 'Answer pong.', inputSchema: { type: 'object', properties: {} } }] } })}\n\n`);
+        res.end();
+        return;
+      }
+      res.writeHead(202).end();
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const live = await connectMcp({ transport: 'http', url: `http://127.0.0.1:${port}/mcp` });
+    check('an http server connects and lists its tools', live.tools?.length === 1, JSON.stringify(live.tools?.map((t) => t.name)));
+    check('  the tool survives the SSE frame it arrived in', live.tools?.[0]?.name === 'ping');
+    check('  a frame for a different id is not mistaken for the answer', live.tools?.[0]?.description === 'Answer pong.');
+    check('  and the session id is carried back on the next call', sawSession === 'sess-42', String(sawSession));
+  } catch (err) {
+    check('an http server connects and lists its tools', false, err.message);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (saved === undefined) delete process.env.ALLOW_PRIVATE_FETCH;
+    else process.env.ALLOW_PRIVATE_FETCH = saved;
+  }
+}
+
 section('flattening a result');
 {
   check('plain text passes through', flatten({ content: [{ type: 'text', text: 'hello' }] }) === 'hello');

@@ -125,6 +125,42 @@ export async function assertPublic(url) {
  * uses one — `ok`, `status`, `statusText`, `headers.get()` — plus `text()` and a
  * `body` that is the Node stream, which both callers already iterate.
  */
+/**
+ * Let a Node response stream answer `getReader()` as well.
+ *
+ * The two original callers iterate `body` with `for await`, which an
+ * `IncomingMessage` supports natively. The MCP transport does not: it reads
+ * Server-Sent Events with `body.getReader()`, the WHATWG shape, because it was
+ * written against the global `fetch`. Moving it onto this module — which is the
+ * point, since `fetch` cannot be pinned to a checked address — would otherwise
+ * mean rewriting its stream loop, and that loop has no test behind it.
+ *
+ * So the stream grows the one method, rather than the consumer being rewritten
+ * blind. `read()` resolves `{ value, done }` with `value` as a `Uint8Array`,
+ * which is what a `TextDecoder` expects.
+ */
+function withReader(res) {
+  res.getReader = () => {
+    const iterator = res[Symbol.asyncIterator]();
+    return {
+      async read() {
+        const { value, done } = await iterator.next();
+        if (done) return { value: undefined, done: true };
+        return { value: value instanceof Uint8Array ? value : Buffer.from(value), done: false };
+      },
+      releaseLock() {},
+      // Async because the WHATWG one is, and callers chain `.catch()` onto it —
+      // the MCP reader does, in its `finally`. `destroy()` returns the stream,
+      // so handing that back turns a tidy-up into a TypeError inside a cleanup
+      // path, which is the worst place to put one.
+      async cancel() {
+        res.destroy();
+      },
+    };
+  };
+  return res;
+}
+
 function request(url, init, records) {
   const client = url.protocol === 'https:' ? https : http;
 
@@ -176,12 +212,18 @@ function request(url, init, records) {
             return value == null ? null : String(Array.isArray(value) ? value.join(', ') : value);
           },
         },
-        body: res,
+        body: withReader(res),
         async text() {
           let out = '';
           res.setEncoding('utf8');
           for await (const chunk of res) out += chunk;
           return out;
+        },
+        async json() {
+          let out = '';
+          res.setEncoding('utf8');
+          for await (const chunk of res) out += chunk;
+          return JSON.parse(out);
         },
       });
     });
@@ -205,6 +247,20 @@ export async function safeFetch(input, init = {}) {
     const records = await assertPublic(url);
 
     const res = await request(url, init, records);
+
+    /**
+     * `redirect: 'manual'` means the caller wants the 3xx, not the destination.
+     *
+     * The MCP transport asks for this deliberately: its headers may carry a
+     * token, and it would rather refuse a redirect than reason about where the
+     * next hop points. Following the hop *is* safe here — every one is checked
+     * and cross-origin credentials are stripped below — but "safe" is not the
+     * same as "what the caller asked for", and quietly following a redirect for
+     * something that said not to is how a deliberate refusal turns into a
+     * surprise.
+     */
+    if (init.redirect === 'manual') return res;
+
     if (![301, 302, 303, 307, 308].includes(res.status)) return res;
 
     const location = res.headers.get('location');
