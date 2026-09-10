@@ -1301,6 +1301,29 @@ section('the untrusted-content boundary');
     check(`${name} is the app's or the user's own words, not wrapped`, returnsExternalContent(name) === false);
   }
 
+  /**
+   * A tool call that never finished arriving must not run on its defaults.
+   *
+   * `openaiCompatible` builds each call's arguments as a JSON string across
+   * stream deltas, so a truncated reply reaches `executeTool` as invalid JSON.
+   * The old marker was written on one line and read nowhere, so the call ran
+   * with every parameter `undefined` — and the tools' defaults widen that:
+   * `resolveInWorkspace(undefined)` is the workspace root, so a cut-off
+   * `index_folder` indexed the whole workspace and shipped it to an embedding
+   * endpoint. Three of the five providers use that adapter.
+   */
+  const { executeTool } = await import('../server/tools/execute.js');
+  const cut = await executeTool({
+    user: { id: 'nobody' },
+    name: 'index_folder',
+    input: { __malformed: '{"path": "./src/comp' },
+    chatId: null,
+  });
+  check('a truncated tool call is refused, not run on defaults', cut.isError === true, cut.content?.slice(0, 60));
+  check('  and the model is told why', /not valid JSON|cut off/i.test(cut.content));
+  check('  and shown what arrived, so it can shorten and retry', cut.content.includes('./src/comp'));
+  check('  without the envelope, because the refusal is ours not the page\'s', !cut.content.includes('<untrusted'));
+
   // Provenance has to survive onto the envelope, or the boundary is anonymous
   // and a reader cannot tell which page talked.
   check(

@@ -167,6 +167,40 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
  * @returns {Promise<ToolResult>}
  */
 export async function executeTool(args) {
+  /**
+   * A tool call whose arguments did not parse is refused, not run.
+   *
+   * `openaiCompatible` assembles each call's arguments as a JSON *string* across
+   * stream deltas and parses them itself, so a truncated reply lands here as
+   * invalid JSON. It used to become `{ __unparsed: … }` and carry on: this
+   * function checked the tool *name* and never the input *shape*, so the call
+   * ran with every declared parameter `undefined`, and the tools' own defaults
+   * turned a missing argument into a wide one — `resolveInWorkspace(undefined)`
+   * resolves to the workspace root, so a cut-off `index_folder` indexed
+   * everything and sent it to the embedding endpoint.
+   *
+   * Three of the five providers go through that adapter, and they are the two
+   * aggregators this app is built around plus OpenAI itself.
+   *
+   * Refusing here rather than in the adapter keeps it at the same choke point as
+   * the envelope below, so a future adapter that assembles its own arguments
+   * inherits the refusal instead of having to remember it.
+   *
+   * The raw text is quoted back deliberately. A model told only "that failed"
+   * tends to repeat the call; one shown the truncated fragment usually shortens
+   * its arguments and succeeds.
+   */
+  const malformed = args?.input?.__malformed;
+  if (malformed !== undefined) {
+    return {
+      isError: true,
+      content:
+        `The arguments for ${args?.name} were not valid JSON, so the call was not run. ` +
+        'This usually means the reply was cut off mid-call. Send it again with shorter arguments. ' +
+        `What arrived was: ${String(malformed).slice(0, 200)}`,
+    };
+  }
+
   const result = await runTool(args);
 
   /**
