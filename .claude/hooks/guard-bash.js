@@ -160,6 +160,26 @@ const RULES = [
     'This package is private and unpublished. Publishing it would push the whole workspace to the public registry.',
   ],
   [
+    /**
+     * Cutting a release is publishing, and it was not covered.
+     *
+     * `npm publish` was blocked and everything beside it was not. Three
+     * installed skills drive exactly these commands — `claude-mem:version-bump`
+     * tags, releases and publishes; `superpowers:finishing-a-development-branch`
+     * decides how work integrates; `gitnexus-work` gates its own commits — and a
+     * decision recorded in `audit/SKILL_MAP.md` is a note, not a guard. CLAUDE.md
+     * §2 is explicit that a risk which can happen at any moment belongs in code
+     * rather than in prose.
+     *
+     * `git tag` is deliberately still allowed: this audit's own safety net is a
+     * backup tag, and a local tag publishes nothing. Pushing one does, and that
+     * is what `--tags` covers.
+     */
+    /\b(gh\s+(release|pr\s+merge)|npm\s+version|git\s+push[^\n|;&]*--tags)\b/,
+    'Cutting or publishing a release is the owner\'s call, not an automated step. '
+      + 'Local work and `git tag` are fine; announcing it is not. Say it is ready instead.',
+  ],
+  [
     /\bvercel\s+(deploy|--prod|env\s+rm)\b/,
     'Deploying or removing production env vars is the user\'s call, not an automated step. Ask first.',
   ],

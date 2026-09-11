@@ -145,6 +145,26 @@ check('guard-bash.js', bash(`psql -c "${['TRUNCATE', 'chats'].join(' ')}"`), BLO
 check('guard-bash.js', bash(['rm', '-r', 'data/pgdata'].join(' ')), BLOCK, 'deleting the local cluster');
 check('guard-bash.js', bash(['npm', 'publish'].join(' ')), BLOCK, 'publishing a private package');
 
+/*
+ * Cutting a release is publishing, and only `npm publish` was covered.
+ *
+ * Three installed skills drive exactly these commands — one tags, releases and
+ * publishes; one decides how a finished branch integrates; one gates its own
+ * commits. A decision recorded in a document is a note, not a guard, and
+ * CLAUDE.md §2 is explicit that a risk which can happen at any moment belongs
+ * in code.
+ *
+ * Split into tokens like the rules above, because writing them whole in this
+ * file would trip the guard when the suite itself is read by one.
+ */
+check('guard-bash.js', bash(['gh', 'release', 'create', 'v1.2.0'].join(' ')), BLOCK, 'cutting a github release');
+check('guard-bash.js', bash(['gh', 'pr', 'merge', '4', '--squash'].join(' ')), BLOCK, 'merging a pull request');
+check('guard-bash.js', bash(['npm', 'version', 'patch'].join(' ')), BLOCK, 'bumping the version');
+check('guard-bash.js', bash(['git', 'push', '--tags', 'origin', 'feature'].join(' ')), BLOCK, 'pushing tags');
+// A local tag publishes nothing, and this audit's own safety net is one.
+check('guard-bash.js', bash(['git', 'tag', 'backup/pre-optimize-x'].join(' ')), ALLOW, 'tagging locally is fine');
+check('guard-bash.js', bash(['gh', 'pr', 'view', '4'].join(' ')), ALLOW, 'and reading a pull request is too');
+
 console.log('\n[1mguard-write[0m');
 check('guard-write.js', write('server/app.js'), ALLOW, 'ordinary source is editable');
 check('guard-write.js', write('test/deploy.test.mjs'), ALLOW, 'so are tests');
