@@ -320,6 +320,43 @@ section('launch_app is not a command line');
   check('an empty name still asks for one, not for control characters', /name the application/i.test(empty), empty);
 }
 
+section('an interpreter is a shell by another name');
+{
+  /*
+   * `assessRisk` graded `launch_app` on a list of shells, under a comment
+   * saying "launching a shell to get around the shell rule is not [ordinary]".
+   * Every interpreter is a way round the shell rule too, and none was listed:
+   * `python -c`, `node -e`, `perl -e`, `mshta`, `wscript`, `cscript`. Anything
+   * unmatched falls through to `ordinary`, which under the default `guarded`
+   * policy runs with no approval prompt — and the same payload sent through
+   * `run_command` would at least have met `looksDestructive` first.
+   *
+   * `zsh` earns its own case: `\bsh\b` does not match inside it, so folding it
+   * into the `sh` alternative would have looked right and matched nothing.
+   */
+  const risk = (app) => assessRisk('launch_app', { app });
+
+  for (const app of ['python', 'python3', 'node', 'deno', 'bun', 'perl', 'ruby', 'php', 'osascript', 'mshta', 'wscript', 'cscript', 'rundll32', 'regsvr32']) {
+    check(`${app} asks first`, risk(app) === 'sensitive', risk(app));
+  }
+  for (const app of ['cmd', 'powershell', 'pwsh', 'bash', 'sh', 'zsh', 'fish', 'wsl', 'regedit']) {
+    check(`${app} still asks first`, risk(app) === 'sensitive', risk(app));
+  }
+
+  // A full path is the same program. Matched on the basename so it cannot be
+  // walked around by spelling it out.
+  check('a windows path to an interpreter still asks', risk(String.raw`C:\Python311\python.exe`) === 'sensitive');
+  check('  and a posix one', risk('/usr/local/bin/node') === 'sensitive');
+  check('  and case does not matter', risk('PYTHON.EXE') === 'sensitive');
+  check('  nor does the extension', risk('cscript.exe') === 'sensitive');
+
+  // The guard must stay a fence rather than becoming a wall: launching an
+  // ordinary program is the whole point of the tool.
+  for (const app of ['notepad', 'chrome.exe', 'code', 'Excel.exe', String.raw`C:\Program Files\Chrome\chrome.exe`]) {
+    check(`${app} does not`, risk(app) === 'ordinary', risk(app));
+  }
+}
+
 section('printing a page is reaching off this machine, and is checked like it');
 {
   /*

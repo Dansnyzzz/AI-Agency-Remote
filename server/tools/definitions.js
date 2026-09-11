@@ -1960,8 +1960,31 @@ export function assessRisk(name, input = {}) {
   // Launching a program is ordinary; launching a shell to get around the shell
   // rule is not.
   if (name === 'desktop_launch' || name === 'launch_app') {
+    /**
+     * A shell is not the only thing that runs what you hand it.
+     *
+     * The list used to name shells only, and the intent one line up is
+     * "launching a shell to get around the shell rule is not [ordinary]". Every
+     * interpreter is a way round the shell rule too, and none of them was here:
+     * `python -c`, `node -e`, `perl -e`, `ruby -e`, `mshta`, `wscript`,
+     * `cscript`. Anything unmatched falls through to `ordinary`, which under the
+     * default `guarded` policy runs with **no approval prompt** — and
+     * `launchApp` hands the name and args straight to `Start-Process
+     * -ArgumentList` or to `spawn`. The same payload through `run_command` would
+     * at least have met `looksDestructive` and its exfiltration patterns; this
+     * path skips that list entirely.
+     *
+     * `zsh` is called out because it is the one a word boundary gets wrong:
+     * `\bsh\b` does not match inside `zsh`, so writing it as part of the `sh`
+     * alternative would have looked right and matched nothing.
+     *
+     * Matched on the basename, so `/usr/bin/python3` and `C:\Python\python.exe`
+     * are the same answer as `python`.
+     */
     const app = String(input?.app || '').toLowerCase();
-    if (/\b(cmd|powershell|pwsh|wt|bash|sh|regedit|wsl|terminal|iterm)\b/.test(app)) return 'sensitive';
+    const base = app.split(/[\\/]/).pop().replace(/\.(exe|com|bat|cmd)$/, '');
+    if (/^(cmd|powershell|pwsh|wt|bash|sh|zsh|fish|dash|ksh|regedit|wsl|terminal|iterm)$/.test(base)) return 'sensitive';
+    if (/^(python\d*|python3|node|deno|bun|perl|ruby|php|osascript|mshta|wscript|cscript|rundll32|regsvr32)$/.test(base)) return 'sensitive';
   }
 
   return 'ordinary';
