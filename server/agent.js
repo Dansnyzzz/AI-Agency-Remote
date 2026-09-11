@@ -930,6 +930,27 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
       }
     } catch (err) {
       if (signal?.aborted) {
+        /**
+         * Keep what was already said.
+         *
+         * This returned here, before the `appendMessage` below, so half an
+         * answer the user had sat and watched arrive was discarded the moment
+         * they pressed stop — gone on reload, and gone from the transcript the
+         * next turn is built from. So the next turn re-sent the same question
+         * and the account paid for the same reply twice.
+         *
+         * `toolCalls` are deliberately not carried. They were never completed,
+         * never approved, and a stored assistant turn with outstanding calls is
+         * what the resume path picks up — so persisting them would turn a stop
+         * into a queued action.
+         */
+        if (assistant.text.trim()) {
+          assistant.model = entry.id;
+          assistant.toolCalls = [];
+          assistant.stopped = true;
+          await store.appendMessage(userId, chatId, assistant).catch((e) =>
+            log.error('stopped reply not saved', e, { chatId }));
+        }
         emit('done', { stopReason: 'aborted' });
         return;
       }
