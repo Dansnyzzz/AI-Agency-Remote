@@ -4,6 +4,9 @@ import { getStore, isServerless } from './store/index.js';
 import { getPrefs } from './settings.js';
 import { runAgent, deriveTitle } from './agent.js';
 import { redactSecrets } from './redact.js';
+// The same predicate the transcript uses to decide whether a reply is whole.
+// An unattended run needs it more, not less. See `runTask`.
+import { isComplete } from './providers/stop.js';
 
 /**
  * Work that happens without anyone watching.
@@ -163,6 +166,28 @@ function advance(cron, after = new Date(), tz = null) {
  * Errors are recorded rather than thrown: a scheduler that dies because one
  * task failed stops running every other task too.
  */
+/**
+ * What a finished unattended run should say about itself.
+ *
+ * Separated from `runTask` because it is the part worth pinning and `runTask`
+ * needs a store, an account and a live model to drive. The rule is small and
+ * the consequence is not: `last_status` is the only signal an unattended run
+ * produces — nobody watched the stream, and the transcript is read only if
+ * something prompts you to look. `ok` is what stops anybody looking.
+ *
+ * @param status  what the run already decided — an `error:` line wins, because
+ *                it says more than any of this can.
+ * @param ending  the normalised stop kind from `providers/stop.js`.
+ * @param waiting whether the run halted to ask for an approval.
+ */
+export function unattendedStatus(status, ending, waiting) {
+  if (String(status).startsWith('error:')) return status;
+  // A prompt raised at 3am goes nowhere. The run is over, not pending.
+  if (waiting) return 'stopped: waiting for an approval nobody was there to give';
+  if (ending && !isComplete(ending)) return `stopped: ${ending}`;
+  return status;
+}
+
 async function runTask(task) {
   const store = getStore();
   const user = await store.getUserById(task.user_id);
@@ -175,7 +200,26 @@ async function runTask(task) {
 
   const prefs = await getPrefs(user.id);
   const chatId = crypto.randomUUID();
+
+  /**
+   * `ok` has to be earned, not assumed.
+   *
+   * This opened at `ok` and only an `error` event or a throw moved it. Nothing
+   * else did — so a run that exhausted its step budget, or came back
+   * `truncated`, `refused` or `filtered`, or halted for an approval nobody was
+   * there to give, was recorded as a success. `last_status` is the **only**
+   * signal an unattended run produces: there is no `emit` consumer, nobody
+   * watched the stream, and the transcript is only read if something prompts
+   * you to look. Saying `ok` is what stops anybody looking.
+   *
+   * The vocabulary already exists — `providers/stop.js` was written to give
+   * this app one word for how a reply ended, and `isComplete` is its own
+   * predicate for "the reply in front of the user is whole". The interactive
+   * transcript uses it. The unattended path, where it matters more, did not.
+   */
   let status = 'ok';
+  let ending = null;
+  let waitingForApproval = false;
 
   try {
     await store.createChat(user.id, {
@@ -200,11 +244,17 @@ async function runTask(task) {
         // Stored in last_status and shown in the interface, so a key quoted
         // back by a provider must not survive the trip.
         if (event === 'error') status = `error: ${redactSecrets(String(data?.message)).text.slice(0, 200)}`;
+        else if (event === 'done') ending = data?.stop?.kind || data?.stopReason || null;
+        // A scheduled run that stops to ask is stopped for good: the prompt goes
+        // nowhere, because nobody is watching a run that happens at 3am.
+        else if (event === 'approval_required') waitingForApproval = true;
       },
     });
   } catch (err) {
     status = `error: ${redactSecrets(String(err?.message)).text.slice(0, 200)}`;
   }
+
+  status = unattendedStatus(status, ending, waitingForApproval);
 
   await store.finishTask(task.id, { status, chatId, nextRunAt: advance(task.cron, new Date(), task.tz) });
   return { taskId: task.id, status, chatId };
