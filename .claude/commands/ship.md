@@ -62,9 +62,14 @@ feature branch are allowed without asking; that is what the branch is for.
 npm run gate
 ```
 
-Let it finish — it runs lint, twenty-four suites, and the hook tests, and stamps
-the ledger only if all three exit clean. Nothing else can write that stamp, so
-there is no shortcut worth looking for.
+Let it finish — five steps, cheapest failure first: lint, the hook suite, the
+agent eval, type-check, then the thirty-one suites. It stamps the ledger only if
+every one of them exits clean. Nothing else can write that stamp, so there is no
+shortcut worth looking for.
+
+**Type-checking is in there deliberately.** It was missing from the gate once,
+and a tree with seven type errors that CI rejected was stamped green locally. A
+description of the gate that leaves it out invites exactly that skip back.
 
 Red twice for the same reason is the **second required stop**: bring it back with
 what failed and what you think it means, rather than trying a third variation

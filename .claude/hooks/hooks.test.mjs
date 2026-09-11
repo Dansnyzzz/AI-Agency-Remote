@@ -729,7 +729,7 @@ try {
 {
   // dirtyHash hashed the whole of `git status --porcelain`, which contradicted
   // isSource twenty lines below it — and isSource exists to say a README is not
-  // worth twenty-four suites. So note() honoured the exemption and dirtyHash did
+  // worth the full suite. So note() honoured the exemption and dirtyHash did
   // not: one line of documentation expired the stamp and demanded a full re-run,
   // the exact behaviour the comment on NOT_SOURCE warns gets a gate switched off.
   const gate = await import('./gate.js');

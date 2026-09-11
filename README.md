@@ -1595,9 +1595,19 @@ server/
     blocks.js         one document model every reader and writer meets in
     markdown.js       Markdown in, blocks out — the authoring language
     docx.js / xlsx.js / pptx.js   one format each, both directions
-  providers/          one streaming interface over four APIs
+  providers/          one streaming interface over five APIs
   tools/              tool schemas, cloud implementations, execution router
   store/              Neon and PGlite behind one Postgres interface
+  routes/             six route groups lifted out of app.js — chats, files,
+                      workspace, connectors, mcp, workflows
+  research/           deep_research: plan, gather, debate, grade, report
+  workflows.js        multi-step jobs that survive being interrupted
+  mcp/                tool servers the user connects, discovered per account
+  skills/             procedures that ship with the app
+  roleModel.js        which calls deserve the conversation's model, and which
+                      go to a cheaper one
+  autoPick.js         the `auto` model id, resolved per account
+  util/trace.js       the request id every log line carries
 worker/               the process that runs on someone's machine
   browser.js          the browser sandbox, driven over CDP
   desktop.js          desktop control, and the camera process

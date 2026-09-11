@@ -156,7 +156,7 @@ function sourceChangedSince(from) {
  *
  * This used to hash the whole of `git status --porcelain`, which quietly
  * contradicted `isSource` twenty lines below — and `isSource` exists precisely
- * to say that a README is not worth twenty-four suites. So `note()` honoured the
+ * to say that a README is not worth the full suite. So `note()` honoured the
  * exemption and this did not: writing one line of documentation expired the
  * stamp and demanded a full re-run, which is the exact behaviour the comment on
  * NOT_SOURCE warns turns a gate into something people switch off.
@@ -184,7 +184,7 @@ export function dirtyHash() {
 
 /**
  * Paths that changing does not invalidate a test run. Documentation and the
- * ledger's own state are the obvious cases — demanding twenty-four suites for a
+ * ledger's own state are the obvious cases — demanding the full suite for a
  * typo fix in a README is how a gate earns its way into being switched off.
  */
 const NOT_SOURCE = [
@@ -266,7 +266,7 @@ export function stamp(scope, tested = dirtyHash()) {
  *
  * `verified` requires the full gate. A `--fast` stamp is genuine evidence that
  * lint and the hook suite passed, and is reported as such, but it is not
- * evidence that the twenty-four suites did — so it does not satisfy a claim that
+ * evidence that the the full suite did — so it does not satisfy a claim that
  * a piece of work is finished.
  */
 export function status() {
