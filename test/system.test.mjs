@@ -320,6 +320,52 @@ section('launch_app is not a command line');
   check('an empty name still asks for one, not for control characters', /name the application/i.test(empty), empty);
 }
 
+section('printing a page is reaching off this machine, and is checked like it');
+{
+  /*
+   * `export_pdf` was the one url-taking tool on this machine that checked
+   * nothing. `browserOpen` requires `^https?://`; `download_file` goes through
+   * `safeFetch`, which refuses every private range. This went straight to
+   * Playwright's `goto` with whatever the model supplied — and `assessRisk`
+   * grades it `ordinary`, so under the default policy it ran with no prompt.
+   *
+   * `file:///…/.env` therefore rendered somebody's secrets into a PDF inside
+   * the workspace, where `read_file` picks it straight back up. That is an
+   * arbitrary local file read dressed as a printing tool.
+   *
+   * These run without a browser on purpose: the check sits above `sessionFor`,
+   * so a refusal costs no process and leaves no tab. If someone moves it back
+   * below, these tests start needing Chromium and will say so by hanging.
+   */
+  const { renderPdf } = await import('../worker/browser.js');
+
+  const refusedFor = async (url) => {
+    try {
+      await renderPdf({ url });
+      return '';
+    } catch (err) {
+      return err?.message || '';
+    }
+  };
+
+  check('a file: url is refused', /full http\(s\) URL/i.test(await refusedFor('file:///C:/Users/x/.env')));
+  check('  and so is data:', /full http\(s\) URL/i.test(await refusedFor('data:text/html,<p>x</p>')));
+  check(
+    'cloud metadata is refused',
+    /private address/i.test(await refusedFor('http://169.254.169.254/latest/meta-data/')),
+  );
+  check('  and loopback', /private address/i.test(await refusedFor('http://127.0.0.1:8080/admin')));
+
+  // The refusal must be about the address, not about there being a url at all —
+  // printing a real page is the feature.
+  const publicUrl = await refusedFor('https://example.com/');
+  check(
+    'a public page is not refused by the check itself',
+    !/full http\(s\) URL|private address/i.test(publicUrl),
+    publicUrl.slice(0, 60) || '(reached the browser)',
+  );
+}
+
 console.log(
   failures === 0
     ? '\n[32mAll system-tool checks passed.[0m\n'
