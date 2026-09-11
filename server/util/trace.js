@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import crypto from 'node:crypto';
+// `redact.js` imports nothing, so this cannot become one of the cycles in
+// ARCH-008. Checked rather than assumed, because this file is imported by
+// almost everything.
+import { redactSecrets } from '../redact.js';
 
 /**
  * One id that follows a request all the way through.
@@ -99,11 +103,28 @@ export const log = {
     // than off the type, which is also what makes this honest: the property may
     // genuinely be absent.
     const extra = /** @type {{ status?: unknown, statusCode?: unknown }} */ (error || {});
+    /**
+     * Redacted, for the same reason `readableFailure` redacts.
+     *
+     * The response path was given this treatment and the log path was not. The
+     * premise is observed rather than theoretical — `tools/execute.js` records
+     * that a provider client handed a malformed key quotes the value back in its
+     * error message, which is why the browser-facing path was fixed. The same
+     * string went into `log.error` untouched from ten call sites, several of
+     * which unpack a provider or SDK error directly.
+     *
+     * `LOG_FORMAT=json` is the default on a deployment, so that line lands in
+     * the platform's log, under the platform's retention, readable by everyone
+     * with log access — including operators who have no business holding that
+     * tenant's key. CLAUDE.md §6 says not to log sensitive data; this is the
+     * one place that could, and did.
+     */
+    const clean = (text) => redactSecrets(String(text)).text;
     const detail =
       error instanceof Error
-        ? { err: error.name, errMsg: error.message, status: extra.status ?? extra.statusCode }
+        ? { err: error.name, errMsg: clean(error.message), status: extra.status ?? extra.statusCode }
         : error != null
-          ? { errMsg: String(error) }
+          ? { errMsg: clean(error) }
           : {};
     emit('error', message, { ...detail, ...fields });
   },

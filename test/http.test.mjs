@@ -313,6 +313,48 @@ section('a dead model reads as a sentence, not as JSON');
   check('the model is named', /gemini-2\.5-flash/.test(said), said.slice(0, 80));
   check('and it says what to do', /pick another model/.test(said), said.slice(-60));
   check('an ordinary error is left alone', readableFailure(new Error('Connection reset')) === 'Connection reset');
+
+  /**
+   * The log line has to be as careful as the reply.
+   *
+   * `readableFailure` redacts because a provider client handed a malformed key
+   * quotes the value back in its error message — that is recorded in
+   * `tools/execute.js` as something observed, not feared. The same string went
+   * into `log.error` untouched from ten call sites, several of which unpack a
+   * provider error directly.
+   *
+   * `LOG_FORMAT=json` is the default on a deployment, so that line lands in the
+   * platform's log under the platform's retention, readable by everyone with
+   * log access — including operators who have no business holding that tenant's
+   * key. CLAUDE.md §6 is explicit about not logging sensitive data.
+   */
+  const { log } = await import('../server/util/trace.js');
+
+  // Captured off the real stream rather than through a seam built for the test,
+  // so what is asserted is the line an operator would actually read. `error`
+  // goes to stderr via `console.error`, and the format is decided at import
+  // time — so the text form is what this run produces, and it carries the same
+  // message either way.
+  const written = [];
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => {
+    written.push(String(chunk));
+    return realWrite(chunk, ...rest);
+  };
+  try {
+    log.error(
+      'turn failed',
+      new Error('Headers.append: "Bearer sk-or-v1-0123456789abcdef0123456789abcdef" is an invalid header value'),
+      { ms: 1 },
+    );
+  } finally {
+    process.stderr.write = realWrite;
+  }
+
+  const line = written.join('');
+  check('the log line was written at all', /turn failed/.test(line), line.slice(0, 80));
+  check('  a key quoted back by a provider does not reach it', !/sk-or-v1-0123456789/.test(line));
+  check('  and it still says what went wrong', /invalid header value/.test(line));
 }
 
 // ── the password box is reachable ───────────────────────────────────
