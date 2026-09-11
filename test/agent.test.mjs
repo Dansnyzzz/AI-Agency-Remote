@@ -957,6 +957,53 @@ section('parallel tool calls have a ceiling');
   check('an empty list is not a deadlock', (await mapWithLimit([], 4, async () => 1)).length === 0);
 }
 
+section('the modules in an import cycle can each be loaded first');
+{
+  /**
+   * There are three cycles through the agent loop, and they work — for a reason
+   * nobody is currently checking.
+   *
+   *   execute -> cloud -> subagents -> execute
+   *   agent   -> execute -> cloud -> scheduler -> agent
+   *   agent   -> execute -> cloud -> workflows -> agent
+   *
+   * ESM handles a cycle as long as every reference resolves when it is *called*
+   * rather than when the module is evaluated. None of these six files calls an
+   * imported function at module top level today, which is why nothing has
+   * broken. Add one `const X = importedFn()` up there and it is `undefined` on
+   * one entry path and defined on another, depending which module the process
+   * happened to reach first.
+   *
+   * Not hypothetical here: this same audit found import-time evaluation twice —
+   * `render.js` freezing its file nouns, `workflows.js` freezing two label maps
+   * — both written by people who did not expect it either.
+   *
+   * So each member is loaded first, in its own process. A top-level evaluation
+   * that only works from one direction fails here, and names the file.
+   */
+  const members = [
+    'server/agent.js',
+    'server/tools/execute.js',
+    'server/tools/cloud.js',
+    'server/subagents.js',
+    'server/scheduler.js',
+    'server/workflows.js',
+  ];
+
+  const { spawnSync } = await import('node:child_process');
+  for (const entry of members) {
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', `await import('./${entry}');`], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    check(
+      `${entry} loads as the first module in the graph`,
+      run.status === 0,
+      String(run.stderr || '').trim().split('\n').slice(-2).join(' ').slice(0, 160),
+    );
+  }
+}
+
 removeTemp(process.env.DATA_DIR);
 
 console.log(
