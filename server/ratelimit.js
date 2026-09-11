@@ -1,4 +1,7 @@
 import { getStore } from './store/index.js';
+// Every level redacts its fields before emitting, which matters here: a store
+// failure's message can carry a connection string.
+import { log } from './util/trace.js';
 
 /**
  * Throttling for the handful of endpoints somebody would sit and guess at.
@@ -66,9 +69,25 @@ export async function consume(req, action, extra = '') {
   if (extra) buckets.push(`${action}:id:${String(extra).toLowerCase().slice(0, 120)}`);
 
   for (const bucket of buckets) {
-    // A failure to count must never be a failure to serve: an unreachable
-    // counter table should slow nobody down.
-    const outcome = await store.hitRateLimit(bucket, rule.limit, rule.windowMs).catch(() => null);
+    /**
+     * A failure to count must never be a failure to serve: an unreachable
+     * counter table should slow nobody down. That part is deliberate and stays.
+     *
+     * What did not stay is the silence. This `catch` returned `null` and said
+     * nothing, so a database blip removed the only brute-force protection on
+     * every unauthenticated route — sign-in, registration, password reset — and
+     * left no trace that it had. The window could be minutes or hours, and
+     * afterwards there was no way to tell it had happened at all, which is the
+     * difference between a deliberate trade-off and an invisible one.
+     */
+    const outcome = await store.hitRateLimit(bucket, rule.limit, rule.windowMs).catch((err) => {
+      log.warn('rate limit not counted — failing open', {
+        action,
+        err: err?.name,
+        errMsg: err?.message,
+      });
+      return null;
+    });
     if (outcome && !outcome.allowed) {
       const minutes = Math.max(1, Math.ceil(outcome.retryAfterMs / 60_000));
       return {

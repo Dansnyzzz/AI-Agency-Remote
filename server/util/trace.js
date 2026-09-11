@@ -65,9 +65,42 @@ const asJson = process.env.LOG_FORMAT
 
 const LEVEL_COLOUR = { debug: '\x1b[2m', info: '', warn: '\x1b[33m', error: '\x1b[31m' };
 
+/**
+ * Redact every string that goes into a line, at every level.
+ *
+ * `log.error` was given this first, because that is where a provider quoting a
+ * malformed key back was observed. But the fields of an `info` or a `warn` are
+ * the same channel — a store failure's message carries a connection string, a
+ * connector's error carries a token — and nothing stopped one going out raw.
+ * Doing it here rather than per level means a new call site inherits it instead
+ * of having to remember, which is the shape of every other leak found in this
+ * codebase.
+ *
+ * Strings only. Numbers and booleans cannot carry a key, and walking nested
+ * objects on every log line would cost more than it protects.
+ */
+function cleanFields(fields) {
+  if (!fields || typeof fields !== 'object') return fields;
+  let touched = false;
+  const out = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (typeof value === 'string') {
+      const clean = redactSecrets(value).text;
+      if (clean !== value) touched = true;
+      out[key] = clean;
+    } else {
+      out[key] = value;
+    }
+  }
+  return touched ? out : fields;
+}
+
 function emit(level, message, fields = {}) {
   const trace = currentTrace();
-  const record = { level, msg: message, ...trace, ...fields };
+  // Cleaned once, up here, because there are two output formats below and
+  // cleaning inside one of them is how half a fix ships.
+  const safe = cleanFields(fields);
+  const record = { level, msg: message, ...trace, ...safe };
 
   if (asJson) {
     // `time` last in the object but first in the reader's mind; platforms sort
@@ -76,7 +109,7 @@ function emit(level, message, fields = {}) {
     return;
   }
 
-  const parts = Object.entries({ ...trace, ...fields })
+  const parts = Object.entries({ ...trace, ...safe })
     .filter(([, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`);
   const colour = LEVEL_COLOUR[level] ?? '';

@@ -355,6 +355,31 @@ section('a dead model reads as a sentence, not as JSON');
   check('the log line was written at all', /turn failed/.test(line), line.slice(0, 80));
   check('  a key quoted back by a provider does not reach it', !/sk-or-v1-0123456789/.test(line));
   check('  and it still says what went wrong', /invalid header value/.test(line));
+
+  /*
+   * And not only `error`. The fields of a `warn` or an `info` are the same
+   * channel — a store failure's message carries a connection string, a
+   * connector's error carries a token — and only `log.error` unpacked its
+   * argument through the redactor. The rate limiter logs a warning when it
+   * fails open, which is exactly such a field.
+   */
+  const warned = [];
+  const realWarn = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => {
+    warned.push(String(chunk));
+    return realWarn(chunk, ...rest);
+  };
+  try {
+    log.warn('rate limit not counted — failing open', {
+      action: 'login',
+      errMsg: 'connect ECONNREFUSED postgres://user:hunter2@db.example:5432/app',
+    });
+  } finally {
+    process.stderr.write = realWarn;
+  }
+  const warnLine = warned.join('');
+  check('a warning redacts its fields too', !/hunter2/.test(warnLine), warnLine.slice(0, 120));
+  check('  and still names what happened', /failing open/.test(warnLine));
 }
 
 // ── the password box is reachable ───────────────────────────────────
