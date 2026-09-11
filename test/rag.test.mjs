@@ -128,6 +128,29 @@ section('a folder is indexed and can be searched by meaning');
   });
 
   check('it reports what it stored', result.files === 2 && result.chunks === 3, JSON.stringify(result));
+
+  /*
+   * Two files went in as one batch, and that is the point: this used to loop
+   * `replaceDocChunks` once per file, on a driver whose defining property is one
+   * round trip per statement. Indexing a source tree of forty files paid forty
+   * sequential network calls with all the data already in hand.
+   *
+   * Asserted on the result rather than by counting queries — what matters is
+   * that batching did not lose a file or cross one path's chunks into another,
+   * which is the way a `path`-per-row rewrite goes wrong.
+   */
+  const fromLease = await searchDocs(alice.id, { query: 'when is rent due each month' });
+  const fromRecipes = await searchDocs(alice.id, { query: 'frying garlic in oil' });
+  check(
+    '  a chunk from the first file is filed under the first file',
+    /documents\/lease\.md/.test(fromLease) && /first day of each month/.test(fromLease),
+    fromLease.slice(0, 140),
+  );
+  check(
+    '  and one from the second under the second',
+    /documents\/recipes\.md/.test(fromRecipes) && /garlic/.test(fromRecipes),
+    fromRecipes.slice(0, 140),
+  );
   check('and which model made the vectors', result.model === 'text-embedding-3-small', result.model);
 
   const hit = await searchDocs(alice.id, { query: 'how much money is held in escrow' });

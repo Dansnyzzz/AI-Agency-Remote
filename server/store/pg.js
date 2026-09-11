@@ -1781,6 +1781,67 @@ export function createPgStore(connectionString) {
      * a single INSERT, and where the driver has `transaction` the delete and
      * the insert commit together or not at all.
      */
+    /**
+     * Every file in one batch, in two statements rather than two per file.
+     *
+     * `replaceDocChunks` is properly bulk for one path — one `unnest` insert for
+     * however many chunks it has. The caller then ran it in a loop, once per
+     * file, on a driver whose defining property is one round trip per statement:
+     * indexing a source tree of forty files paid forty sequential round trips
+     * with all the data already in hand.
+     *
+     * The DELETE takes the whole set of paths at once and the INSERT takes every
+     * row, so the cost stops scaling with the number of files. Where the driver
+     * has `transaction` the pair commits together, which also makes the batch
+     * atomic across files rather than merely within each one — a partial index
+     * refresh is a worse thing to leave behind than a failed one.
+     */
+    async replaceDocChunksMany(userId, groups) {
+      const entries = [...groups].filter(([, rows]) => Array.isArray(rows));
+      if (!entries.length) return;
+
+      const paths = entries.map(([p]) => p);
+      const rows = entries.flatMap(([p, list]) => list.map((r) => ({ ...r, path: p })));
+
+      const del = ['DELETE FROM doc_chunks WHERE user_id = $1 AND path = ANY($2::text[])', [userId, paths]];
+      if (!rows.length) {
+        await q(...del);
+        return;
+      }
+
+      const ins = [
+        `INSERT INTO doc_chunks (id, user_id, source, path, ordinal, heading, text, embedding, dims, model, mtime)
+         SELECT * FROM unnest(
+           $1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::text[],
+           $7::text[], $8::text[], $9::int[], $10::text[], $11::bigint[]
+         )`,
+        [
+          rows.map((r) => r.id),
+          rows.map(() => userId),
+          rows.map((r) => r.source),
+          rows.map((r) => r.path),
+          rows.map((r) => r.ordinal),
+          rows.map((r) => r.heading ?? null),
+          rows.map((r) => r.text),
+          rows.map((r) => r.embedding),
+          rows.map((r) => r.dims),
+          rows.map((r) => r.model),
+          rows.map((r) => r.mtime ?? null),
+        ],
+      ];
+
+      if (typeof sql.transaction === 'function') {
+        await ready();
+        await sql.transaction([sql.query(del[0], del[1]), sql.query(ins[0], ins[1])]);
+        return;
+      }
+      // PGlite: no batch API, so two statements rather than one transaction —
+      // the same limitation `replaceDocChunks` documents, and the same one
+      // PERF-011 records as a local-development hazard.
+      await q(...del);
+      await q(...ins);
+    },
+
     async replaceDocChunks(userId, path, rows) {
       const del = ['DELETE FROM doc_chunks WHERE user_id = $1 AND path = $2', [userId, path]];
 
