@@ -1516,6 +1516,74 @@ section('a write refuses on its own, not because of a check above it');
   check('and editing still rewinds the conversation', trimmed.length === 1, `${trimmed.length} messages`);
 }
 
+section('an upsert cannot cross an account boundary');
+{
+  /*
+   * Same lesson as the section above, one shape further on. These three
+   * statements conflicted on the **global primary key** and updated whatever
+   * they hit, so the id alone decided which row was rewritten.
+   *
+   * `saveMcpServer` is the one that matters: `routes/mcp.js` takes the id from
+   * `req.body`, so any signed-in account could post somebody else's server id
+   * and replace their `name`, `config` and `enabled`. An MCP config is a
+   * program that runs on that account's machine, or a URL its agent will trust.
+   *
+   * `heartbeat` was worse in kind if narrower in reach: it set
+   * `user_id = EXCLUDED.user_id`, so the conflicting row changed hands
+   * outright. The victim's `activeWorker` then finds nothing and their local
+   * tools quietly stop being offered.
+   *
+   * Driven through the store with the wrong account, because that is the only
+   * thing that tells a statement that is safe from a statement standing behind
+   * a check somebody remembered to write.
+   */
+  const owner = await store.createUser({
+    id: 'u-ups-owner', email: 'ups-owner@example.com', passwordHash: 'x', name: 'Owner', role: 'user',
+  });
+  const other = await store.createUser({
+    id: 'u-ups-other', email: 'ups-other@example.com', passwordHash: 'x', name: 'Other', role: 'user',
+  });
+
+  await store.saveMcpServer(owner.id, {
+    id: 'mcp-shared-id',
+    name: 'mine',
+    config: { transport: 'http', url: 'https://example.com/mine' },
+    enabled: true,
+  });
+
+  let refused = '';
+  try {
+    await store.saveMcpServer(other.id, {
+      id: 'mcp-shared-id',
+      name: 'theirs',
+      config: { transport: 'http', url: 'https://attacker.example/theirs' },
+      enabled: true,
+    });
+  } catch (err) {
+    refused = err.message;
+  }
+  check('another account cannot overwrite an MCP server', /another account/i.test(refused), refused);
+
+  const still = await store.getMcpServer(owner.id, 'mcp-shared-id');
+  check('  the owner\'s config is untouched', still?.name === 'mine', JSON.stringify(still?.name));
+  check(
+    '  including the url its agent would trust',
+    !JSON.stringify(still?.config ?? {}).includes('attacker.example'),
+  );
+  check('  and the owner can still save over their own', !!(await store.saveMcpServer(owner.id, {
+    id: 'mcp-shared-id', name: 'renamed', config: { transport: 'http', url: 'https://example.com/mine' }, enabled: true,
+  })));
+
+  // A worker may be refreshed by its owner and not taken over by anyone else.
+  await store.heartbeat(owner.id, 'w-shared-id', { platform: 'win32' });
+  await store.heartbeat(other.id, 'w-shared-id', { platform: 'linux' });
+  const ownerWorker = await store.activeWorker(owner.id);
+  const otherWorker = await store.activeWorker(other.id);
+  check('a heartbeat cannot take another account\'s worker', ownerWorker?.id === 'w-shared-id', JSON.stringify(ownerWorker?.id));
+  check('  and the account that tried does not gain one', !otherWorker, JSON.stringify(otherWorker?.id));
+  check('  the owner\'s machine details are not overwritten either', ownerWorker?.info?.platform === 'win32', JSON.stringify(ownerWorker?.info));
+}
+
 section('concurrent writes to one setting compose instead of racing');
 {
   // Artifact storage was read-all, mutate, setUserSetting — the read-modify-write

@@ -1516,10 +1516,26 @@ export function createPgStore(connectionString) {
     },
 
     // ── worker presence ─────────────────────────────────────────────
+    /**
+     * A heartbeat may refresh a worker. It may not take one over.
+     *
+     * This used to set `user_id = EXCLUDED.user_id` on conflict, so whoever
+     * beat last owned the row. `app.js` identifies a paired machine by its
+     * device row and ignores the id it reports — but it falls back to the
+     * client's `workerId` for a legacy worker paired before devices existed, and
+     * on that path an account could name somebody else's worker id and take the
+     * row. The victim's `activeWorker` then finds nothing, so their local tools
+     * stop being offered with no error anywhere.
+     *
+     * Re-owning was never the intent — it reads as a convenience for a machine
+     * that changed hands. A machine that changes hands should be paired again,
+     * which is the path that proves who it belongs to.
+     */
     async heartbeat(userId, workerId, info) {
       await q(
         `INSERT INTO workers (id, user_id, last_seen, info) VALUES ($1, $2, NOW(), $3)
-         ON CONFLICT (id) DO UPDATE SET last_seen = NOW(), info = EXCLUDED.info, user_id = EXCLUDED.user_id`,
+         ON CONFLICT (id) DO UPDATE SET last_seen = NOW(), info = EXCLUDED.info
+         WHERE workers.user_id = $2`,
         [workerId, userId, JSON.stringify(info ?? {})],
       );
     },
@@ -2438,6 +2454,7 @@ export function createPgStore(connectionString) {
            status = EXCLUDED.status, transcript = EXCLUDED.transcript, sources = EXCLUDED.sources,
            report = EXCLUDED.report, tokens_in = EXCLUDED.tokens_in, tokens_out = EXCLUDED.tokens_out,
            completed_at = NOW()
+         WHERE research_runs.user_id = $2
          RETURNING *`,
         [
           run.id,
@@ -2452,6 +2469,11 @@ export function createPgStore(connectionString) {
           run.tokensOut ?? 0,
         ],
       );
+      // The `WHERE` above means a run id owned by another account matches
+      // nothing and returns nothing, rather than being overwritten. Said out
+      // loud, because a bare `rows[0]` going undefined is the kind of silence
+      // that gets read as "the write worked" three call sites later.
+      if (!rows[0]) throw new Error('That research run belongs to another account.');
       return rows[0];
     },
     async getResearchRun(userId, id) {
@@ -2459,15 +2481,34 @@ export function createPgStore(connectionString) {
       return rows[0] ?? null;
     },
 
+    /**
+     * The `WHERE` on the conflict is the ownership check, and it has to be here.
+     *
+     * `id` is client-supplied — `routes/mcp.js` takes `req.body?.id` and only
+     * falls back to a fresh uuid — and the conflict target is the global primary
+     * key. Without the predicate, posting somebody else's server id rewrote
+     * their `name`, `config` and `enabled`, from any signed-in account. An MCP
+     * config is a program that runs on that account's machine or a URL its agent
+     * will trust, so this is not a settings scribble.
+     *
+     * A conflicting row owned by somebody else now matches nothing, so the
+     * statement updates nothing and inserts nothing — and `getMcpServer` scopes
+     * by `userId`, so it answers null. Turned into a refusal rather than left as
+     * a null: the route would have done `saved.id` on it and returned a 500,
+     * which reads as a bug in the app rather than as the boundary holding.
+     */
     async saveMcpServer(userId, server) {
       await q(
         `INSERT INTO mcp_servers (id, user_id, name, config, enabled)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (id) DO UPDATE SET
-           name = EXCLUDED.name, config = EXCLUDED.config, enabled = EXCLUDED.enabled`,
+           name = EXCLUDED.name, config = EXCLUDED.config, enabled = EXCLUDED.enabled
+         WHERE mcp_servers.user_id = $2`,
         [server.id, userId, server.name, JSON.stringify(server.config ?? {}), server.enabled !== false],
       );
-      return this.getMcpServer(userId, server.id);
+      const saved = await this.getMcpServer(userId, server.id);
+      if (!saved) throw new Error('That server id belongs to another account.');
+      return saved;
     },
     async setMcpServerEnabled(userId, id, enabled) {
       await q('UPDATE mcp_servers SET enabled = $3 WHERE user_id = $1 AND id = $2', [userId, id, !!enabled]);
