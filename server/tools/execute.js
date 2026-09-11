@@ -64,8 +64,28 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (signal?.aborted) {
+      /**
+       * Says what actually happened, which is less than it used to claim.
+       *
+       * This marks the job finished on the server and stops waiting. It does
+       * **not** reach the worker: there is no cancellation channel — the worker
+       * claims a job and runs it to completion, and nothing it polls carries a
+       * stop. So a `delete_file` already executing is not called back. The model
+       * was told "Cancelled by the user", concluded the file was still there,
+       * and said so.
+       *
+       * Telling the truth is the part that is cheap. Actually propagating the
+       * cancellation means a flag the worker checks mid-execution, which is a
+       * change across the store, the job protocol and the worker loop — raised
+       * as `AUTO-009` rather than half-done here behind an accurate sentence.
+       */
       await store.completeJob(userId, id, { status: 'error', result: { error: 'Cancelled by the user.' } });
-      return { isError: true, content: 'Cancelled by the user.' };
+      return {
+        isError: true,
+        content:
+          'Stopped waiting for this at the user\'s request. If the machine had already started it, '
+          + 'it may still have finished — check before assuming it did not happen.',
+      };
     }
     await sleep(POLL_MS);
     const job = await store.getJob(userId, id);
