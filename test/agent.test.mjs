@@ -559,6 +559,26 @@ section('output budget follows the model');
   );
 
   /*
+   * An entry that states neither figure is the one case that used to get the
+   * flat 32000 back, unclamped — the exact hard-coded number `new-provider.md`
+   * forbids, and for the reason it gives: `openai/gpt-4` has an 8,191-token
+   * *total* window, so asking for 32000 asks for four times everything it has.
+   *
+   * First-party entries carry both fields and never took this path. Sparse
+   * metadata is what arrives from the aggregators, which are the two providers
+   * this app is built around — so the branch with no information is the one
+   * most likely to be taken.
+   */
+  const unknown = outputBudget({ id: 'openrouter/mystery/model', provider: 'openrouter' });
+  check('an entry that states nothing gets a cautious cap', unknown === 4096, String(unknown));
+  check('  not the flat 32000 that fits in no small window', unknown !== 32_000);
+  check(
+    '  while a stated cap with no window is still honoured',
+    outputBudget({ maxOutput: 16_000 }) === 16_000,
+    String(outputBudget({ maxOutput: 16_000 })),
+  );
+
+  /*
    * Built-ins carry their own figure and must be untouched by any of this.
    *
    * The number moved once already — Opus was being cut to a flat 32000, so long
@@ -578,7 +598,23 @@ section('output budget follows the model');
     outputBudget(resolveModel('anthropic/claude-sonnet-5')) === 128_000,
     String(outputBudget(resolveModel('anthropic/claude-sonnet-5'))),
   );
-  check('a model with no context at all still gets a usable number', outputBudget({}) === 32_000);
+  /*
+   * This asserted 32000 and now asserts 4096 — a deliberate reversal, so here
+   * is why rather than a quiet edit.
+   *
+   * 32000 is the one number `.claude/commands/new-provider.md` forbids by name,
+   * and for the reason it gives: `openai/gpt-4` has an 8,191-token *total*
+   * window, so asking it for 32000 asks for four times everything it has. The
+   * clamp a few lines up exists to prevent exactly that and was skipped on this
+   * branch, which is the branch taken when nothing is known about the model.
+   *
+   * Both directions cost something, and they do not cost the same. Too small
+   * truncates a reply that could have been longer — visible, and the user can
+   * ask for more. Too large is a request the provider rejects outright, and the
+   * turn produces nothing at all. 4096 is the smallest ceiling in common use
+   * and fits inside every window this app has met.
+   */
+  check('a model that states nothing gets the cautious cap, not the flat one', outputBudget({}) === 4_096, String(outputBudget({})));
 }
 
 // ── the compaction budget on a small window ─────────────────────────
