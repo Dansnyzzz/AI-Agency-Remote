@@ -482,6 +482,29 @@ section('approval gating by policy');
   check('guarded gates only the destructive one', ids('guarded') === '3', ids('guarded'));
   check('ask gates everything that changes anything', ids('ask') === '2,3', ids('ask'));
   check('plan gates nothing either — it is readonly with a brief', ids('plan') === '');
+
+  /**
+   * An approval has to be an answer to the batch it was shown for.
+   *
+   * `decision` used to be a bare word, applied to whatever was outstanding when
+   * the resume arrived. Almost always the same batch — and the app mirrors
+   * across tabs, so a turn started in a second tab leaves a *different* batch
+   * waiting, and a click on the first tab's prompt approved calls nobody had
+   * been shown. The prompt lists every call and its arguments so the decision is
+   * informed; letting it land on another set makes that display decorative.
+   */
+  const { answersTheseCalls } = await import('../server/agent.js');
+
+  check('the ids it was shown answer it', answersTheseCalls(calls, ['1', '2', '3']));
+  check('  in any order, because a set is not a list', answersTheseCalls(calls, ['3', '1', '2']));
+  check('  a different batch does not', !answersTheseCalls(calls, ['1', '2', '9']));
+  check('  nor a subset of it', !answersTheseCalls(calls, ['1', '2']));
+  check('  nor a superset', !answersTheseCalls(calls, ['1', '2', '3', '4']));
+  check('  and an answer naming nothing does not answer anything', !answersTheseCalls(calls, undefined));
+  check('  including an empty list against pending calls', !answersTheseCalls(calls, []));
+  // Ids arrive as JSON and a provider may number them; comparing as strings is
+  // what stops 1 and '1' being two different calls.
+  check('numeric ids still match their string form', answersTheseCalls([{ id: 1 }, { id: 2 }], ['1', '2']));
 }
 
 section('planning mode is offered the reading tools and nothing else');

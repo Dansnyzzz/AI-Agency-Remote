@@ -1537,6 +1537,10 @@ export function createApp() {
           chatId,
           modelId: req.body?.model,
           decision: req.body?.decision,
+          // The tool-call ids the prompt named when the person answered. A
+          // decision is about a specific batch, and until this was sent the
+          // server had no way to know whether it still was. See `runAgent`.
+          decisionFor: req.body?.decisionFor,
           // Which computer the browser is sitting at, learned from the worker on
           // that machine. Per request rather than stored: preferences belong to
           // the account, so two machines with the app open would take turns

@@ -420,6 +420,33 @@ export function needsApproval(toolCalls, policy) {
   });
 }
 
+/**
+ * Is this answer about the question that was asked?
+ *
+ * `decision` was a bare word — `allow` or `deny` — applied to whatever happened
+ * to be outstanding when the resume arrived. That is the same batch almost
+ * always, and not always. The app mirrors across tabs, so a turn started in a
+ * second tab leaves a *different* batch waiting, and a click on the first tab's
+ * prompt then approved calls nobody had been shown. The prompt lists every call
+ * with its arguments precisely so that the decision is an informed one; a
+ * decision that can land on a different set undoes that.
+ *
+ * So the client sends back the ids it displayed and they have to be the ids
+ * still waiting. A mismatch is not an error — it means the screen is out of
+ * date — so the caller falls through to asking again, with what is pending now.
+ *
+ * A missing `decisionFor` counts as a mismatch rather than being waved through.
+ * The client ships with this server, so there is no older one to be gentle
+ * with, and defaulting the other way would leave the gap open to anything that
+ * simply omits the field.
+ */
+export function answersTheseCalls(toolCalls, decisionFor) {
+  if (!Array.isArray(decisionFor)) return false;
+  const waiting = (toolCalls || []).map((c) => String(c.id)).sort();
+  const answered = decisionFor.map(String).sort();
+  return answered.length === waiting.length && answered.every((id, i) => id === waiting[i]);
+}
+
 async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable }) {
   const results = await mapWithLimit(
     toolCalls,
@@ -516,7 +543,7 @@ export function applyStreamEvent(ev, assistant, emit) {
   return ev;
 }
 
-export async function runAgent({ userId, user, chatId, modelId, decision, emit, signal, deviceHint }) {
+export async function runAgent({ userId, user, chatId, modelId, decision, decisionFor, emit, signal, deviceHint }) {
   const store = getStore();
   const prefs = await getPrefs(userId);
 
@@ -703,7 +730,10 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     // Re-check the policy rather than trusting that a decision was made. A run
     // cut short before it could ask must still ask on resume.
     const stillPending = needsApproval(last.toolCalls, policy);
-    if (stillPending.length && decision !== 'allow' && decision !== 'deny') {
+
+    const answersThis = answersTheseCalls(last.toolCalls, decisionFor);
+
+    if (stillPending.length && !(answersThis && (decision === 'allow' || decision === 'deny'))) {
       emit('approval_required', {
         toolCalls: last.toolCalls.map((c) => ({
           id: c.id,
