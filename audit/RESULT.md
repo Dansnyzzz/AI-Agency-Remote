@@ -166,6 +166,7 @@ is the one exercised above. No model turn was sent — that needs a live key.
 
 ## Mistakes made during the work
 
+- **"Gate green" was reported as if it meant "CI green", and it did not.** Every gate run in this round was on Windows. CI (ubuntu) had been red since 2026-09-02 — first on a hook check that assumes Windows paths (`CFG-022`), then on this round's own cancellation fix, which killed only the shell on Linux (`CODE-030`). Nobody looked at CI until the owner pushed and GitHub emailed. Logged as `CFG-023`; the handover table ticked gates 1 and 2 on local evidence only.
 - The shell and the edit tool collapse a doubled backslash, and it bit five times:
   a raw NUL written into `server/agent.js` (`CODE-022`, now guarded by a test),
   regexes that silently lost their escapes, and a newline escape that became a
