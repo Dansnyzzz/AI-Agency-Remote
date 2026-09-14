@@ -63,6 +63,8 @@ const SYSTEM = [
  * now lives in the test suite.
  */
 async function runOne({ userId, user, entry, prefs, tools, task, signal, stream }) {
+  // The names this sub-agent was given. See the membership check in the tool loop.
+  const offered = new Set((tools || []).map((t) => t.name));
   const messages = [{ id: `sub-${Date.now()}`, role: 'user', text: String(task) }];
   let answer = '';
   /**
@@ -142,6 +144,33 @@ async function runOne({ userId, user, entry, prefs, tools, task, signal, stream 
       assistant.toolCalls,
       MAX_PARALLEL_TOOLS,
       async (call) => {
+        /**
+         * Only what this sub-agent was offered may run.
+         *
+         * The check below used to be the only one, and it asks the wrong
+         * question for two tools. `run_parallel` and `deep_research` are
+         * `readOnly`, so `assessRisk` grades them `safe` — and `noSubagent`,
+         * the flag meant to keep them away from here, is enforced only in
+         * `availableTools`, which decides what is *offered*, not what *runs*.
+         * A sub-agent that named `run_parallel` anyway — a model repeating a
+         * name it saw in a page it read — passed, and started six more
+         * sub-agents, each able to do the same: 6, 36, 216 concurrent calls on
+         * the account's own key, with no depth counter anywhere (SEC-026).
+         *
+         * Checking membership in the offered set closes that and every case
+         * like it, rather than adding the two names to a list somebody has to
+         * keep. It is the sub-agent half of SEC-023, which fixed the same fault
+         * in the main loop — this path calls `executeTool` directly and never
+         * went through that fix.
+         */
+        if (!offered.has(call.name)) {
+          return {
+            toolCallId: call.id,
+            name: call.name,
+            content: `"${call.name}" was not offered to this sub-agent, so it was not run. Report what needs doing instead.`,
+            isError: true,
+          };
+        }
         // Belt and braces: the tool list is already read-only, so anything else
         // arriving here means the model invented a name.
         if (assessRisk(call.name, call.input) !== 'safe') {

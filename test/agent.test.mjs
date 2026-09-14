@@ -169,6 +169,50 @@ section('sub-agents may only use read-only tools');
   );
 }
 
+section('a sub-agent cannot start sub-agents');
+{
+  /*
+   * `run_parallel` and `deep_research` are `readOnly`, so `assessRisk` grades
+   * them `safe`, and "safe" was the only runtime question a sub-agent's tool
+   * call had to answer. `noSubagent` kept them out of the list a sub-agent is
+   * *offered* — and nothing checked what it *ran*. A sub-agent that named
+   * `run_parallel` anyway started six more, each able to do the same, on the
+   * account's own key and with no depth limit (SEC-026).
+   *
+   * The second provider turn sees the first turn's tool result, so that is where
+   * the refusal is read from.
+   */
+  const seenMessages = [];
+  let calls = 0;
+  const stream = async function* nesting(opts) {
+    calls += 1;
+    seenMessages.push(opts.messages);
+    if (calls === 1) {
+      yield {
+        type: 'done',
+        stopReason: 'tool_use',
+        toolCalls: [
+          { id: 'n1', name: 'run_parallel', input: { tasks: ['a', 'b', 'c', 'd', 'e', 'f'] } },
+          { id: 'n2', name: 'deep_research', input: { question: 'anything' } },
+        ],
+        usage: { input: 10, output: 5 },
+      };
+      return;
+    }
+    yield { type: 'text', delta: 'Reported instead.' };
+    yield { type: 'done', stopReason: 'end_turn', toolCalls: [], usage: { input: 10, output: 5 } };
+  };
+
+  const out = await runParallel({ user, chatId: null, tasks: ['fan out further'], stream });
+  const toolTurn = (seenMessages[1] || []).find((m) => m.role === 'tool');
+  const byName = Object.fromEntries((toolTurn?.results || []).map((r) => [r.name, r]));
+
+  check('run_parallel from inside a sub-agent is refused', byName.run_parallel?.isError === true && /not offered to this sub-agent/.test(byName.run_parallel?.content || ''), byName.run_parallel?.content);
+  check('  and so is deep_research', byName.deep_research?.isError === true && /not offered/.test(byName.deep_research?.content || ''), byName.deep_research?.content);
+  check('  so the provider was called for this sub-agent only, not for six more', calls === 2, `${calls} calls`);
+  check('  and the sub-agent still finishes with its own report', out.includes('Reported instead.'));
+}
+
 // ── the transcript reordering the main loop depends on ───────────────
 section('normaliseOrder edge cases');
 {
