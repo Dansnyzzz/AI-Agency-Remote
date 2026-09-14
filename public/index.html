@@ -1067,7 +1067,7 @@
 
       <div class="sheet__tabs" role="tablist">
         <button class="tab is-active" type="button" data-tab="providers" role="tab" id="tab-providers" aria-controls="panel-providers" aria-selected="true" tabindex="0" data-i18n="settings.tab.providers">Providers</button>
-        <button class="tab" type="button" data-tab="models" role="tab" id="tab-models" aria-controls="panel-models" aria-selected="false" tabindex="-1" data-i18n="settings.tab.models">Models</button>
+        <button class="tab" type="button" data-tab="languages" role="tab" id="tab-languages" aria-controls="panel-languages" aria-selected="false" tabindex="-1" data-i18n="settings.tab.languages">Languages</button>
         <button class="tab" type="button" data-tab="behaviour" role="tab" id="tab-behaviour" aria-controls="panel-behaviour" aria-selected="false" tabindex="-1" data-i18n="settings.tab.behaviour">Behaviour</button>
         <button class="tab" type="button" data-tab="skills" role="tab" id="tab-skills" aria-controls="panel-skills" aria-selected="false" tabindex="-1" data-i18n="settings.tab.skills">Skills</button>
         <button class="tab" type="button" data-tab="tasks" role="tab" id="tab-tasks" aria-controls="panel-tasks" aria-selected="false" tabindex="-1" data-i18n="settings.tab.tasks">Scheduled</button>
@@ -1087,41 +1087,17 @@
           <div id="provider-list"></div>
         </section>
 
-        <section class="panel" data-panel="models" id="panel-models" role="tabpanel" aria-labelledby="tab-models">
-          <p class="hint">
-            The library refreshes itself from OpenRouter once a day, so free models appear without
-            anyone pressing anything. You can also add one by id — it is verified, then becomes
-            selectable for everybody on this deployment.
-          </p>
-<!-- The "Model in use" field that used to sit here has been removed. Its own
-     hint admitted what it was: "changing it here and changing it from the
-     button in the header are the same act". Two controls for one setting is
-     one more place for them to disagree, and the header chip is the one you
-     can see while you are actually choosing. -->
-          <div class="field">
-            <label for="add-model">Add a model by id</label>
-            <div class="row">
-              <input id="add-model" type="text" placeholder="inclusionai/ling-3.0-flash:free" autocomplete="off" />
-              <button class="btn btn--primary" id="add-model-btn" type="button">Add</button>
-            </div>
-          </div>
-          <div id="add-model-status" class="hint"></div>
-
-          <!-- Listing a model and being allowed to call it are different
-               questions: Google still lists gemini-2.5-flash and answers a call
-               to it with "no longer available to new users". So this calls each
-               built-in model once, with your key, and says which ones work. -->
-          <h3 class="section-head">Do the built-in models work with your keys?</h3>
-          <p class="hint">
-            Calls each one with the smallest request its provider accepts — one token in, one token
-            out. A model can be listed by a provider and still refuse to run, which is how a dead
-            model reaches you halfway through a sentence instead of here.
-          </p>
-          <div class="row">
-            <button class="btn btn--ghost" id="audit-models" type="button">Check models</button>
-            <span class="hint" id="audit-status"></span>
-          </div>
-          <div id="audit-results"></div>
+        <section class="panel" data-panel="languages" id="panel-languages" role="tabpanel" aria-labelledby="tab-languages">
+          <!-- Replaces the Models tab. Adding a model by id and probing the
+               built-ins were rarely used next to the picker, and the language
+               choice deserves its own place rather than a line under Behaviour. -->
+          <fieldset class="field lang-choice">
+            <legend data-i18n="settings.language.label">Language</legend>
+            <div id="language" class="lang-choice__list" role="radiogroup"></div>
+            <p class="hint" data-i18n="settings.language.hint">
+              Applies immediately, and follows your account onto every device.
+            </p>
+          </fieldset>
         </section>
 
         <section class="panel" data-panel="behaviour" id="panel-behaviour" role="tabpanel" aria-labelledby="tab-behaviour">
@@ -1158,13 +1134,6 @@
               The reason to ask for a report is to read it. It opens once per turn and closing it
               means closed, so it never reappears while you are working — and never on a narrow
               screen, where the panel would cover the conversation.
-            </p>
-          </div>
-          <div class="field">
-            <label for="language" data-i18n="settings.language.label">Language</label>
-            <select id="language"></select>
-            <p class="hint" data-i18n="settings.language.hint">
-              Applies immediately, and follows your account onto every device.
             </p>
           </div>
           <div class="field">

@@ -17,8 +17,9 @@ import { en } from './locales/en.js';
 
 const LOCALES = { vi, en };
 export const LANGUAGES = [
-  { id: 'vi', label: 'Tiếng Việt' },
-  { id: 'en', label: 'English' },
+  // `label` in the language itself, `english` beside it for everyone else.
+  { id: 'vi', label: 'Tiếng Việt', english: 'Vietnamese' },
+  { id: 'en', label: 'English', english: 'English' },
 ];
 
 const STORAGE_KEY = 'ai-remote-language';

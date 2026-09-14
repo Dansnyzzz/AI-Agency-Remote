@@ -171,7 +171,7 @@ export const CATALOG = [
    *
    * `-latest` is Google's answer to that: a pointer that moves as models rotate.
    * The context limits below are what the account's own `ListModels` reported
-   * rather than anything remembered, and **Settings → Models → Check models**
+   * rather than anything remembered. `auditCatalog` (POST /api/models/audit)
    * calls each of these with your key, because being listed and being callable
    * are different questions.
    */

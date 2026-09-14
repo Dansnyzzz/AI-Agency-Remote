@@ -2442,7 +2442,7 @@ function openSettings(tab) {
 $('open-settings').addEventListener('click', () => openSettings());
 
 $('language').addEventListener('change', async (event) => {
-  const language = event.target.value;
+  const language = /** @type {HTMLInputElement} */ (event.target).value;
   if (!setLanguage(language)) return;
   // Anything drawn from script rather than from markup has to be rebuilt: the
   // chips, the mode menu labels and the conversation list are not `data-i18n`
@@ -2981,12 +2981,21 @@ function fillSettings() {
    * distinction.
    */
   const languages = $('language');
-  if (!languages.options.length) {
-    for (const { id, label } of LANGUAGES) {
-      languages.append(Object.assign(document.createElement('option'), { value: id, textContent: label }));
-    }
+  if (!languages.children.length) {
+    // Each language named in itself, so somebody who cannot read the current
+    // interface can still find their own.
+    languages.innerHTML = LANGUAGES.map(
+      ({ id, label, english }) =>
+        `<label class="lang-choice__item" lang="${id}">` +
+        `<input type="radio" name="language" value="${id}" />` +
+        `<span class="lang-choice__native">${escapeHtml(label)}</span>` +
+        `<span class="lang-choice__english" lang="en">${escapeHtml(english)}</span>` +
+        `</label>`,
+    ).join('');
   }
-  languages.value = currentLanguage();
+  for (const radio of /** @type {NodeListOf<HTMLInputElement>} */ (languages.querySelectorAll('input'))) {
+    radio.checked = radio.value === currentLanguage();
+  }
 
   const me = state.boot.user;
   $('account-card').innerHTML = `
@@ -3384,78 +3393,6 @@ const browser = createModelBrowser({
 // The one way in to the picker, now that Settings no longer carries a second
 // copy of the same control.
 $('model-chip').addEventListener('click', () => browser.open(state.model));
-
-$('add-model-btn').addEventListener('click', async () => {
-  const input = $('add-model');
-  const status = $('add-model-status');
-  const id = input.value.trim();
-  if (!id) return;
-
-  status.textContent = t('models.verifying');
-  try {
-    const { model } = await api.addModel(id);
-    input.value = '';
-    // Shared on purpose: everyone on this deployment can now pick it.
-    status.textContent = t('library.added', {
-      model: model.label + (model.isFree ? t('library.freeSuffix') : ''),
-    });
-    state.boot.library = await api.models({ limit: 1 }).then((d) => d.status);
-  } catch (err) {
-    status.textContent = err.message;
-  }
-});
-
-/**
- * Which built-in models actually run on this account's keys.
- *
- * Worth a button rather than a list, because a provider listing a model is not
- * the same as it letting you call one: Google still lists `gemini-2.5-flash`
- * and answers a call to it with "no longer available to new users". The only
- * way to know is to try, so this tries — one token each.
- */
-$('audit-models').addEventListener('click', async () => {
-  const button = $('audit-models');
-  const status = $('audit-status');
-  const host = $('audit-results');
-
-  button.disabled = true;
-  status.textContent = t('devices.calling');
-  host.innerHTML = '';
-
-  try {
-    const { checked } = await api.auditModels();
-    const working = checked.filter((m) => m.state === 'ok').length;
-    const broken = checked.filter((m) => m.state === 'gone' || m.state === 'refused').length;
-
-    status.textContent = broken
-      ? `${working} work, ${broken} do not.`
-      : `${working} of ${checked.length} work.`;
-
-    const badge = {
-      ok: ['badge--ok', 'works'],
-      gone: ['badge--bad', 'gone'],
-      refused: ['badge--bad', 'refused'],
-      'no key': ['', 'no key'],
-      unreachable: ['', 'unreachable'],
-    };
-
-    host.innerHTML = checked
-      .map((model) => {
-        const [cls, label] = badge[model.state] || ['', model.state];
-        return `
-          <div class="audit">
-            <span class="audit__id">${escapeHtml(model.id)}</span>
-            <span class="badge ${cls}">${escapeHtml(label)}</span>
-            ${model.reason ? `<span class="audit__why">${escapeHtml(model.reason)}</span>` : ''}
-          </div>`;
-      })
-      .join('');
-  } catch (err) {
-    status.textContent = err.message;
-  } finally {
-    button.disabled = false;
-  }
-});
 
 $('save-behaviour').addEventListener('click', async () => {
   try {

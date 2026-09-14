@@ -137,7 +137,7 @@ export function readableFailure(error) {
     const model = /models\/([\w.-]+)/.exec(message)?.[1];
     return (
       `${model ? `The model "${model}"` : 'That model'} is not available on this key. ` +
-      `${message} — pick another model from the picker, or check Settings → Models → Check models.`
+      `${message} — pick another model from the picker.`
     );
   }
 

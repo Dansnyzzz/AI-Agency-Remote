@@ -99,11 +99,8 @@ export const api = {
   removeMcpServer: (id) => request('DELETE', `/api/mcp/${id}`),
 
   models: (params) => request('GET', `/api/models?${new URLSearchParams(clean(params))}`),
-  addModel: (id) => request('POST', '/api/models', { id }),
   resolveModel: (id) => request('GET', `/api/models/resolve?id=${encodeURIComponent(id)}`),
   refreshModels: () => request('POST', '/api/models/refresh'),
-  /** Call every built-in model once, with this account's keys, and report which run. */
-  auditModels: () => request('POST', '/api/models/audit'),
 
   updateAccount: (patch) => request('PATCH', '/api/account', patch),
   changePassword: (current, next) => request('POST', '/api/account/password', { current, next }),
