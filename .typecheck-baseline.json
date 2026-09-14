@@ -1,5 +1,5 @@
 {
-  "total": 363,
+  "total": 362,
   "files": {
     "public/js/api.js": 4,
     "public/js/app.js": 145,
@@ -34,7 +34,7 @@
     "server/settings.js": 1,
     "server/store/index.js": 1,
     "server/store/pg.js": 5,
-    "server/subagents.js": 2,
+    "server/subagents.js": 1,
     "server/tools/calc.js": 2,
     "server/tools/chart.js": 1,
     "server/tools/cloud.js": 4,
