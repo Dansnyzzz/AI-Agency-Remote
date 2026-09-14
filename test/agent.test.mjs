@@ -1059,6 +1059,23 @@ section('read-only and plan mode hold even for a tool nobody offered');
   check('  where the same delete does ask first', needsApproval([del], 'guarded').length === 1);
 }
 
+section('setting up work that runs unwatched asks first');
+{
+  /*
+   * `schedule_task` and `workflow_write` store a prompt the scheduler later runs
+   * with nobody at the approval bar; `skill_write` puts text into the trusted
+   * part of every future system prompt. All three were graded `ordinary`, so
+   * under the default policy a single injected instruction could set up
+   * recurring work, or a prompt injection that outlives the session, without
+   * anyone being asked (SEC-027).
+   */
+  const { needsApproval: approvalFor } = await import('../server/agent.js');
+  for (const name of ['schedule_task', 'workflow_write', 'skill_write']) {
+    check(`${name} asks under the default policy`, approvalFor([{ id: 'x', name, input: {} }], 'guarded').length === 1);
+  }
+  check('while cancelling a task — which only stops work — does not', approvalFor([{ id: 'x', name: 'cancel_task', input: {} }], 'guarded').length === 0);
+}
+
 section('a resume does not repeat what may already have happened');
 {
   /*

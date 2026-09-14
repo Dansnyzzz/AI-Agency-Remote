@@ -1667,6 +1667,30 @@ export const runsLocally = (tool) => tool?.scope === 'local' || tool?.scope === 
 
 /** Tools whose base level is worse than "ordinary" whatever the arguments. */
 const ALWAYS_SENSITIVE = new Set([
+  /*
+   * Work that runs later, with nobody watching (SEC-027).
+   *
+   * `schedule_task` and `workflow_write` store a prompt that the scheduler runs
+   * on its own, hours or days from now, through `runAgent` with no one at the
+   * approval bar — every `ordinary` call in that run executes: `write_file`,
+   * `edit_file`, `move_file`, a `run_command` the pattern list does not
+   * recognise. They were graded `ordinary`, so under the default policy a single
+   * page carrying an injected instruction could set up recurring work on the
+   * owner's machine without anyone being asked. `send_email` is here because
+   * "the audience is not the person who could have said no"; a scheduled run has
+   * exactly that property, only delayed.
+   *
+   * `skill_write` is worse in kind. A skill's name and description are pasted
+   * into the system prompt of every later conversation — the trusted section,
+   * outside any untrusted envelope — so an unapproved skill is a prompt
+   * injection that persists across every future session.
+   *
+   * Asking once, when the thing is set up, is the whole cost. Cancelling one
+   * (`cancel_task`) only stops work and stays ordinary.
+   */
+  'schedule_task',
+  'workflow_write',
+  'skill_write',
   // Nothing about the arguments makes deleting safer, and the one thing that
   // cannot be undone deserves the one prompt nobody skips.
   'delete_file',
