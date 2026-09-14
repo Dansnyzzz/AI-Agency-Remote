@@ -453,6 +453,45 @@ section('a running command stops when the turn is stopped');
   check('  and says it was cancelled, not that it failed', /user cancelled/i.test(out), out.split('\n').slice(-1)[0]);
 
   /*
+   * The whole tree goes, on every platform (CODE-030).
+   *
+   * The shell is the direct child; the program is its child. Killing the shell
+   * alone passed on Windows (taskkill /T) and failed on Linux CI, where the
+   * thirty-second command above really did run for thirty seconds.
+   */
+  const { descendantsOf } = await import('../worker/kill.js');
+  const tree = descendantsOf(10, [[10, 1], [11, 10], [12, 11], [13, 10], [99, 1]]);
+  check('the tree walk finds children and grandchildren', [11, 12, 13].every((p) => tree.includes(p)) && tree.length === 3, JSON.stringify(tree));
+  check('  and nothing outside the tree', !tree.includes(99) && !tree.includes(10));
+  check('  and a cycle in the table cannot hang it', descendantsOf(5, [[5, 6], [6, 5]]).length === 1);
+
+  const { BACKGROUND_IMPLEMENTATIONS: background, __testing: backgroundTesting } = await import('../worker/background.js');
+  await background.run_background({
+    command: `"${process.execPath}" -e "console.log('pid=' + process.pid); setTimeout(() => {}, 30000)"`,
+    name: 'tree-kill-check',
+    settle_ms: 1500,
+  });
+  const started = [...backgroundTesting.jobs.values()].find((j) => j.command.includes('pid=') && !j.exit);
+  const printed = (started?.lines || []).join(' ');
+  const grandchild = Number.parseInt(printed.slice(printed.indexOf('pid=') + 4), 10);
+  check('a background command reports the pid of the program, not the shell', Number.isInteger(grandchild) && grandchild !== started?.child?.pid, `${grandchild} vs shell ${started?.child?.pid}`);
+  await background.run_background_stop({ id: started?.id });
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  let waited = 0;
+  while (Number.isInteger(grandchild) && alive(grandchild) && waited < 8000) {
+    await sleep(200);
+    waited += 200;
+  }
+  check('  stopping it ends the program the shell started, not only the shell', Number.isInteger(grandchild) && !alive(grandchild), alive(grandchild) ? `still alive after ${waited}ms` : `gone after ${waited}ms`);
+
+  /*
    * The other two long-running local tools. Each assertion is written so it
    * cannot pass for the wrong reason: a download to a closed local port fails
    * anyway, so the check is that it failed *as an abort*, not as a refused

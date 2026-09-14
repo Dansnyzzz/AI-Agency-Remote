@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { resolveInWorkspace, workspace, moveWorkspace, rel, fullDiskAccess } from './paths.js';
 import { BROWSER_IMPLEMENTATIONS, browserIsOpen, browserSnapshot, renderPdf, renderImage } from './browser.js';
 import { BACKGROUND_IMPLEMENTATIONS } from './background.js';
+import { killTree } from './kill.js';
 
 /**
  * Hand a URL or a path to the desktop's default handler, without a shell.
@@ -296,19 +297,13 @@ async function grepTool({ pattern, path: target = '.', glob: globFilter, ignore_
 /**
  * End a command and whatever it started.
  *
- * `spawn` with `shell: true` makes the shell the direct child, so on Windows
- * `child.kill()` ends `cmd.exe` and leaves the program it launched running —
- * a timed-out build carried on in the background, and a cancelled one would
- * have too. `taskkill /T` takes the tree. Falls back to a plain kill if
- * `taskkill` cannot be started, which is no worse than before.
+ * `spawn` with `shell: true` makes the shell the direct child, so killing only
+ * the child ends the shell and leaves the program it launched running — on
+ * Windows (`cmd.exe`) and, until CODE-030, on Linux and macOS (`/bin/sh`).
+ * `killTree` takes the whole tree on every platform; see worker/kill.js.
  */
 function terminate(child) {
-  if (process.platform === 'win32' && child.pid) {
-    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-    killer.on('error', () => child.kill('SIGKILL'));
-    return;
-  }
-  child.kill('SIGKILL');
+  killTree(child, 'SIGKILL');
 }
 
 /**

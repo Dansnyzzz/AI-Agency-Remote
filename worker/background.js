@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { resolveInWorkspace, rel } from './paths.js';
+import { killTree } from './kill.js';
 
 /**
  * Long-running commands: dev servers, watchers, tunnels, builds you want to keep.
@@ -185,12 +186,17 @@ async function stopOne(job) {
   // On Windows there are no signals worth the name; `taskkill /T` is what
   // actually stops a shell and the tree of processes it started, which is what a
   // dev server is.
+  //
+  // Elsewhere the shell is the direct child, and a signal to it alone left the
+  // dev server it started running (CODE-030): the whole tree gets SIGTERM, and
+  // whatever is still there after the grace period gets SIGKILL.
   if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(job.child.pid), '/T', '/F'], { windowsHide: true });
+    killTree(job.child);
   } else {
-    job.child.kill('SIGTERM');
+    const tree = killTree(job.child, 'SIGTERM');
     setTimeout(() => {
-      if (!job.exit) job.child.kill('SIGKILL');
+      // Signalled even if the shell has exited: it is its children that outlive it.
+      killTree(job.child, 'SIGKILL', tree);
     }, STOP_GRACE_MS).unref?.();
   }
 
