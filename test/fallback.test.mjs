@@ -379,6 +379,15 @@ section('a restart clears the text the reader had already seen');
   // The point of emptying it: this is what gets persisted, and a draft that
   // kept its discarded half would be stored and then shown as one reply.
   check('the replacement stands alone', assistant.text === 'a whole answer', assistant.text);
+
+  /*
+   * The reasoning too. Only the text used to be cleared, so the abandoned
+   * attempt's thinking stayed and the next attempt's was appended onto it —
+   * stored as one trace that contradicts itself partway through (CODE-018).
+   */
+  const reasoning = { id: 'a2', role: 'assistant', text: 'half', thinking: 'first attempt reasons one way', toolCalls: [] };
+  applyStreamEvent({ type: 'retry', reason: 'key 1 stopped' }, reasoning, () => {});
+  check('a retry discards the abandoned reasoning as well', reasoning.thinking === '', JSON.stringify(reasoning.thinking));
 }
 
 removeTemp(process.env.DATA_DIR);

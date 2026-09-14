@@ -624,7 +624,14 @@ export function applyStreamEvent(ev, assistant, emit) {
     assistant.text += ev.delta ?? '';
     emit('text', { delta: ev.delta });
   } else if (ev.type === 'retry') {
+    /*
+     * The whole attempt is abandoned, reasoning included. Only the text used to
+     * be cleared, so the discarded attempt's thinking stayed and the next
+     * attempt's was appended onto it — stored that way, and shown that way, as
+     * one reasoning trace that argues with itself halfway through (CODE-018).
+     */
     assistant.text = '';
+    assistant.thinking = '';
     emit('retry', { reason: ev.reason || '' });
   }
   return ev;
