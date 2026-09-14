@@ -1361,6 +1361,59 @@ section('the untrusted-content boundary');
   check('  and shown what arrived, so it can shorten and retry', cut.content.includes('./src/comp'));
   check('  without the envelope, because the refusal is ours not the page\'s', !cut.content.includes('<untrusted'));
 
+  /**
+   * Arguments are checked against the tool's schema before it runs (GAP-004).
+   *
+   * What provider-side strict mode would give, on every provider. The case with
+   * teeth: a model that omits a required field used to get `undefined`, and tool
+   * defaults widened it — `resolveInWorkspace(undefined)` is the workspace root.
+   */
+  const { validateArguments, SUPPORTED_KEYWORDS } = await import('../server/tools/validate.js');
+  const { TOOLS: catalogue, TOOLS_BY_NAME: byName } = await import('../server/tools/definitions.js');
+
+  const used = new Set();
+  const walkSchema = (s) => {
+    if (!s || typeof s !== 'object') return;
+    Object.keys(s).forEach((k) => used.add(k));
+    Object.values(s.properties || {}).forEach(walkSchema);
+    if (s.items) walkSchema(s.items);
+  };
+  catalogue.forEach((t) => walkSchema(t.parameters));
+  const unsupported = [...used].filter((k) => !SUPPORTED_KEYWORDS.has(k));
+  check(
+    'the catalogue uses only schema keywords the validator covers completely',
+    unsupported.length === 0,
+    unsupported.join(', ') || 'type, description, properties, required, enum, items',
+  );
+
+  const del = byName.delete_file.parameters;
+  const missing = validateArguments(del, {});
+  check('a missing required argument is refused', !missing.ok && /path is required/.test(missing.error), missing.error);
+
+  const list = byName.run_command.parameters;
+  const numeric = validateArguments(list, { command: 'ls', timeout_ms: '5000' });
+  check('a number sent as a string is coerced, not refused', numeric.ok && numeric.input.timeout_ms === 5000, JSON.stringify(numeric.input));
+
+  const wrongKind = validateArguments(list, { command: ['ls', '-la'] });
+  check('an array where a string is wanted is refused', !wrongKind.ok && /command should be string/.test(wrongKind.error), wrongKind.error);
+
+  const nulled = validateArguments(list, { command: 'ls', cwd: null });
+  check('a null optional field is dropped so the tool default applies', nulled.ok && !('cwd' in nulled.input), JSON.stringify(nulled.input));
+
+  const enumTool = catalogue.find((t) => Object.values(t.parameters?.properties || {}).some((p) => Array.isArray(p.enum)));
+  if (enumTool) {
+    const [field, spec] = Object.entries(enumTool.parameters.properties).find(([, p]) => Array.isArray(p.enum));
+    const base = Object.fromEntries((enumTool.parameters.required || []).map((k) => [k, k === field ? 'definitely-not-allowed' : 'x']));
+    base[field] = 'definitely-not-allowed';
+    const outside = validateArguments(enumTool.parameters, base);
+    check(`a value outside an enum is refused (${enumTool.name}.${field})`, !outside.ok && /must be one of/.test(outside.error), outside.error);
+    check('  and the allowed values are named', spec.enum.every((v) => (outside.error || '').includes(JSON.stringify(v))));
+  }
+
+  const { executeTool: runChecked } = await import('../server/tools/execute.js');
+  const refusedCall = await runChecked({ user: { id: 'nobody' }, name: 'delete_file', input: {}, chatId: null });
+  check('executeTool refuses the call rather than running it on defaults', refusedCall.isError && /path is required/.test(refusedCall.content), refusedCall.content);
+
   // Provenance has to survive onto the envelope, or the boundary is anonymous
   // and a reader cannot tell which page talked.
   check(

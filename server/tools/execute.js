@@ -8,6 +8,7 @@ import { isMcpTool, callMcpTool, splitMcpName } from '../mcp/registry.js';
 import { keepStepShot } from '../attachments.js';
 import { redactSecrets } from '../redact.js';
 import { untrusted } from './untrusted.js';
+import { validateArguments } from './validate.js';
 
 const POLL_MS = 400;
 const DEFAULT_LOCAL_TIMEOUT_MS = 180_000;
@@ -226,6 +227,25 @@ export async function executeTool(args) {
         'This usually means the reply was cut off mid-call. Send it again with shorter arguments. ' +
         `What arrived was: ${String(malformed).slice(0, 200)}`,
     };
+  }
+
+  /*
+   * Arguments checked against the tool's own schema before anything runs — what
+   * provider-side strict mode would give, on every provider (GAP-004). Catalogue
+   * tools only: an MCP server validates its own tools, and its schemas are
+   * outside what `validate.js` is written to cover. See that file for what is
+   * refused and what is merely coerced.
+   */
+  const def = TOOLS_BY_NAME[args?.name];
+  if (def?.parameters) {
+    const checked = validateArguments(def.parameters, args.input);
+    if (!checked.ok) {
+      return {
+        isError: true,
+        content: `The arguments for ${args.name} did not match what it takes, so it was not run: ${checked.error}`,
+      };
+    }
+    args = { ...args, input: checked.input };
   }
 
   const result = await runTool(args);
