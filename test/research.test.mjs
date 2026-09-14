@@ -150,6 +150,38 @@ section('gathering builds a deduped, ranked source ledger');
   check('a wire service ranks reputable', rankSource('https://www.reuters.com/a') === 'reputable');
   check('an unknown blog ranks blog', rankSource('https://x.wordpress.com/b') === 'blog');
   check('a government host ranks primary', rankSource('https://data.gov/x') === 'primary');
+
+  /*
+   * A Vietnamese question answered from Vietnamese national press could never
+   * reach HIGH: every host outside twelve Anglophone outlets ranked `blog`
+   * (ACC-006). Checked through `grade` as well as `rankSource`, because the
+   * outcome that matters is the label a reader sees, not the rank in between.
+   */
+  const { grade } = await import('../server/research/confidence.js');
+  check('the national wire service ranks reputable', rankSource('https://vnanet.vn/vi/tin-tuc') === 'reputable');
+  check('  and a national daily', rankSource('https://www.vnexpress.net/kinh-doanh/x') === 'reputable');
+  check('  and .gov.vn still ranks primary', rankSource('https://chinhphu.gov.vn/x') === 'primary');
+
+  const vnLedger = new Map([
+    ['S1', { url: 'https://vnexpress.net/a', rank: rankSource('https://vnexpress.net/a'), read: true }],
+    ['S2', { url: 'https://tuoitre.vn/b', rank: rankSource('https://tuoitre.vn/b'), read: true }],
+  ]);
+  check('two national outlets, both read, now reach HIGH', grade(['S1', 'S2'], vnLedger) === 'HIGH', grade(['S1', 'S2'], vnLedger));
+
+  const vnUnread = new Map([...vnLedger].map(([k, v]) => [k, { ...v, read: false }]));
+  check('  while the rule that they must be opened still holds', grade(['S1', 'S2'], vnUnread) !== 'HIGH');
+
+  const saved = process.env.RESEARCH_REPUTABLE_DOMAINS;
+  try {
+    process.env.RESEARCH_REPUTABLE_DOMAINS = 'straitstimes.com, www.nikkei.com';
+    check('a deployment can add its own market without a release', rankSource('https://www.straitstimes.com/x') === 'reputable');
+    check('  including a www-prefixed entry', rankSource('https://asia.nikkei.com/x') === 'reputable');
+    delete process.env.RESEARCH_REPUTABLE_DOMAINS;
+    check('  and the setting is read per call, not frozen at import', rankSource('https://www.straitstimes.com/x') === 'blog');
+  } finally {
+    if (saved === undefined) delete process.env.RESEARCH_REPUTABLE_DOMAINS;
+    else process.env.RESEARCH_REPUTABLE_DOMAINS = saved;
+  }
   check('findings reference ledger ids', findings.filter((f) => f.id).every((f) => ledger.has(f.id)));
 
   // A search that throws is a finding that says so, not a crash.
