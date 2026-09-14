@@ -1059,6 +1059,34 @@ section('read-only and plan mode hold even for a tool nobody offered');
   check('  where the same delete does ask first', needsApproval([del], 'guarded').length === 1);
 }
 
+section('two memory notes written in one step both survive');
+{
+  /*
+   * `memory_write` read the whole memory object, changed one key and wrote the
+   * whole object back. The agent runs up to four tool calls at once, so a write
+   * beside an append both read the same object and the second erased the first
+   * — both reporting success (CODE-023). Its neighbours were moved to a merge
+   * for exactly this; it was not.
+   *
+   * This reproduces even on PGlite, where statements run one at a time, because
+   * the read and the write are two awaited statements and `Promise.all` lets both
+   * reads finish before either write.
+   */
+  const { executeTool } = await import('../server/tools/execute.js');
+  await Promise.all([
+    executeTool({ user, name: 'memory_write', input: { key: 'lease', content: 'deposit is two months' }, chatId: null }),
+    executeTool({ user, name: 'memory_append', input: { key: 'preferences', content: 'replies in Vietnamese' }, chatId: null }),
+    executeTool({ user, name: 'memory_write', input: { key: 'car', content: 'service due in March' }, chatId: null }),
+  ]);
+  const memory = (await store.getUserSetting(user.id, 'memory')) || {};
+  check('a note written beside two others survives', memory.lease?.content === 'deposit is two months', JSON.stringify(Object.keys(memory)));
+  check('  and so does the appended one', /Vietnamese/.test(memory.preferences?.content || ''));
+  check('  and the third', memory.car?.content === 'service due in March');
+
+  const poisoned = await executeTool({ user, name: 'memory_write', input: { key: '__proto__', content: 'x' }, chatId: null });
+  check('a note named __proto__ is refused rather than silently lost', poisoned.isError === true && /cannot be used as a note name/.test(poisoned.content), poisoned.content);
+}
+
 section('setting up work that runs unwatched asks first');
 {
   /*

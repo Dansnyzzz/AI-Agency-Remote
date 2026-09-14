@@ -289,6 +289,23 @@ async function fileVersionsTool({ file_id: fileId, revision, restore }, { userId
 
 // Notes are per-account: one user's memory must never leak into another's
 // context on the next conversation.
+/**
+ * The name of a note, checked once for every memory tool.
+ *
+ * Memory is one JSON object keyed by note name. `__proto__` used as a key sets the
+ * object's prototype instead of adding an entry — the note disappears on
+ * serialisation while the tool reports it saved — and `constructor` and
+ * `prototype` shadow the object's own machinery. None of the four memory tools
+ * checked (CODE-023). One function so a fifth cannot forget.
+ */
+function noteName(key) {
+  const name = String(key ?? '').trim();
+  if (!name || name === '__proto__' || name === 'constructor' || name === 'prototype') {
+    throw new Error(`"${key}" cannot be used as a note name. Pick a plain descriptive name.`);
+  }
+  return name;
+}
+
 async function memoryWrite({ key, content }, { userId }) {
   const store = getStore();
 
@@ -297,13 +314,30 @@ async function memoryWrite({ key, content }, { userId }) {
   // the way in, and say so rather than silently editing what was asked for.
   const { text, found } = redactSecrets(content);
 
-  const memory = (await store.getUserSetting(userId, MEMORY_KEY)) || {};
-  memory[key] = { content: text, updatedAt: new Date().toISOString() };
-  await store.setUserSetting(userId, MEMORY_KEY, memory);
+  /*
+   * Merged, not read-modify-written — the fix its three neighbours already have.
+   *
+   * This read the whole memory object, changed one key, and wrote the whole
+   * object back. The agent runs up to four tool calls at once, so a
+   * `memory_write` on one key beside a `memory_append` on another both read the
+   * same object and whichever landed second erased the other — while both
+   * reported success, so the model told the user both notes were saved, and the
+   * loss surfaced days later with nothing pointing at it (MEDIUM, CODE-023).
+   * `memoryAppend` documents exactly this and moved to `mergeUserSetting`;
+   * `memoryWrite` was left behind.
+   *
+   * The key is checked for the same reason it matters in any object used as a
+   * map: `__proto__` assigned as a key sets the prototype instead of adding a
+   * note, which then vanishes on serialisation while the tool reports it saved.
+   */
+  const name = noteName(key);
+  await store.mergeUserSetting(userId, MEMORY_KEY, {
+    [name]: { content: text, updatedAt: new Date().toISOString() },
+  });
 
-  if (!found.length) return `Saved note "${key}".`;
+  if (!found.length) return `Saved note "${name}".`;
   return (
-    `Saved note "${key}", with ${found.join(' and ')} removed first — notes are long-lived and ` +
+    `Saved note "${name}", with ${found.join(' and ')} removed first — notes are long-lived and ` +
     'credentials do not belong in them. Tell the user plainly that this was left out.'
   );
 }
@@ -509,7 +543,8 @@ async function chartTool({ title, type, data, format }) {
   };
 }
 
-async function memoryAppend({ key, content }, { userId }) {
+async function memoryAppend({ key: rawKey, content }, { userId }) {
+  const key = noteName(rawKey);
   const store = getStore();
   const { text, found } = redactSecrets(content);
   if (!String(text || '').trim()) throw new Error('There is nothing to append.');
@@ -543,7 +578,8 @@ async function memoryAppend({ key, content }, { userId }) {
  * in a page of project notes should not mean re-sending the page, and re-sending it
  * from memory is how the other nine facts get subtly rewritten.
  */
-async function memoryEdit({ key, old_string: oldString, new_string: newString }, { userId }) {
+async function memoryEdit({ key: rawKey, old_string: oldString, new_string: newString }, { userId }) {
+  const key = noteName(rawKey);
   const store = getStore();
   const memory = (await store.getUserSetting(userId, MEMORY_KEY)) || {};
   const note = memory[key];
