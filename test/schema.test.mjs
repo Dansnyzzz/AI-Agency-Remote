@@ -247,6 +247,39 @@ section('and the stamp is what decides');
 
 await db.close();
 
+/*
+ * A replay that fails half way leaves nothing behind.
+ *
+ * The driver-object path (PGlite, and every test) ran schema.sql statement by
+ * statement with no transaction, so a failure part way through left a schema
+ * matching no version of the code. Driven here by a driver that fails on one
+ * statement well into the file.
+ */
+section('a failed schema replay is all or nothing');
+{
+  const scratch = await PGlite.create();
+  let seen = 0;
+  const failing = {
+    async query(text, params = []) {
+      if (/^(CREATE|ALTER)/i.test(text.trimStart())) {
+        seen += 1;
+        if (seen === 30) throw new Error('simulated failure part way through the schema');
+      }
+      return (await scratch.query(text, params)).rows;
+    },
+  };
+  let threw = false;
+  try {
+    await createPgStore(failing).init();
+  } catch {
+    threw = true;
+  }
+  const users = (await scratch.query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'users'`)).rows.length > 0;
+  check('the replay reports the failure', threw);
+  check('  and the statements before it were rolled back', !users, users ? 'users table exists after a failed replay' : '');
+  await scratch.close();
+}
+
 /**
  * One process at a time.
  *

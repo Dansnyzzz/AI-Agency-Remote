@@ -274,13 +274,26 @@ export function createPgStore(connectionString) {
          * constraint "pg_type_typname_nsp_index"`. In a transaction the loser
          * rolls back cleanly instead of half-applying.
          *
-         * The fallback stays for the driver-object path the isolation tests
-         * use, which has no `transaction`.
+         * The driver-object path — PGlite on a laptop, and the tests — has no
+         * `transaction`, and used to run the statements bare. A failure half
+         * way (a disk filling, the process killed during a version bump) left
+         * the first half applied and the rest not: a schema matching no version
+         * of the code. The one connection that driver wraps takes an explicit
+         * BEGIN/COMMIT, and Postgres DDL is transactional, so it gets the same
+         * all-or-nothing the Neon path has. Nothing in schema.sql refuses to run
+         * in a transaction — the Neon path already proves that on every deploy.
          */
         if (typeof sql.transaction === 'function') {
           await sql.transaction(statements.map((stmt) => sql.query(stmt)));
         } else {
-          for (const stmt of statements) await sql.query(stmt);
+          await sql.query('BEGIN');
+          try {
+            for (const stmt of statements) await sql.query(stmt);
+            await sql.query('COMMIT');
+          } catch (err) {
+            await sql.query('ROLLBACK').catch(() => {});
+            throw err;
+          }
         }
 
         /**
