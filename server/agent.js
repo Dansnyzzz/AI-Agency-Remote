@@ -504,6 +504,48 @@ export function policyRefusal(call, policy) {
   };
 }
 
+/**
+ * Tools whose effect lands on somebody other than the person in the chat.
+ */
+export const OUTBOUND = new Set(['send_email', 'slack_post', 'telegram_send', 'meta_page_post', 'github_write']);
+
+/** How many of them one turn may send when nobody is asked about each. */
+export const OUTBOUND_PER_TURN = 5;
+
+/**
+ * Refuse an outbound message past the per-turn allowance, under `auto` only.
+ *
+ * Every other policy stops for approval before each of these (they are
+ * ALWAYS_SENSITIVE), so a person is already counting. Under `auto` nobody is:
+ * a page carrying an instruction, or a model stuck retrying, could send the
+ * same email forty times in one turn and every one of them is unrecallable.
+ * Five is more than any single request plausibly needs, and the refusal tells
+ * the model to stop and report rather than to keep trying.
+ *
+ * `sent` is one object per turn. The check and the increment happen before any
+ * await, so calls running in parallel cannot both pass on the last slot.
+ *
+ * @param {{ id: string, name: string }} call
+ * @param {string} policy
+ * @param {{ count: number }} sent
+ */
+export function outboundRefusal(call, policy, sent) {
+  if (policy !== 'auto' || !OUTBOUND.has(call.name)) return null;
+  if (sent.count < OUTBOUND_PER_TURN) {
+    sent.count += 1;
+    return null;
+  }
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    content:
+      `${OUTBOUND_PER_TURN} messages have already gone out in this turn without anyone approving them, so "${call.name}" was not run. `
+      + 'Stop sending, tell the user exactly what was sent and to whom, and let them ask for more.',
+    isError: true,
+    ms: 0,
+  };
+}
+
 export function needsApproval(toolCalls, policy) {
   if (policy === 'auto' || policy === 'readonly' || policy === 'plan') return [];
   return toolCalls.filter((call) => {
@@ -585,14 +627,14 @@ export function resumableCalls(toolCalls, startedIds = []) {
   return { run, skipped };
 }
 
-async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable, policy }) {
+async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable, policy, sent }) {
   const results = await mapWithLimit(
     toolCalls,
     MAX_PARALLEL_TOOLS,
     async (call) => {
       // The policy's promise, enforced where the call would actually run. See
       // `policyRefusal`.
-      const refused = policyRefusal(call, policy);
+      const refused = policyRefusal(call, policy) || outboundRefusal(call, policy, sent);
       if (refused) {
         emit('tool_result', refused);
         return refused;
@@ -823,6 +865,8 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
    * the next request simply carries more.
    */
   const activated = new Set();
+  /** Outbound messages sent this turn without a prompt. See `outboundRefusal`. */
+  const sent = { count: 0 };
   const buildTools = () => availableTools({
     workerOnline,
     desktopOnline: !!worker?.info?.desktop,
@@ -931,7 +975,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
 
       await store.markToolCallsStarted(userId, chatId, last.id, run.map((c) => c.id));
       const ran = run.length
-        ? await runToolCalls({ user, toolCalls: run, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable(), policy })
+        ? await runToolCalls({ user, toolCalls: run, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable(), policy, sent })
         : { id: newId(), role: 'tool', results: [] };
 
       // Back into the order the model asked for them, which is the order it will
@@ -1261,7 +1305,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
     // Marked before anything runs, so a run killed mid-execution leaves a record
     // that these calls began — which is what stops a resume repeating them.
     await store.markToolCallsStarted(userId, chatId, assistant.id, assistant.toolCalls.map((c) => c.id));
-    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable(), policy });
+    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable(), policy, sent });
     // See the resume path: a superseded run leaves the results to the run that
     // replaced it, rather than writing a second tool message for one turn.
     if (signal?.reason === 'superseded') {

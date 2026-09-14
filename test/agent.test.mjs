@@ -1098,6 +1098,39 @@ section('read-only and plan mode hold even for a tool nobody offered');
   check('  where the same delete does ask first', needsApproval([del], 'guarded').length === 1);
 }
 
+/*
+ * Unprompted messages to other people have a ceiling per turn.
+ *
+ * Under `auto` nothing asks before `send_email`, so a page carrying an
+ * instruction, or a model stuck retrying, could send the same email dozens of
+ * times in a turn — each one unrecallable.
+ */
+section('outbound messages under auto');
+{
+  const { outboundRefusal, OUTBOUND, OUTBOUND_PER_TURN, needsApproval } = await import('../server/agent.js');
+  const { assessRisk } = await import('../server/tools/definitions.js');
+  const mail = (i) => ({ id: `m${i}`, name: 'send_email', input: { to: 'a@example.com' } });
+
+  const sent = { count: 0 };
+  const outcomes = Array.from({ length: OUTBOUND_PER_TURN + 2 }, (_, i) => outboundRefusal(mail(i), 'auto', sent));
+  check(`the first ${OUTBOUND_PER_TURN} go out`, outcomes.slice(0, OUTBOUND_PER_TURN).every((r) => r === null));
+  check('  the next ones are refused', outcomes.slice(OUTBOUND_PER_TURN).every((r) => r?.isError === true));
+  check('  and the model is told to stop and report', /tell the user exactly what was sent/.test(outcomes.at(-1)?.content || ''), outcomes.at(-1)?.content);
+  check('reading is never counted', outboundRefusal({ id: 'r', name: 'read_file', input: {} }, 'auto', { count: 99 }) === null);
+  check('a fresh turn starts from zero', outboundRefusal(mail(0), 'auto', { count: 0 }) === null);
+
+  // The ceiling is only safe to leave off other policies because every one of
+  // these asks first there. If one stops being sensitive, that stops being true.
+  const unasked = [...OUTBOUND].filter((name) => assessRisk(name, {}) !== 'sensitive' || needsApproval([{ id: 'x', name, input: {} }], 'guarded').length !== 1);
+  check('every outbound tool asks first under guarded', unasked.length === 0, unasked.join(', '));
+  check('  so the ceiling does not apply there', outboundRefusal(mail(0), 'guarded', { count: 99 }) === null);
+
+  // The loop has two places that run tool calls; both must carry the counter.
+  const source = fs.readFileSync(new URL('../server/agent.js', import.meta.url), 'utf8');
+  const sites = source.split('await runToolCalls({').slice(1).map((rest) => rest.slice(0, rest.indexOf('})')));
+  check('both places the loop runs tools pass the per-turn counter', sites.length === 2 && sites.every((site) => site.includes('policy, sent')), `${sites.length} sites`);
+}
+
 section('pictures come from a model that still exists, and are booked');
 {
   /*
