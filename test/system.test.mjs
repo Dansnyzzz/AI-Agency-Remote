@@ -357,6 +357,59 @@ section('an interpreter is a shell by another name');
   }
 }
 
+section('a running command stops when the turn is stopped');
+{
+  /*
+   * The server used to stop *waiting* and the process ran on. Two halves are
+   * pinned: the watcher that hears the cancellation, and the command that ends
+   * on it. The second really starts a process — a node that sleeps — because a
+   * kill path that only works in a mock is not a kill path.
+   */
+  const { watchForCancel } = await import('../worker/cancel.js');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const cancelled = new AbortController();
+  const stop1 = watchForCancel('j1', cancelled, { getStatus: async () => 'cancelled', intervalMs: 20 });
+  await sleep(80);
+  stop1();
+  check('the watcher aborts once the server says the job is closed', cancelled.signal.aborted && cancelled.signal.reason === 'cancelled');
+
+  const running = new AbortController();
+  const stop2 = watchForCancel('j2', running, { getStatus: async () => 'running', intervalMs: 20 });
+  await sleep(80);
+  stop2();
+  check('  and not while it is still running', !running.signal.aborted);
+
+  const offline = new AbortController();
+  const stop3 = watchForCancel('j3', offline, {
+    getStatus: async () => {
+      throw new Error('server unreachable');
+    },
+    intervalMs: 20,
+  });
+  await sleep(80);
+  stop3();
+  check('  and an unreachable server is not read as a cancellation', !offline.signal.aborted);
+
+  const run = LOCAL_IMPLEMENTATIONS.run_command;
+  const controller = new AbortController();
+  const began = Date.now();
+  const pending = run(
+    { command: `"${process.execPath}" -e "setTimeout(() => {}, 30000)"`, timeout_ms: 60_000 },
+    { signal: controller.signal },
+  );
+  setTimeout(() => controller.abort('cancelled'), 500);
+  const out = await pending;
+  const took = Date.now() - began;
+  check('a thirty-second command ends promptly when cancelled', took < 10_000, `${took}ms`);
+  check('  and says it was cancelled, not that it failed', /user cancelled/i.test(out), out.split('\n').slice(-1)[0]);
+
+  const early = new AbortController();
+  early.abort('cancelled');
+  const notStarted = await run({ command: 'echo should-not-run' }, { signal: early.signal });
+  check('a command cancelled before it starts is not started', /Not run/.test(notStarted) && !/should-not-run\n/.test(notStarted.split('\n\n')[1] || ''));
+}
+
 section('printing a page is reaching off this machine, and is checked like it');
 {
   /*

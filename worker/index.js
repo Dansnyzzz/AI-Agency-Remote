@@ -7,6 +7,7 @@ import { setWorkspace, moveWorkspace } from './paths.js';
 import { LOCAL_IMPLEMENTATIONS, workerInfo } from './tools.js';
 import { setFrameSink } from './screen.js';
 import { setIndexSink } from './indexer.js';
+import { watchForCancel } from './cancel.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -340,6 +341,23 @@ setFrameSink(async (payload) => {
  */
 setIndexSink((payload) => post('/api/worker/index', payload));
 
+/**
+ * A read of one small resource — today, only a job's status while it runs.
+ * Returns null on any failure rather than throwing: see `watchForCancel`, where
+ * an unreachable server must never read as a cancellation.
+ */
+async function get(pathname) {
+  try {
+    const res = await fetch(`${SERVER_URL}${pathname}`, {
+      headers: authHeaders,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function post(pathname, body) {
   const res = await fetch(`${SERVER_URL}${pathname}`, {
     method: 'POST',
@@ -374,16 +392,32 @@ async function runJob(job) {
     }).catch(() => {});
     return;
   }
+  /*
+   * Listen for a stop while this runs. See `worker/cancel.js`: the server marks a
+   * cancelled job closed, and without asking the worker never found out.
+   */
+  const controller = new AbortController();
+  const stopWatching = watchForCancel(job.id, controller, {
+    getStatus: async (id) => (await get(`/api/worker/jobs/${id}`))?.status ?? null,
+  });
+
   try {
     /**
-     * Which conversation this belongs to.
+     * Which conversation this belongs to, and whether it has been called off.
      *
-     * The browser tools use it to keep one conversation's tabs, cookies and
-     * sign-ins away from another's — see `sessionFor` in browser.js. Every other
-     * implementation takes one argument and simply ignores this one, which is
-     * why adding it needed no changes anywhere else.
+     * The browser tools use `chatId` to keep one conversation's tabs, cookies and
+     * sign-ins away from another's — see `sessionFor` in browser.js. `signal` is
+     * aborted when the person stops the turn; `run_command` stops its process on
+     * it. Every other implementation ignores what it does not read, which is why
+     * adding either needed no changes anywhere else.
      */
-    const output = await impl(job.input || {}, { chatId: job.chatId ?? null });
+    const output = await impl(job.input || {}, { chatId: job.chatId ?? null, signal: controller.signal });
+    if (controller.signal.aborted) {
+      // The server has already closed this job and stopped waiting; posting a
+      // result now would only overwrite the record of the cancellation.
+      console.log(`  ■ ${job.tool} (cancelled)`);
+      return;
+    }
 
     /**
      * Two shapes, and the second one is new.
@@ -401,6 +435,12 @@ async function runJob(job) {
     });
     console.log(`  ✓ ${job.tool}`);
   } catch (err) {
+    // A tool that stopped because it was cancelled throws on the way out. The
+    // server already closed the job; say nothing rather than overwrite that.
+    if (controller.signal.aborted) {
+      console.log(`  ■ ${job.tool} (cancelled)`);
+      return;
+    }
     // Reporting the failure can itself fail — the server may have gone away
     // mid-job. Swallowing that is right: the agent times the job out and says
     // so, whereas an unhandled rejection here takes the whole worker down and
@@ -409,6 +449,8 @@ async function runJob(job) {
       () => {},
     );
     console.log(`  ✗ ${job.tool}: ${err?.message || err}`);
+  } finally {
+    stopWatching();
   }
 }
 

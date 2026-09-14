@@ -693,6 +693,41 @@ section('the job poll holds only while somebody is waiting');
 
   const noToken = await anon.call('GET', '/api/worker/jobs');
   check('the queue still needs a device token', noToken.status === 401, `got ${noToken.status}`);
+
+  /*
+   * A running job can hear that it was called off (AUTO-009).
+   *
+   * There was no channel: the worker ran a claimed job to completion, and a
+   * person pressing stop only made the server stop waiting. The worker now asks
+   * for the job's status while it runs, and these pin the three things that make
+   * that trustworthy — it sees the cancellation, a late result cannot erase it,
+   * and it cannot be used to look at another account's work.
+   */
+  const running = await anon.call('GET', '/api/worker/jobs/job-poll-test', null, auth);
+  check('a claimed job reports itself running', running.json?.status === 'running', JSON.stringify(running.json));
+
+  await store.completeJob(caraId, 'job-poll-test', {
+    status: 'cancelled',
+    result: { error: 'Cancelled by the user.' },
+    onlyIfOpen: true,
+  });
+  const told = await anon.call('GET', '/api/worker/jobs/job-poll-test', null, auth);
+  check('  and reports the cancellation once the server records it', told.json?.status === 'cancelled', JSON.stringify(told.json));
+
+  await anon.call('POST', '/api/worker/jobs/job-poll-test/result', { output: 'finished anyway' }, auth);
+  const kept = await store.getJob(caraId, 'job-poll-test');
+  check('  and a result that arrives after the stop does not overwrite it', kept?.status === 'cancelled', kept?.status);
+
+  const missing = await anon.call('GET', '/api/worker/jobs/no-such-job', null, auth);
+  check('an unknown job is a 404', missing.status === 404, `got ${missing.status}`);
+
+  const dan = jar();
+  await dan.call('POST', '/api/register', { email: 'dan-cancel@example.com', password: 'dans-long-enough-password', name: 'Dan' });
+  const danStart = await anon.call('POST', '/api/pair/start', { name: "Dan's box" });
+  await dan.call('POST', '/api/devices/pair', { code: danStart.json.code });
+  const danToken = (await anon.call('GET', `/api/pair/poll?id=${danStart.json.id}`)).json.token;
+  const peek = await anon.call('GET', '/api/worker/jobs/job-poll-test', null, { Authorization: `Bearer ${danToken}` });
+  check("another account's machine cannot see this job — 404, not its status", peek.status === 404, `got ${peek.status}`);
 }
 
 // ── the picture a step comes back with ──────────────────────────────

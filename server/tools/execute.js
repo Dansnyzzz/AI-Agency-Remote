@@ -79,7 +79,14 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
        * change across the store, the job protocol and the worker loop — raised
        * as `AUTO-009` rather than half-done here behind an accurate sentence.
        */
-      await store.completeJob(userId, id, { status: 'error', result: { error: 'Cancelled by the user.' } });
+      // `cancelled`, and only if the job is still open: the worker asks for this
+      // status while it runs and stops on it (worker/cancel.js), and a result
+      // that already landed must not be overwritten by the stop that lost the race.
+      await store.completeJob(userId, id, {
+        status: 'cancelled',
+        result: { error: 'Cancelled by the user.' },
+        onlyIfOpen: true,
+      });
       return {
         isError: true,
         content:
@@ -348,7 +355,9 @@ async function runTool({ user, name, input, chatId, signal, deviceHint, delivera
       // The same second argument the worker passes, so a locally-run server and
       // a paired machine behave identically — a difference here would show up as
       // "it isolates conversations on my laptop but not on the VM".
-      const output = await impl(input || {}, { chatId: chatId ?? null });
+      // `signal` too: on the owner's own machine there is no job to cancel, so the
+      // tool itself has to hear the stop (AUTO-009).
+      const output = await impl(input || {}, { chatId: chatId ?? null, signal });
 
       /**
        * The same two result shapes the worker's job runner handles.

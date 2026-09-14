@@ -545,6 +545,10 @@ export function createApp() {
     wrap(async (req, res) => {
       const { output, error, shot } = req.body || {};
       await getStore().completeJob(req.workerUser.id, req.params.id, {
+        // A job the server already closed — cancelled, or timed out and
+        // answered — keeps that record. A late result arriving after the stop
+        // would otherwise rewrite `cancelled` into `done`.
+        onlyIfOpen: true,
         status: error ? 'error' : 'done',
         // The picture is stored as an attachment and referenced by id — never
         // written into this row. A browsing session is dozens of these, and
@@ -553,6 +557,24 @@ export function createApp() {
         result: error ? { error } : { output, ...(shot ? { shot: await keepStepShot(req.workerUser.id, shot) } : {}) },
       });
       res.json({ ok: true });
+    }),
+  );
+
+  /**
+   * A running job asks whether it has been called off (AUTO-009).
+   *
+   * There is no way to push to a worker — every connection is one it opened —
+   * so while a job runs it asks here every few seconds, and stops if the answer
+   * is no longer `running`. Scoped to the worker's own account: a job id from
+   * somebody else's queue answers 404, the same as one that never existed, so
+   * this cannot be used to learn whether another account's job is live.
+   */
+  workerApi.get(
+    '/jobs/:id',
+    wrap(async (req, res) => {
+      const job = await getStore().getJob(req.workerUser.id, req.params.id);
+      if (!job) return res.status(404).json({ error: 'No such job.' });
+      return res.json({ status: job.status });
     }),
   );
 
