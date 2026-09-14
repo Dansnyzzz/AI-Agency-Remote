@@ -83,10 +83,29 @@ export function resolveInWorkspace(input) {
 
   const candidate = path.resolve(root, input ?? '.');
 
-  // realpath the deepest ancestor that exists, so the check also covers paths
-  // that are about to be created.
+  /**
+   * realpath the deepest ancestor that exists, so the check also covers paths
+   * that are about to be created.
+   *
+   * "Exists" is asked of the directory entry itself, with `lstat`, not of what
+   * it points to. `existsSync` follows links, so a **dangling** symlink — one
+   * whose target does not exist yet — read as absent: the probe climbed past it
+   * to the workspace root, the root resolved inside, and `link` was approved as
+   * an ordinary new file. Writing to it then followed the link and created the
+   * target, wherever it pointed. A repository cloned into the workspace can carry
+   * such a link aimed at, say, a Startup folder, and a later `write_file` to that
+   * name puts a script outside the workspace that runs at the next sign-in.
+   */
+  const entryExists = (p) => {
+    try {
+      fs.lstatSync(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   let probe = candidate;
-  while (!fs.existsSync(probe)) {
+  while (!entryExists(probe)) {
     const parent = path.dirname(probe);
     if (parent === probe) break;
     probe = parent;
@@ -96,7 +115,16 @@ export function resolveInWorkspace(input) {
   try {
     real = fs.realpathSync(probe);
   } catch {
-    real = probe;
+    /*
+     * Refused, not waved through. This used to fall back to `real = probe` —
+     * the unresolved path — which at a security boundary is failing open. Now
+     * that the probe stops *at* a dangling link, this is where one lands, and
+     * the only honest answer is that where the write would go cannot be checked.
+     */
+    throw new Error(
+      `Path "${input}" goes through a link that points to something that does not exist, `
+        + 'so where it leads cannot be checked. Access denied.',
+    );
   }
   const realRoot = fs.realpathSync(root);
   const suffix = path.relative(probe, candidate);
