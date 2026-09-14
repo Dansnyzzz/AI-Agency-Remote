@@ -7,6 +7,8 @@ import { setWorkspace, moveWorkspace } from './paths.js';
 import { LOCAL_IMPLEMENTATIONS, workerInfo } from './tools.js';
 import { setFrameSink } from './screen.js';
 import { setIndexSink } from './indexer.js';
+import { watchForCancel } from './cancel.js';
+import { serverTransport } from './serverUrl.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -29,6 +31,19 @@ function loadEnv() {
 loadEnv();
 
 const SERVER_URL = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5173}`).replace(/\/$/, '');
+
+// Before the token or any job goes over the wire. See serverUrl.js (SEC-032).
+{
+  const transport = serverTransport(SERVER_URL, {
+    allowInsecure: /^(1|true|yes)$/i.test(process.env.ALLOW_INSECURE_SERVER || ''),
+  });
+  if (transport.level === 'refuse') {
+    console.error(`\n  ${transport.message}\n`);
+    process.exit(1);
+  }
+  if (transport.level === 'warn') console.warn(`\n  ${transport.message}\n`);
+}
+
 const WORKSPACE = process.env.WORKSPACE || path.join(os.homedir(), 'AI-Remote-Workspace');
 const DEVICE_NAME = process.env.DEVICE_NAME || os.hostname() || 'A computer';
 
@@ -308,6 +323,30 @@ async function repair() {
   console.log('\n  Asking to be paired again…\n');
   clearToken();
 
+  /**
+   * Nothing from the last account carries over to the next (SEC-028).
+   *
+   * This only swapped the token. The worker process kept everything it held for
+   * the previous account: the background commands and their output, readable by
+   * the next account through `run_background_logs`; and the sandbox browser's
+   * sessions, with the cookies of whatever that account had signed into. A
+   * machine unpaired from one account and adopted by another — a shared office
+   * computer, a laptop moved from a personal account to a work one — handed the
+   * second the first's logins.
+   *
+   * Cleared before the new pairing, so there is no moment where the new token
+   * and the old state coexist. The persistent `profile` browser mode keeps its
+   * on-disk profile on purpose: it is opted into on this machine, by its owner,
+   * through the environment, and deleting it here would destroy that choice.
+   */
+  // Imported here, the way `shutdown` imports them, rather than at the top.
+  const [{ forgetAllBackground }, { closeBrowser }] = await Promise.all([
+    import('./background.js'),
+    import('./browser.js'),
+  ]);
+  await forgetAllBackground().catch((err) => console.log(`  (could not stop background commands: ${err?.message || err})`));
+  await closeBrowser().catch((err) => console.log(`  (could not close the browser: ${err?.message || err})`));
+
   const paired = await pairUntilAdopted();
   TOKEN = paired.token;
   WORKER_ID = paired.deviceId || WORKER_ID;
@@ -339,6 +378,23 @@ setFrameSink(async (payload) => {
  * in a table. Only the folder somebody named is ever walked.
  */
 setIndexSink((payload) => post('/api/worker/index', payload));
+
+/**
+ * A read of one small resource — today, only a job's status while it runs.
+ * Returns null on any failure rather than throwing: see `watchForCancel`, where
+ * an unreachable server must never read as a cancellation.
+ */
+async function get(pathname) {
+  try {
+    const res = await fetch(`${SERVER_URL}${pathname}`, {
+      headers: authHeaders,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
 
 async function post(pathname, body) {
   const res = await fetch(`${SERVER_URL}${pathname}`, {
@@ -374,16 +430,32 @@ async function runJob(job) {
     }).catch(() => {});
     return;
   }
+  /*
+   * Listen for a stop while this runs. See `worker/cancel.js`: the server marks a
+   * cancelled job closed, and without asking the worker never found out.
+   */
+  const controller = new AbortController();
+  const stopWatching = watchForCancel(job.id, controller, {
+    getStatus: async (id) => (await get(`/api/worker/jobs/${id}`))?.status ?? null,
+  });
+
   try {
     /**
-     * Which conversation this belongs to.
+     * Which conversation this belongs to, and whether it has been called off.
      *
-     * The browser tools use it to keep one conversation's tabs, cookies and
-     * sign-ins away from another's — see `sessionFor` in browser.js. Every other
-     * implementation takes one argument and simply ignores this one, which is
-     * why adding it needed no changes anywhere else.
+     * The browser tools use `chatId` to keep one conversation's tabs, cookies and
+     * sign-ins away from another's — see `sessionFor` in browser.js. `signal` is
+     * aborted when the person stops the turn; `run_command` stops its process on
+     * it. Every other implementation ignores what it does not read, which is why
+     * adding either needed no changes anywhere else.
      */
-    const output = await impl(job.input || {}, { chatId: job.chatId ?? null });
+    const output = await impl(job.input || {}, { chatId: job.chatId ?? null, signal: controller.signal });
+    if (controller.signal.aborted) {
+      // The server has already closed this job and stopped waiting; posting a
+      // result now would only overwrite the record of the cancellation.
+      console.log(`  ■ ${job.tool} (cancelled)`);
+      return;
+    }
 
     /**
      * Two shapes, and the second one is new.
@@ -401,6 +473,12 @@ async function runJob(job) {
     });
     console.log(`  ✓ ${job.tool}`);
   } catch (err) {
+    // A tool that stopped because it was cancelled throws on the way out. The
+    // server already closed the job; say nothing rather than overwrite that.
+    if (controller.signal.aborted) {
+      console.log(`  ■ ${job.tool} (cancelled)`);
+      return;
+    }
     // Reporting the failure can itself fail — the server may have gone away
     // mid-job. Swallowing that is right: the agent times the job out and says
     // so, whereas an unhandled rejection here takes the whole worker down and
@@ -409,6 +487,8 @@ async function runJob(job) {
       () => {},
     );
     console.log(`  ✗ ${job.tool}: ${err?.message || err}`);
+  } finally {
+    stopWatching();
   }
 }
 

@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import crypto from 'node:crypto';
+// `redact.js` imports nothing, so this cannot become one of the cycles in
+// ARCH-008. Checked rather than assumed, because this file is imported by
+// almost everything.
+import { redactSecrets } from '../redact.js';
 
 /**
  * One id that follows a request all the way through.
@@ -61,9 +65,42 @@ const asJson = process.env.LOG_FORMAT
 
 const LEVEL_COLOUR = { debug: '\x1b[2m', info: '', warn: '\x1b[33m', error: '\x1b[31m' };
 
+/**
+ * Redact every string that goes into a line, at every level.
+ *
+ * `log.error` was given this first, because that is where a provider quoting a
+ * malformed key back was observed. But the fields of an `info` or a `warn` are
+ * the same channel — a store failure's message carries a connection string, a
+ * connector's error carries a token — and nothing stopped one going out raw.
+ * Doing it here rather than per level means a new call site inherits it instead
+ * of having to remember, which is the shape of every other leak found in this
+ * codebase.
+ *
+ * Strings only. Numbers and booleans cannot carry a key, and walking nested
+ * objects on every log line would cost more than it protects.
+ */
+function cleanFields(fields) {
+  if (!fields || typeof fields !== 'object') return fields;
+  let touched = false;
+  const out = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (typeof value === 'string') {
+      const clean = redactSecrets(value).text;
+      if (clean !== value) touched = true;
+      out[key] = clean;
+    } else {
+      out[key] = value;
+    }
+  }
+  return touched ? out : fields;
+}
+
 function emit(level, message, fields = {}) {
   const trace = currentTrace();
-  const record = { level, msg: message, ...trace, ...fields };
+  // Cleaned once, up here, because there are two output formats below and
+  // cleaning inside one of them is how half a fix ships.
+  const safe = cleanFields(fields);
+  const record = { level, msg: message, ...trace, ...safe };
 
   if (asJson) {
     // `time` last in the object but first in the reader's mind; platforms sort
@@ -72,7 +109,7 @@ function emit(level, message, fields = {}) {
     return;
   }
 
-  const parts = Object.entries({ ...trace, ...fields })
+  const parts = Object.entries({ ...trace, ...safe })
     .filter(([, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`);
   const colour = LEVEL_COLOUR[level] ?? '';
@@ -99,11 +136,28 @@ export const log = {
     // than off the type, which is also what makes this honest: the property may
     // genuinely be absent.
     const extra = /** @type {{ status?: unknown, statusCode?: unknown }} */ (error || {});
+    /**
+     * Redacted, for the same reason `readableFailure` redacts.
+     *
+     * The response path was given this treatment and the log path was not. The
+     * premise is observed rather than theoretical — `tools/execute.js` records
+     * that a provider client handed a malformed key quotes the value back in its
+     * error message, which is why the browser-facing path was fixed. The same
+     * string went into `log.error` untouched from ten call sites, several of
+     * which unpack a provider or SDK error directly.
+     *
+     * `LOG_FORMAT=json` is the default on a deployment, so that line lands in
+     * the platform's log, under the platform's retention, readable by everyone
+     * with log access — including operators who have no business holding that
+     * tenant's key. CLAUDE.md §6 says not to log sensitive data; this is the
+     * one place that could, and did.
+     */
+    const clean = (text) => redactSecrets(String(text)).text;
     const detail =
       error instanceof Error
-        ? { err: error.name, errMsg: error.message, status: extra.status ?? extra.statusCode }
+        ? { err: error.name, errMsg: clean(error.message), status: extra.status ?? extra.statusCode }
         : error != null
-          ? { errMsg: String(error) }
+          ? { errMsg: clean(error) }
           : {};
     emit('error', message, { ...detail, ...fields });
   },

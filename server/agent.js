@@ -1,11 +1,11 @@
 import crypto from 'node:crypto';
 import { getStore } from './store/index.js';
 import { getPrefs, usesSharedKey, providerStatus } from './settings.js';
-import { checkQuota, record as recordUsage } from './usage.js';
+import { checkQuota, record as recordUsage, turnTokenLimit } from './usage.js';
 import { streamCompletion } from './providers/index.js';
 import { resolve as resolveModelId } from './models.js';
 import { isAuto, pickAutoModel } from './autoPick.js';
-import { availableTools, assessRisk, riskReason } from './tools/definitions.js';
+import { availableTools, assessRisk, riskReason, TOOLS_BY_NAME } from './tools/definitions.js';
 import { UNTRUSTED_RULE } from './tools/untrusted.js';
 import { executeTool } from './tools/execute.js';
 import { normalisePlan, PLAN_MIN_STEPS } from './tools/cloud.js';
@@ -17,7 +17,7 @@ import { priceTurn } from './providers/catalog.js';
 import { loadForTranscript, toParts } from './attachments.js';
 import { projectPrompt } from './projects.js';
 import { compact, shouldCompact, measure, activeTranscript } from './compact.js';
-import { log } from './util/trace.js';
+import { log, annotate } from './util/trace.js';
 import { mapWithLimit, MAX_PARALLEL_TOOLS } from './util/parallel.js';
 
 /**
@@ -31,6 +31,64 @@ import { mapWithLimit, MAX_PARALLEL_TOOLS } from './util/parallel.js';
 // Exported for the eval suite, which asserts against the prompt the loop
 // actually builds rather than a copy of it — a rule deleted here has to fail
 // there, and it only does if both read the same function.
+/**
+ * Which version of the app's own prompt is in effect.
+ *
+ * The system prompt is ~5,000–14,000 characters of tuned instruction assembled
+ * from string literals below, and nothing identified which version of it a turn
+ * ran under. So a paragraph could be edited and the next week's behaviour — or
+ * cost — could not be put beside the last week's: every prompt change in this
+ * repository was unmeasured (GAP-003).
+ *
+ * This is a fingerprint of everything the *app* authors, across every branch it
+ * can take: no worker, a worker with a desktop, and each policy. It excludes the
+ * three things that are not the app's to version — the date line, which would
+ * change it daily; and the account's own additions and connected data (custom
+ * instructions, skills, connectors, projects), which vary per person rather than
+ * per release.
+ *
+ * It is attached to every log line of a turn, so a before and an after can be
+ * separated by filtering on it. And `test/eval` stamps it, so changing the prompt
+ * is a deliberate two-line act that shows up in the diff, not a side effect of an
+ * unrelated edit.
+ *
+ * Computed on first use rather than at import: this module sits in three import
+ * cycles (ARCH-008), and evaluating at import is the exact thing that makes one
+ * of those break.
+ */
+let promptVersionCache = null;
+export function promptVersion() {
+  if (promptVersionCache) return promptVersionCache;
+  const variants = [
+    { workerOnline: false, policy: 'guarded' },
+    { workerOnline: true, worker: { info: { platform: 'win32', desktop: true } }, policy: 'guarded' },
+    { workerOnline: true, worker: { info: { platform: 'linux' } }, policy: 'auto' },
+    { workerOnline: false, policy: 'readonly' },
+    { workerOnline: false, policy: 'plan' },
+  ];
+  const text = variants
+    .map((v) => buildSystemPrompt(v).replace(/^Current date: .*$/m, ''))
+    .join('\n\0\n');
+  promptVersionCache = crypto.createHash('sha256').update(text).digest('hex').slice(0, 12);
+  return promptVersionCache;
+}
+
+/**
+ * Only `policy` and `workerOnline` shape every prompt; the rest describe what
+ * this account has connected, and are absent for a fresh one — which is also
+ * how `promptVersion` calls it.
+ *
+ * @param {{
+ *   workerOnline?: boolean,
+ *   worker?: any,
+ *   policy?: string,
+ *   extra?: string,
+ *   skills?: string,
+ *   connectors?: string,
+ *   project?: string,
+ *   mcpServers?: Array<{ id: string, tools?: number, error?: string }>,
+ * }} options
+ */
 export function buildSystemPrompt({ workerOnline, worker, policy, extra, skills, connectors, project, mcpServers }) {
   const lines = [
     'You are AI Remote — an agentic assistant the user drives from their phone, tablet, or laptop.',
@@ -411,6 +469,83 @@ export function normaliseOrder(messages) {
  * both bad in the same way: neither leaves the person any attention for the
  * cases that actually matter.
  */
+/**
+ * Refuse, rather than run, a call the policy promised could not happen.
+ *
+ * `needsApproval` below returns nothing for `readonly` and `plan`, and the
+ * comment above it says why: "the tools were never offered". That is true of the
+ * catalogue and false of the model. A model can name a tool it was not offered —
+ * a hallucination, or a page it just read telling it to — and nothing between
+ * the stream and `executeTool` checked. So under the two policies a person picks
+ * precisely to mean "change nothing", a recursive `delete_file` ran **with no
+ * prompt at all**, while the same call under the more permissive `guarded`
+ * policy stopped to ask. Measured, not inferred: offered under readonly — false;
+ * needs approval — false; `executeTool` finds it — true.
+ *
+ * Anthropic sets `strict: true` and will not emit an unoffered name. The
+ * OpenAI-compatible adapter and Gemini have no equivalent (GAP-004), so this is
+ * reachable on the providers this app leans on most.
+ *
+ * Checked at execution, per call, the same belt-and-braces `subagents.js`
+ * already applies for the same reason. Under every other policy this returns
+ * null and the ordinary approval rules decide.
+ */
+export function policyRefusal(call, policy) {
+  if (policy !== 'readonly' && policy !== 'plan') return null;
+  if (assessRisk(call.name, call.input) === 'safe') return null;
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    content:
+      `"${call.name}" can change things, and this conversation is set to ${policy === 'plan' ? 'plan' : 'read-only'} mode, `
+      + 'so it was not run. Describe what you would do instead, and the user can switch modes if they want it done.',
+    isError: true,
+    ms: 0,
+  };
+}
+
+/**
+ * Tools whose effect lands on somebody other than the person in the chat.
+ */
+export const OUTBOUND = new Set(['send_email', 'slack_post', 'telegram_send', 'meta_page_post', 'github_write']);
+
+/** How many of them one turn may send when nobody is asked about each. */
+export const OUTBOUND_PER_TURN = 5;
+
+/**
+ * Refuse an outbound message past the per-turn allowance, under `auto` only.
+ *
+ * Every other policy stops for approval before each of these (they are
+ * ALWAYS_SENSITIVE), so a person is already counting. Under `auto` nobody is:
+ * a page carrying an instruction, or a model stuck retrying, could send the
+ * same email forty times in one turn and every one of them is unrecallable.
+ * Five is more than any single request plausibly needs, and the refusal tells
+ * the model to stop and report rather than to keep trying.
+ *
+ * `sent` is one object per turn. The check and the increment happen before any
+ * await, so calls running in parallel cannot both pass on the last slot.
+ *
+ * @param {{ id: string, name: string }} call
+ * @param {string} policy
+ * @param {{ count: number }} sent
+ */
+export function outboundRefusal(call, policy, sent) {
+  if (policy !== 'auto' || !OUTBOUND.has(call.name)) return null;
+  if (sent.count < OUTBOUND_PER_TURN) {
+    sent.count += 1;
+    return null;
+  }
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    content:
+      `${OUTBOUND_PER_TURN} messages have already gone out in this turn without anyone approving them, so "${call.name}" was not run. `
+      + 'Stop sending, tell the user exactly what was sent and to whom, and let them ask for more.',
+    isError: true,
+    ms: 0,
+  };
+}
+
 export function needsApproval(toolCalls, policy) {
   if (policy === 'auto' || policy === 'readonly' || policy === 'plan') return [];
   return toolCalls.filter((call) => {
@@ -420,11 +555,90 @@ export function needsApproval(toolCalls, policy) {
   });
 }
 
-async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable }) {
+/**
+ * Is this answer about the question that was asked?
+ *
+ * `decision` was a bare word — `allow` or `deny` — applied to whatever happened
+ * to be outstanding when the resume arrived. That is the same batch almost
+ * always, and not always. The app mirrors across tabs, so a turn started in a
+ * second tab leaves a *different* batch waiting, and a click on the first tab's
+ * prompt then approved calls nobody had been shown. The prompt lists every call
+ * with its arguments precisely so that the decision is an informed one; a
+ * decision that can land on a different set undoes that.
+ *
+ * So the client sends back the ids it displayed and they have to be the ids
+ * still waiting. A mismatch is not an error — it means the screen is out of
+ * date — so the caller falls through to asking again, with what is pending now.
+ *
+ * A missing `decisionFor` counts as a mismatch rather than being waved through.
+ * The client ships with this server, so there is no older one to be gentle
+ * with, and defaulting the other way would leave the gap open to anything that
+ * simply omits the field.
+ */
+export function answersTheseCalls(toolCalls, decisionFor) {
+  if (!Array.isArray(decisionFor)) return false;
+  const waiting = (toolCalls || []).map((c) => String(c.id)).sort();
+  const answered = decisionFor.map(String).sort();
+  return answered.length === waiting.length && answered.every((id, i) => id === waiting[i]);
+}
+
+/**
+ * Which outstanding calls a resume may run, and what to say about the rest.
+ *
+ * A resume finds an assistant turn with tool calls and no results, and it used
+ * to run every one of them (AUTO-007). But "no results stored" has two causes:
+ * the run stopped before the calls started — for approval, or cut off early —
+ * or it was killed while they ran, after a tool had done its work and before
+ * the results were written. A deployment's function timeout lands in exactly
+ * that window, and it is as long as the tools take, which for `run_command` is
+ * minutes. Running `send_email` again from there is a second email.
+ *
+ * `startedCalls`, written just before execution, separates the two. A call that
+ * never started runs normally. A call that started and is read-only runs again,
+ * because reading twice costs nothing. A call that started and can change
+ * something is **not** run again: it gets a result saying it may already have
+ * happened, so the model checks rather than repeats. Tools outside the catalogue
+ * — MCP — count as able to change something, the same conservative default
+ * `assessRisk` uses.
+ *
+ * Pure, and exported, because the loop around it needs a store, an account and a
+ * live model to drive, and this is the decision worth holding still.
+ */
+export function resumableCalls(toolCalls, startedIds = []) {
+  const started = new Set((startedIds || []).map(String));
+  const run = [];
+  const skipped = [];
+  for (const call of toolCalls || []) {
+    const readOnly = TOOLS_BY_NAME[call.name]?.readOnly === true;
+    if (started.has(String(call.id)) && !readOnly) {
+      skipped.push({
+        toolCallId: call.id,
+        name: call.name,
+        content:
+          'This call had already started when the previous run was interrupted, so it was not run a second time. '
+          + 'It may have completed. Check whether it took effect before trying it again.',
+        isError: true,
+        ms: 0,
+      });
+    } else {
+      run.push(call);
+    }
+  }
+  return { run, skipped };
+}
+
+async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable, policy, sent }) {
   const results = await mapWithLimit(
     toolCalls,
     MAX_PARALLEL_TOOLS,
     async (call) => {
+      // The policy's promise, enforced where the call would actually run. See
+      // `policyRefusal`.
+      const refused = policyRefusal(call, policy) || outboundRefusal(call, policy, sent);
+      if (refused) {
+        emit('tool_result', refused);
+        return refused;
+      }
       const started = Date.now();
       emit('tool_call', { id: call.id, name: call.name, input: call.input });
       const { content, isError, file, widget, shot } = await executeTool({
@@ -510,13 +724,20 @@ export function applyStreamEvent(ev, assistant, emit) {
     assistant.text += ev.delta ?? '';
     emit('text', { delta: ev.delta });
   } else if (ev.type === 'retry') {
+    /*
+     * The whole attempt is abandoned, reasoning included. Only the text used to
+     * be cleared, so the discarded attempt's thinking stayed and the next
+     * attempt's was appended onto it — stored that way, and shown that way, as
+     * one reasoning trace that argues with itself halfway through (CODE-018).
+     */
     assistant.text = '';
+    assistant.thinking = '';
     emit('retry', { reason: ev.reason || '' });
   }
   return ev;
 }
 
-export async function runAgent({ userId, user, chatId, modelId, decision, emit, signal, deviceHint }) {
+export async function runAgent({ userId, user, chatId, modelId, decision, decisionFor, emit, signal, deviceHint }) {
   const store = getStore();
   const prefs = await getPrefs(userId);
 
@@ -575,9 +796,11 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
   }
 
   // Refuse before spending anything, and say plainly how to lift the cap.
-  const quota = await checkQuota(user, {
-    usingSharedKey: await usesSharedKey(userId, entry.provider),
-  });
+  const usingSharedKey = await usesSharedKey(userId, entry.provider);
+  const quota = await checkQuota(user, { usingSharedKey });
+  // Per turn, alongside the monthly quota above. See `turnTokenLimit`.
+  const turnLimit = turnTokenLimit({ usingSharedKey });
+  let turnTokens = 0;
   if (!quota.allowed) {
     emit('error', { message: quota.reason, code: 'quota_exceeded' });
     emit('done', { stopReason: 'quota_exceeded' });
@@ -586,6 +809,12 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
 
   // Say which model auto landed on, so the choice is never invisible.
   if (autoNotice) emit('status', { message: autoNotice });
+  // A built-in the provider has shut down resolves to its replacement; say so,
+  // rather than let the model — and the bill — change without a word. See
+  // RETIREMENTS in providers/catalog.js.
+  if (entry?.retiredFrom) {
+    emit('status', { message: `${entry.retiredFrom} has been shut down by its provider, so this is using ${entry.label} instead.` });
+  }
 
   // The question decides which passages of a long shelf are worth sending, so
   // the sources are chosen after the transcript is known rather than before.
@@ -605,6 +834,9 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
   const workerOnline = worker.online;
   const policy = prefs.toolPolicy;
 
+  // Every line this turn logs from here on carries the prompt version, so a
+  // change to the prompt can be measured by filtering on it. See `promptVersion`.
+  annotate({ promptVersion: promptVersion() });
   const system = buildSystemPrompt({
     workerOnline,
     worker,
@@ -633,6 +865,8 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
    * the next request simply carries more.
    */
   const activated = new Set();
+  /** Outbound messages sent this turn without a prompt. See `outboundRefusal`. */
+  const sent = { count: 0 };
   const buildTools = () => availableTools({
     workerOnline,
     desktopOnline: !!worker?.info?.desktop,
@@ -703,7 +937,10 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
     // Re-check the policy rather than trusting that a decision was made. A run
     // cut short before it could ask must still ask on resume.
     const stillPending = needsApproval(last.toolCalls, policy);
-    if (stillPending.length && decision !== 'allow' && decision !== 'deny') {
+
+    const answersThis = answersTheseCalls(last.toolCalls, decisionFor);
+
+    if (stillPending.length && !(answersThis && (decision === 'allow' || decision === 'deny'))) {
       emit('approval_required', {
         toolCalls: last.toolCalls.map((c) => ({
           id: c.id,
@@ -731,7 +968,30 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       };
       for (const r of toolMessage.results) emit('tool_result', r);
     } else {
-      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
+      // Never started runs; started and read-only runs again; started and able
+      // to change something does not. See `resumableCalls`.
+      const { run, skipped } = resumableCalls(last.toolCalls, last.startedCalls);
+      for (const r of skipped) emit('tool_result', r);
+
+      await store.markToolCallsStarted(userId, chatId, last.id, run.map((c) => c.id));
+      const ran = run.length
+        ? await runToolCalls({ user, toolCalls: run, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable(), policy, sent })
+        : { id: newId(), role: 'tool', results: [] };
+
+      // Back into the order the model asked for them, which is the order it will
+      // read the results in.
+      const byId = new Map([...skipped, ...ran.results].map((r) => [String(r.toolCallId), r]));
+      toolMessage = { ...ran, results: last.toolCalls.map((c) => byId.get(String(c.id))).filter(Boolean) };
+    }
+    /*
+     * Not written by a run that was superseded mid-way. The invocation that took
+     * the lease is resuming this same turn, and it will write this turn's results
+     * itself — two tool messages answering one assistant turn is a transcript no
+     * provider accepts (AUTO-008).
+     */
+    if (signal?.reason === 'superseded') {
+      emit('done', { stopReason: 'aborted' });
+      return;
     }
     // The stored copy, which carries the `seq` `absorbNewMessages` reads as its
     // high-water mark.
@@ -775,6 +1035,16 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
   for (let step = 0; step < prefs.maxSteps; step += 1) {
     if (signal?.aborted) {
       emit('done', { stopReason: 'aborted' });
+      return;
+    }
+
+    // Checked before the next request, not after: the point is not to send it.
+    if (turnLimit && turnTokens >= turnLimit) {
+      emit('status', {
+        phase: 'token_limit',
+        message: `Stopped after ${turnTokens.toLocaleString()} tokens in this turn. Send a message to continue.`,
+      });
+      emit('done', { stopReason: 'token_limit' });
       return;
     }
 
@@ -900,6 +1170,34 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       }
     } catch (err) {
       if (signal?.aborted) {
+        /**
+         * Keep what was already said.
+         *
+         * This returned here, before the `appendMessage` below, so half an
+         * answer the user had sat and watched arrive was discarded the moment
+         * they pressed stop — gone on reload, and gone from the transcript the
+         * next turn is built from. So the next turn re-sent the same question
+         * and the account paid for the same reply twice.
+         *
+         * `toolCalls` are deliberately not carried. They were never completed,
+         * never approved, and a stored assistant turn with outstanding calls is
+         * what the resume path picks up — so persisting them would turn a stop
+         * into a queued action.
+         */
+        /*
+         * Except when this run was superseded. A reconnection that took the
+         * lease is already streaming its own reply to the same question, so
+         * this fragment would land in the transcript beside the live answer.
+         * `app.js` puts the reason on the signal when the heartbeat loses the
+         * lease.
+         */
+        if (assistant.text.trim() && signal?.reason !== 'superseded') {
+          assistant.model = entry.id;
+          assistant.toolCalls = [];
+          assistant.stopped = true;
+          await store.appendMessage(userId, chatId, assistant).catch((e) =>
+            log.error('stopped reply not saved', e, { chatId }));
+        }
         emit('done', { stopReason: 'aborted' });
         return;
       }
@@ -936,6 +1234,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
        * the turn itself, so the order now reflects that.
        */
       pendingUsage = { chatId, model: entry.id, usage: done.usage, costUsd: priced?.usd || 0, role: 'turn' };
+      turnTokens += (Number(done.usage.input) || 0) + (Number(done.usage.output) || 0);
     }
     assistant.model = entry.id;
 
@@ -1003,7 +1302,16 @@ export async function runAgent({ userId, user, chatId, modelId, decision, emit, 
       return; // The client resumes by calling back with a decision.
     }
 
-    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
+    // Marked before anything runs, so a run killed mid-execution leaves a record
+    // that these calls began — which is what stops a resume repeating them.
+    await store.markToolCallsStarted(userId, chatId, assistant.id, assistant.toolCalls.map((c) => c.id));
+    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable(), policy, sent });
+    // See the resume path: a superseded run leaves the results to the run that
+    // replaced it, rather than writing a second tool message for one turn.
+    if (signal?.reason === 'superseded') {
+      emit('done', { stopReason: 'aborted' });
+      return;
+    }
     messages.push(await store.appendMessage(userId, chatId, toolMessage));
   }
 

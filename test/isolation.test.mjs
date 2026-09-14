@@ -1072,6 +1072,43 @@ check('leftover words stay as text', parseQuery('free gemini flash').text === 'f
 check('plain words are left alone', parseQuery('sonnet').text === 'sonnet');
 
 // ── suspension and quota ────────────────────────────────────────────
+section('one turn has a ceiling, on somebody else\'s money');
+{
+  /*
+   * The monthly quota bounds an account; nothing bounded a turn. `maxSteps` is a
+   * count, so thirty steps of a flagship model re-sending a growing transcript
+   * had no upper bound in money, and an account well inside its month could
+   * spend without limit inside one turn (PERF-009).
+   *
+   * Same principle as the monthly limit: the default applies to the shared key
+   * only. Capping how someone spends their own credit is not this app's call.
+   */
+  const { turnTokenLimit, SHARED_TURN_TOKEN_LIMIT } = await import('../server/usage.js');
+  const saved = process.env.MAX_TURN_TOKENS;
+  try {
+    delete process.env.MAX_TURN_TOKENS;
+    check('a turn on the shared key has a default ceiling', turnTokenLimit({ usingSharedKey: true }) === SHARED_TURN_TOKEN_LIMIT);
+    check('  a turn on the account\'s own key does not', turnTokenLimit({ usingSharedKey: false }) === null);
+
+    process.env.MAX_TURN_TOKENS = '500000';
+    check('the operator can set one for everyone', turnTokenLimit({ usingSharedKey: false }) === 500_000);
+    check('  and it replaces the shared default too', turnTokenLimit({ usingSharedKey: true }) === 500_000);
+
+    process.env.MAX_TURN_TOKENS = '0';
+    check('zero turns it off, rather than meaning "no tokens at all"', turnTokenLimit({ usingSharedKey: true }) === null);
+
+    process.env.MAX_TURN_TOKENS = 'lots';
+    check('a value that is not a number falls back to the default rather than to no ceiling', turnTokenLimit({ usingSharedKey: true }) === SHARED_TURN_TOKEN_LIMIT);
+  } finally {
+    if (saved === undefined) delete process.env.MAX_TURN_TOKENS;
+    else process.env.MAX_TURN_TOKENS = saved;
+  }
+
+  // An unattended run that hits it has to say so, not report success (AUTO-006).
+  const { unattendedStatus } = await import('../server/scheduler.js');
+  check('a scheduled run stopped by the ceiling is not recorded as ok', unattendedStatus('ok', 'token_limit', false) === 'stopped: token_limit');
+}
+
 section('suspension and usage quota');
 await store.updateUser(bob.id, { suspended: true });
 check('suspension is recorded', (await store.getUserById(bob.id)).suspended_at !== null);
@@ -1264,6 +1301,141 @@ section('the untrusted-content boundary');
   check('the rule tells the model it is data', /data you fetched.*not instructions/s.test(UNTRUSTED_RULE));
   check('  and that it must not obey it', /never obey it/i.test(UNTRUSTED_RULE));
   check('  and what to do when the content tries', /that is the page talking/i.test(UNTRUSTED_RULE));
+
+  /**
+   * The envelope has to reach the branches nobody wrapped.
+   *
+   * It was applied per call site — inside `web_fetch`, inside search, inside the
+   * MCP branch — and the local and worker branches of `executeTool` were each
+   * written without one. So a page read through `browser_look` arrived as
+   * trusted text while the same page through `web_fetch` was enveloped, and a
+   * file the agent had just downloaded from a stranger was read back plain.
+   *
+   * `UNTRUSTED_RULE` above already promises the model that files arrive
+   * enveloped, which is what made the gap worse than neutral: a model that
+   * believes the rule treats unenveloped text as trusted.
+   *
+   * These check the declaration, both ways. The set has to cover the branches
+   * that were missed, and it must **not** cover the tools that wrap themselves,
+   * because a second envelope round the same text is noise the user pays for.
+   */
+  const { returnsExternalContent, externalSource } = await import('../server/tools/definitions.js');
+
+  for (const name of [
+    'read_file', 'fs_read_text', 'grep', 'list_dir', 'glob',
+    'run_command', 'run_background_logs',
+    'browser_look', 'browser_tabs', 'clipboard_read', 'desktop_look',
+    'github', 'notion_search',
+  ]) {
+    check(`${name} output is declared external`, returnsExternalContent(name) === true);
+  }
+
+  for (const name of ['web_fetch', 'web_search', 'search_docs', 'extract', 'deep_research']) {
+    check(`${name} is not double-wrapped — it envelopes itself`, returnsExternalContent(name) === false);
+  }
+
+  for (const name of ['create_file', 'read_generated_file', 'chart', 'memory_read', 'skill_read']) {
+    check(`${name} is the app's or the user's own words, not wrapped`, returnsExternalContent(name) === false);
+  }
+
+  /*
+   * The clipboard never asks, and often holds a key copied a minute ago
+   * (SEC-031). Built at runtime so this file carries no key-shaped literal.
+   */
+  const { redactedOutput } = await import('../server/tools/execute.js');
+  const copied = `Clipboard (60 characters):${String.fromCharCode(10)}${['sk', 'proj', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('-')}`;
+  const scrubbed = redactedOutput('clipboard_read', copied);
+  check('a key on the clipboard does not reach the model', !scrubbed.includes('A1b2C3d4E5f6'), scrubbed);
+  check('  and the model is told something was removed', /removed before this reached you/.test(scrubbed));
+  check('  ordinary copied text is untouched', redactedOutput('clipboard_read', 'fix this sentence') === 'fix this sentence');
+  check('  other tools are not scrubbed this way', redactedOutput('read_file', copied) === copied);
+
+  /**
+   * A tool call that never finished arriving must not run on its defaults.
+   *
+   * `openaiCompatible` builds each call's arguments as a JSON string across
+   * stream deltas, so a truncated reply reaches `executeTool` as invalid JSON.
+   * The old marker was written on one line and read nowhere, so the call ran
+   * with every parameter `undefined` — and the tools' defaults widen that:
+   * `resolveInWorkspace(undefined)` is the workspace root, so a cut-off
+   * `index_folder` indexed the whole workspace and shipped it to an embedding
+   * endpoint. Three of the five providers use that adapter.
+   */
+  const { executeTool } = await import('../server/tools/execute.js');
+  const cut = await executeTool({
+    user: { id: 'nobody' },
+    name: 'index_folder',
+    input: { __malformed: '{"path": "./src/comp' },
+    chatId: null,
+  });
+  check('a truncated tool call is refused, not run on defaults', cut.isError === true, cut.content?.slice(0, 60));
+  check('  and the model is told why', /not valid JSON|cut off/i.test(cut.content));
+  check('  and shown what arrived, so it can shorten and retry', cut.content.includes('./src/comp'));
+  check('  without the envelope, because the refusal is ours not the page\'s', !cut.content.includes('<untrusted'));
+
+  /**
+   * Arguments are checked against the tool's schema before it runs (GAP-004).
+   *
+   * What provider-side strict mode would give, on every provider. The case with
+   * teeth: a model that omits a required field used to get `undefined`, and tool
+   * defaults widened it — `resolveInWorkspace(undefined)` is the workspace root.
+   */
+  const { validateArguments, SUPPORTED_KEYWORDS } = await import('../server/tools/validate.js');
+  const { TOOLS: catalogue, TOOLS_BY_NAME: byName } = await import('../server/tools/definitions.js');
+
+  const used = new Set();
+  const walkSchema = (s) => {
+    if (!s || typeof s !== 'object') return;
+    Object.keys(s).forEach((k) => used.add(k));
+    Object.values(s.properties || {}).forEach(walkSchema);
+    if (s.items) walkSchema(s.items);
+  };
+  catalogue.forEach((t) => walkSchema(t.parameters));
+  const unsupported = [...used].filter((k) => !SUPPORTED_KEYWORDS.has(k));
+  check(
+    'the catalogue uses only schema keywords the validator covers completely',
+    unsupported.length === 0,
+    unsupported.join(', ') || 'type, description, properties, required, enum, items',
+  );
+
+  const del = byName.delete_file.parameters;
+  const missing = validateArguments(del, {});
+  check('a missing required argument is refused', !missing.ok && /path is required/.test(missing.error), missing.error);
+
+  const list = byName.run_command.parameters;
+  const numeric = validateArguments(list, { command: 'ls', timeout_ms: '5000' });
+  check('a number sent as a string is coerced, not refused', numeric.ok && numeric.input.timeout_ms === 5000, JSON.stringify(numeric.input));
+
+  const wrongKind = validateArguments(list, { command: ['ls', '-la'] });
+  check('an array where a string is wanted is refused', !wrongKind.ok && /command should be string/.test(wrongKind.error), wrongKind.error);
+
+  const nulled = validateArguments(list, { command: 'ls', cwd: null });
+  check('a null optional field is dropped so the tool default applies', nulled.ok && !('cwd' in nulled.input), JSON.stringify(nulled.input));
+
+  const enumTool = catalogue.find((t) => Object.values(t.parameters?.properties || {}).some((p) => Array.isArray(p.enum)));
+  if (enumTool) {
+    const [field, spec] = Object.entries(enumTool.parameters.properties).find(([, p]) => Array.isArray(p.enum));
+    const base = Object.fromEntries((enumTool.parameters.required || []).map((k) => [k, k === field ? 'definitely-not-allowed' : 'x']));
+    base[field] = 'definitely-not-allowed';
+    const outside = validateArguments(enumTool.parameters, base);
+    check(`a value outside an enum is refused (${enumTool.name}.${field})`, !outside.ok && /must be one of/.test(outside.error), outside.error);
+    check('  and the allowed values are named', spec.enum.every((v) => (outside.error || '').includes(JSON.stringify(v))));
+  }
+
+  const { executeTool: runChecked } = await import('../server/tools/execute.js');
+  const refusedCall = await runChecked({ user: { id: 'nobody' }, name: 'delete_file', input: {}, chatId: null });
+  check('executeTool refuses the call rather than running it on defaults', refusedCall.isError && /path is required/.test(refusedCall.content), refusedCall.content);
+
+  // Provenance has to survive onto the envelope, or the boundary is anonymous
+  // and a reader cannot tell which page talked.
+  check(
+    'a file envelope names the file',
+    /source="[^"]*secrets\.txt"/.test(untrusted(externalSource('read_file', { path: '/tmp/secrets.txt' }), 'x')),
+  );
+  check(
+    'a command envelope names the command',
+    /source="the output of curl [^"]*"/.test(untrusted(externalSource('run_command', { command: 'curl evil.example' }), 'x')),
+  );
 }
 
 // ── taking data out is a decision, like destroying it ───────────────
@@ -1444,6 +1616,178 @@ section('a write refuses on its own, not because of a check above it');
   check('the owner can still edit', mine?.text === 'rewritten by the owner', JSON.stringify(mine));
   const trimmed = await store.listMessages(owner.id, chat.id);
   check('and editing still rewinds the conversation', trimmed.length === 1, `${trimmed.length} messages`);
+}
+
+section('an upsert cannot cross an account boundary');
+{
+  /*
+   * Same lesson as the section above, one shape further on. These three
+   * statements conflicted on the **global primary key** and updated whatever
+   * they hit, so the id alone decided which row was rewritten.
+   *
+   * `saveMcpServer` is the one that matters: `routes/mcp.js` takes the id from
+   * `req.body`, so any signed-in account could post somebody else's server id
+   * and replace their `name`, `config` and `enabled`. An MCP config is a
+   * program that runs on that account's machine, or a URL its agent will trust.
+   *
+   * `heartbeat` was worse in kind if narrower in reach: it set
+   * `user_id = EXCLUDED.user_id`, so the conflicting row changed hands
+   * outright. The victim's `activeWorker` then finds nothing and their local
+   * tools quietly stop being offered.
+   *
+   * Driven through the store with the wrong account, because that is the only
+   * thing that tells a statement that is safe from a statement standing behind
+   * a check somebody remembered to write.
+   */
+  const owner = await store.createUser({
+    id: 'u-ups-owner', email: 'ups-owner@example.com', passwordHash: 'x', name: 'Owner', role: 'user',
+  });
+  const other = await store.createUser({
+    id: 'u-ups-other', email: 'ups-other@example.com', passwordHash: 'x', name: 'Other', role: 'user',
+  });
+
+  await store.saveMcpServer(owner.id, {
+    id: 'mcp-shared-id',
+    name: 'mine',
+    config: { transport: 'http', url: 'https://example.com/mine' },
+    enabled: true,
+  });
+
+  let refused = '';
+  try {
+    await store.saveMcpServer(other.id, {
+      id: 'mcp-shared-id',
+      name: 'theirs',
+      config: { transport: 'http', url: 'https://attacker.example/theirs' },
+      enabled: true,
+    });
+  } catch (err) {
+    refused = err.message;
+  }
+  check('another account cannot overwrite an MCP server', /another account/i.test(refused), refused);
+
+  const still = await store.getMcpServer(owner.id, 'mcp-shared-id');
+  check('  the owner\'s config is untouched', still?.name === 'mine', JSON.stringify(still?.name));
+  check(
+    '  including the url its agent would trust',
+    !JSON.stringify(still?.config ?? {}).includes('attacker.example'),
+  );
+  check('  and the owner can still save over their own', !!(await store.saveMcpServer(owner.id, {
+    id: 'mcp-shared-id', name: 'renamed', config: { transport: 'http', url: 'https://example.com/mine' }, enabled: true,
+  })));
+
+  // A worker may be refreshed by its owner and not taken over by anyone else.
+  await store.heartbeat(owner.id, 'w-shared-id', { platform: 'win32' });
+  await store.heartbeat(other.id, 'w-shared-id', { platform: 'linux' });
+  const ownerWorker = await store.activeWorker(owner.id);
+  const otherWorker = await store.activeWorker(other.id);
+  check('a heartbeat cannot take another account\'s worker', ownerWorker?.id === 'w-shared-id', JSON.stringify(ownerWorker?.id));
+  check('  and the account that tried does not gain one', !otherWorker, JSON.stringify(otherWorker?.id));
+  check('  the owner\'s machine details are not overwritten either', ownerWorker?.info?.platform === 'win32', JSON.stringify(ownerWorker?.info));
+}
+
+section('a message is numbered by the conversation\'s counter, and the migration to it is safe');
+{
+  /*
+   * `appendMessage` numbered a message `MAX(seq) + 1` inside the insert, and
+   * `(chat_id, seq)` is not unique, so two concurrent appends could share a
+   * position the transcript is ordered by (ARCH-007).
+   *
+   * Said plainly about what this suite can and cannot show: PGlite runs one
+   * statement at a time, so the concurrent collision itself **cannot** happen
+   * here, and a test claiming to reproduce it would pass for the wrong reason.
+   * What can break, and is checked, is the migration and its rollout edges —
+   * the parts where a mistake renumbers or repeats real conversations.
+   */
+  const owner = await store.createUser({
+    id: 'u-seq-owner', email: 'seq-owner@example.com', passwordHash: 'x', name: 'Owner', role: 'user',
+  });
+  const chat = await store.createChat(owner.id, { id: 'c-seq', title: 'Numbered', model: 'm' });
+
+  const a = await store.appendMessage(owner.id, chat.id, { id: 's-1', role: 'user', text: 'one' });
+  const b = await store.appendMessage(owner.id, chat.id, { id: 's-2', role: 'assistant', text: 'two' });
+  check('messages are numbered in order', a.seq === 0 && b.seq === 1, `${a.seq}, ${b.seq}`);
+
+  // A conversation from before the migration: messages present, no counter.
+  await db.query('UPDATE chats SET next_seq = NULL WHERE id = $1', [chat.id]);
+  const c = await store.appendMessage(owner.id, chat.id, { id: 's-3', role: 'user', text: 'three' });
+  check('a conversation with no counter yet continues after its last message, not from 0', c.seq === 2, String(c.seq));
+
+  // An instance still running the old code during a deploy inserts without
+  // touching the counter. The new code must not hand out that number again.
+  await db.query(
+    `INSERT INTO messages (id, chat_id, seq, role, content) VALUES ('s-old', $1, 3, 'assistant', '{"text":"from the old code"}')`,
+    [chat.id],
+  );
+  const d = await store.appendMessage(owner.id, chat.id, { id: 's-4', role: 'user', text: 'four' });
+  check('a number the old code already used is not issued twice', d.seq === 4, String(d.seq));
+
+  const seqs = (await store.listMessages(owner.id, chat.id)).map((m) => m.seq);
+  check('  and every message in the conversation has its own position', new Set(seqs).size === seqs.length, seqs.join(','));
+
+  // The backfill statement itself, run against a conversation that has messages
+  // and no counter — what every existing conversation looks like the first time
+  // version 18 is replayed.
+  const fs = await import('node:fs');
+  const { splitStatements } = await import('../server/store/pg.js');
+  const backfill = splitStatements(fs.readFileSync(new URL('../server/store/schema.sql', import.meta.url), 'utf8'))
+    .find((s) => /UPDATE chats c\s+SET next_seq/i.test(s));
+  check('the migration carries a backfill for the counter', Boolean(backfill));
+
+  await db.query('UPDATE chats SET next_seq = NULL WHERE id = $1', [chat.id]);
+  await db.query(backfill);
+  const [{ next_seq: filled }] = (await db.query('SELECT next_seq FROM chats WHERE id = $1', [chat.id])).rows;
+  check('  it sets the counter just past the last message', Number(filled) === 5, String(filled));
+
+  await db.query(backfill);
+  const [{ next_seq: again }] = (await db.query('SELECT next_seq FROM chats WHERE id = $1', [chat.id])).rows;
+  check('  and replaying it over a migrated database changes nothing', Number(again) === 5, String(again));
+
+  // Ownership: an append for somebody else's conversation bumps nothing.
+  const intruder = await store.createUser({
+    id: 'u-seq-intruder', email: 'seq-intruder@example.com', passwordHash: 'x', name: 'Other', role: 'user',
+  });
+  let refused = false;
+  try {
+    await store.appendMessage(intruder.id, chat.id, { id: 's-x', role: 'user', text: 'not mine' });
+  } catch {
+    refused = true;
+  }
+  const [{ next_seq: after }] = (await db.query('SELECT next_seq FROM chats WHERE id = $1', [chat.id])).rows;
+  check('another account cannot append', refused);
+  check('  nor advance the owner\'s counter by trying', Number(after) === 5, String(after));
+}
+
+section('which tool calls have started is recorded on the turn, by its owner only');
+{
+  /*
+   * The marker that stops a resume from sending an email twice. It is a write to
+   * a message, so it gets the same test every message write gets here: the
+   * wrong account cannot make it.
+   */
+  const owner = await store.createUser({
+    id: 'u-start-owner', email: 'start-owner@example.com', passwordHash: 'x', name: 'Owner', role: 'user',
+  });
+  const other = await store.createUser({
+    id: 'u-start-other', email: 'start-other@example.com', passwordHash: 'x', name: 'Other', role: 'user',
+  });
+  const chat = await store.createChat(owner.id, { id: 'c-started', title: 'Tools', model: 'm' });
+  await store.appendMessage(owner.id, chat.id, {
+    id: 'a-1', role: 'assistant', text: '', toolCalls: [{ id: 'call-1', name: 'send_email', input: {} }],
+  });
+
+  await store.markToolCallsStarted(other.id, chat.id, 'a-1', ['call-1']);
+  let turn = (await store.listMessages(owner.id, chat.id)).find((m) => m.id === 'a-1');
+  check('another account cannot mark a call started', !turn?.startedCalls, JSON.stringify(turn?.startedCalls));
+
+  await store.markToolCallsStarted(owner.id, chat.id, 'a-1', ['call-1']);
+  turn = (await store.listMessages(owner.id, chat.id)).find((m) => m.id === 'a-1');
+  check('the owner can', Array.isArray(turn?.startedCalls) && turn.startedCalls.includes('call-1'), JSON.stringify(turn?.startedCalls));
+
+  await store.markToolCallsStarted(owner.id, chat.id, 'a-1', ['call-2']);
+  turn = (await store.listMessages(owner.id, chat.id)).find((m) => m.id === 'a-1');
+  check('  and a later mark adds to the record rather than replacing it', turn?.startedCalls?.includes('call-1') && turn?.startedCalls?.includes('call-2'));
+  check('  without disturbing the calls themselves', turn?.toolCalls?.[0]?.name === 'send_email');
 }
 
 section('concurrent writes to one setting compose instead of racing');

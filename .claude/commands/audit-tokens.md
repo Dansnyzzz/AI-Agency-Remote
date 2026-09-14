@@ -12,7 +12,11 @@ every request for the rest of the conversation.
 
 ## 1. The tool catalogue — the biggest constant
 
-`server/tools/definitions.js` is ~7000 tokens of JSON schema, re-sent every turn.
+`server/tools/definitions.js` holds 93 tools — about **13,300 tokens** of JSON
+schema if you send all of it. What a turn actually sends is **48 tools, ~6,900
+tokens** on a 128k window, because deferral drops the rest until they are asked
+for. Those are two different numbers and they get conflated constantly; measure
+`availableTools({ context })`, not `TOOLS`.
 
 Existing defences — confirm they still hold, and that new tools respect them:
 

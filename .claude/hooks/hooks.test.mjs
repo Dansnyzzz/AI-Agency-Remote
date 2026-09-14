@@ -145,6 +145,41 @@ check('guard-bash.js', bash(`psql -c "${['TRUNCATE', 'chats'].join(' ')}"`), BLO
 check('guard-bash.js', bash(['rm', '-r', 'data/pgdata'].join(' ')), BLOCK, 'deleting the local cluster');
 check('guard-bash.js', bash(['npm', 'publish'].join(' ')), BLOCK, 'publishing a private package');
 
+/*
+ * Cutting a release is publishing, and only `npm publish` was covered.
+ *
+ * Three installed skills drive exactly these commands — one tags, releases and
+ * publishes; one decides how a finished branch integrates; one gates its own
+ * commits. A decision recorded in a document is a note, not a guard, and
+ * CLAUDE.md §2 is explicit that a risk which can happen at any moment belongs
+ * in code.
+ *
+ * Split into tokens like the rules above, because writing them whole in this
+ * file would trip the guard when the suite itself is read by one.
+ */
+check('guard-bash.js', bash(['gh', 'release', 'create', 'v1.2.0'].join(' ')), BLOCK, 'cutting a github release');
+check('guard-bash.js', bash(['gh', 'pr', 'merge', '4', '--squash'].join(' ')), BLOCK, 'merging a pull request');
+check('guard-bash.js', bash(['npm', 'version', 'patch'].join(' ')), BLOCK, 'bumping the version');
+check('guard-bash.js', bash(['git', 'push', '--tags', 'origin', 'feature'].join(' ')), BLOCK, 'pushing tags');
+// A local tag publishes nothing, and this audit's own safety net is one.
+check('guard-bash.js', bash(['git', 'tag', 'backup/pre-optimize-x'].join(' ')), ALLOW, 'tagging locally is fine');
+check('guard-bash.js', bash(['gh', 'pr', 'view', '4'].join(' ')), ALLOW, 'and reading a pull request is too');
+
+/*
+ * A refusal must say what to do when the match was text, not a command (CFG-021).
+ *
+ * The rules are not loosened — a quoted string can be a real command, so there is
+ * no safe way to strip one. What changed is the dead end: writing a file whose
+ * *contents* mention a blocked command gets pointed at the Edit tool, rather than
+ * leaving rephrasing-until-it-passes as the only visible option.
+ */
+{
+  const writesText = bash(`node -e "require('fs').writeFileSync('notes.md', 'never run ${['npm', 'publish'].join(' ')} here')"`);
+  const run = check('guard-bash.js', writesText, BLOCK, 'text that names a blocked command is still refused — the rule is not loosened');
+  is(/Edit or\s+Write tool/.test(run.stderr || ''), '  but the refusal says to write the file with the Edit tool instead');
+  is(/do not rephrase/i.test(run.stderr || ''), '  and not to rephrase around the match');
+}
+
 console.log('\n[1mguard-write[0m');
 check('guard-write.js', write('server/app.js'), ALLOW, 'ordinary source is editable');
 check('guard-write.js', write('test/deploy.test.mjs'), ALLOW, 'so are tests');
@@ -318,15 +353,124 @@ check(
   'never block twice — the harness caps it and ends the turn anyway',
   gateEnv,
 );
+/**
+ * A sub-agent is not blocked. This assertion was reversed deliberately, with the
+ * owner's agreement, and the argument belongs here because reversing a safety
+ * check quietly is how one rots.
+ *
+ * The rule read the shared ledger, which cannot say *who* made a change.
+ * `pending` is written by the PostToolUse hook for every edit in the session,
+ * parent and sub-agent alike; `lastGreen` moves when the parent commits. So a
+ * read-only sub-agent inherited a state it had no part in, had no diff to prove,
+ * and was usually forbidden by its own brief from running the gate. Nothing it
+ * could do would clear the block.
+ *
+ * A first attempt narrowed it to `pending.length === 0` and failed for the same
+ * reason: `pending` held a file the *parent* had just edited, so every
+ * sub-agent dispatched during ordinary work was still blocked. The data needed
+ * to tell the two apart is not recorded anywhere.
+ *
+ * The cost was measured, not assumed. The message the hook blocks is the agent's
+ * report; its next message answers the hook instead, and that is what reaches
+ * the parent. Eleven reports were lost that way in one session across six
+ * agents, two of which had to be dispatched again from nothing.
+ *
+ * Dropping it is safe because the requirement moves rather than disappears. A
+ * sub-agent does not commit and does not ship. If it edited source, `pending`
+ * names those files and the **parent** is stopped at its own Stop until the gate
+ * has run over them. That is the pair asserted here: one ledger, one sentence,
+ * sub-agent through and parent held.
+ */
 {
-  const run = check(
+  check(
     'verify-stop.js',
     { ...stop('Xong rồi nhé.'), hook_event_name: 'SubagentStop', agent_type: 'qa-tester' },
-    BLOCK,
-    'a sub-agent claiming completion is the same failure',
+    ALLOW,
+    'a sub-agent is not held to a ledger that cannot say whose work it describes',
     gateEnv,
   );
-  is(/qa-tester/.test(run.stderr || ''), 'and the block names which agent said it');
+  const run = check(
+    'verify-stop.js',
+    stop('Xong rồi nhé.'),
+    BLOCK,
+    '  while the parent making that same claim, on that same ledger, still is',
+    gateEnv,
+  );
+  is(/agent\.js/.test(run.stderr || ''), '  and is told which file is unproven');
+}
+
+/**
+ * A read-only sub-agent is not answerable for the session's commits.
+ *
+ * The ledger is shared, so a sub-agent dispatched to read and report inherits a
+ * stamp the *parent* invalidated by committing. It has no diff to prove, and its
+ * brief usually forbids running the gate — so the block had no action that could
+ * clear it, and the agent's report was the message that got blocked. Its next
+ * message answered the hook instead, and that is what reached the parent: nine
+ * reports lost in one session, across six agents, every one recovered only by
+ * asking again.
+ *
+ * Steering around it did not work either. `CLAIMS` contains a bare
+ * `/\bverified\b/i`, which is the exact word an evidence-graded report carries.
+ *
+ * So a sub-agent is now held to the part of the ledger that can be about it:
+ * `pending`, the files edited since the last green run. Nothing edited, nothing
+ * to answer for. The case above still blocks, because there `pending` names a
+ * file — a sub-agent that touched source is still stopped, and so is the parent
+ * in this exact state, which is the pair that has to hold.
+ */
+{
+  writeLedger({
+    pending: [],
+    lastGreen: { at: '2026-09-01T00:00:00Z', head: 'a'.repeat(40), dirty: 'stale', scope: 'full' },
+  });
+
+  check(
+    'verify-stop.js',
+    { ...stop('The audit pass is complete.'), hook_event_name: 'SubagentStop', agent_type: 'security-auditor' },
+    ALLOW,
+    'a sub-agent that edited nothing is not held to the parent\'s commits',
+    gateEnv,
+  );
+  check(
+    'verify-stop.js',
+    { ...stop('Every finding is verified.'), hook_event_name: 'SubagentStop', agent_type: 'security-auditor' },
+    ALLOW,
+    'including when its report uses the word the guard matches on',
+    gateEnv,
+  );
+  check(
+    'verify-stop.js',
+    stop('All done — the change is finished.'),
+    BLOCK,
+    'while the parent in the very same state is still stopped',
+    gateEnv,
+  );
+
+  /*
+   * And when a sub-agent *does* edit source, the requirement is not lost — it
+   * lands on the parent, which is the only party that can discharge it. This is
+   * the half that makes the reversal above safe rather than merely convenient,
+   * so it is asserted rather than argued.
+   */
+  writeLedger({
+    pending: [{ file: 'server/agent.js', at: '2026-09-01T00:00:00Z' }],
+    lastGreen: { at: '2026-09-01T00:00:00Z', head: 'a'.repeat(40), dirty: 'stale', scope: 'full' },
+  });
+  check(
+    'verify-stop.js',
+    { ...stop('Implemented it, all tests pass.'), hook_event_name: 'SubagentStop', agent_type: 'backend-engineer' },
+    ALLOW,
+    'a sub-agent that edited source reports freely',
+    gateEnv,
+  );
+  check(
+    'verify-stop.js',
+    stop('Implemented it, all tests pass.'),
+    BLOCK,
+    '  and the parent inherits the obligation for what it edited',
+    gateEnv,
+  );
 }
 
 clearLedger();
@@ -439,6 +583,79 @@ console.log('\n[1mbrief[0m');
   is(/Branch/.test(parsed?.hookSpecificOutput?.additionalContext || ''), 'and says which branch this is');
   is(Boolean(parsed?.hookSpecificOutput?.sessionTitle), 'and titles the session');
 }
+
+/*
+ * The briefing has to describe the fence the guard is actually enforcing.
+ *
+ * It did not. `brief.js` built its own sentence and said "commits here are
+ * blocked by guard-bash.js" on every protected branch, unconditionally — so once
+ * `AI_REMOTE_ALLOW_MAIN` existed, every session opening on `main` was told a
+ * stop was in place that the guard was letting straight through. Both files read
+ * `branch.js` now, and these three cases are the reason it exists: the same
+ * branch, the same command, two switch states, and the sentence has to move with
+ * the guard rather than beside it.
+ *
+ * Each case states its environment rather than inheriting one. That is CFG-011's
+ * lesson: this repo sets the switch in `.claude/settings.json`, so a spread of
+ * `process.env` would have handed it to the very check that proves it is off.
+ */
+{
+  const briefOn = (branch, allow) => {
+    const env = { ...gateEnv, CLAUDE_GUARD_BRANCH: branch };
+    if (allow === undefined) delete env.AI_REMOTE_ALLOW_MAIN;
+    else env.AI_REMOTE_ALLOW_MAIN = allow;
+    const run = check(
+      'brief.js',
+      { hook_event_name: 'SessionStart', source: 'startup' },
+      ALLOW,
+      `briefing on \`${branch}\` with the switch ${allow === undefined ? 'unset' : `= ${allow}`}`,
+      env,
+    );
+    try {
+      return JSON.parse(run.stdout.trim())?.hookSpecificOutput?.additionalContext || '';
+    } catch {
+      return '';
+    }
+  };
+
+  const lifted = briefOn('main', '1');
+  is(/protection is LIFTED/.test(lifted), 'with the switch on it says the protection is lifted');
+  is(!/commits here are blocked/.test(lifted), 'and does not claim commits are blocked');
+
+  const fenced = briefOn('main');
+  is(/commits here are blocked/.test(fenced), 'with the switch unset it says commits are blocked');
+  is(!/LIFTED/.test(fenced), 'and does not claim the fence is open');
+
+  is(/commits here are blocked/.test(briefOn('master', '0')), '`0` is not consent, and master is protected too');
+
+  const feature = briefOn('audit/some-branch', '1');
+  is(!/LIFTED|blocked/.test(feature), 'an ordinary branch gets neither sentence, switch or no switch');
+
+  /*
+   * The point of the whole change, stated as one assertion: whatever the guard
+   * does with `git commit` on this branch, the briefing must be describing that
+   * same behaviour. If these two ever disagree again, this is the check that
+   * says so.
+   */
+  for (const allow of ['1', undefined]) {
+    const env = { ...gateEnv, CLAUDE_GUARD_BRANCH: 'main' };
+    if (allow === undefined) delete env.AI_REMOTE_ALLOW_MAIN;
+    else env.AI_REMOTE_ALLOW_MAIN = allow;
+    const guard = spawnSync(process.execPath, [path.join(here, 'guard-bash.js')], {
+      input: JSON.stringify(bash('git commit -m "x"')),
+      encoding: 'utf8',
+      cwd: root,
+      timeout: 90_000,
+      env,
+    });
+    const guardAllows = guard.status === ALLOW;
+    const briefSaysAllowed = /protection is LIFTED/.test(briefOn('main', allow));
+    is(
+      guardAllows === briefSaysAllowed,
+      `guard and briefing agree on main with the switch ${allow === undefined ? 'unset' : `= ${allow}`}`,
+    );
+  }
+}
 {
   const run = check(
     'brief.js',
@@ -547,7 +764,7 @@ try {
 {
   // dirtyHash hashed the whole of `git status --porcelain`, which contradicted
   // isSource twenty lines below it — and isSource exists to say a README is not
-  // worth twenty-four suites. So note() honoured the exemption and dirtyHash did
+  // worth the full suite. So note() honoured the exemption and dirtyHash did
   // not: one line of documentation expired the stamp and demanded a full re-run,
   // the exact behaviour the comment on NOT_SOURCE warns gets a gate switched off.
   const gate = await import('./gate.js');
@@ -570,6 +787,103 @@ try {
   is(afterDoc === baseline, 'a new .md does not expire the stamp', `${baseline} -> ${afterDoc}`);
   is(afterSrc !== baseline, 'a new .js does', `${baseline} -> ${afterSrc}`);
   is(restored === baseline, 'and removing them puts the fingerprint back', `${baseline} -> ${restored}`);
+
+  /**
+   * The stamp is judged on what the source *is*, not where it sits (CFG-020).
+   *
+   * Edit, run the gate, commit: the gate fingerprinted the files while dirty,
+   * the commit moved the identical bytes into HEAD, and both `head` and `dirty`
+   * then reported a change. The stamp was thrown away straight after the only
+   * run that covered the code, five times in one audit. `contentHash` hashes
+   * each source file's blob on disk with its path, so a commit changes nothing
+   * and an edit changes everything.
+   *
+   * The decisive assertion is the one with a fake `head` and a stale `dirty`: if
+   * position still mattered, that stamp would read as out of date.
+   */
+  const content = gate.contentHash();
+  is(/^[0-9a-f]{16}$/.test(content), 'the content fingerprint can be taken', content);
+  is(gate.contentHash() === content, '  and is stable for an unchanged tree');
+
+  const docAgain = path.join(root, 'audit', `hooks-test-content-${process.pid}.md`);
+  fs.writeFileSync(docAgain, '# scratch\n');
+  const withDoc = gate.contentHash();
+  fs.rmSync(docAgain, { force: true });
+  is(withDoc === content, '  documentation does not move it');
+
+  const srcAgain = path.join(root, `hooks-test-content-${process.pid}.js`);
+  fs.writeFileSync(srcAgain, '// scratch\n');
+  const withSrc = gate.contentHash();
+  fs.rmSync(srcAgain, { force: true });
+  is(withSrc !== content, '  a new source file does');
+  is(gate.contentHash() === content, '  and removing it restores it');
+
+  const savedState = process.env.CLAUDE_GATE_STATE;
+  process.env.CLAUDE_GATE_STATE = sandbox;
+  // The sandbox is cleaned up by an earlier section; recreated here rather than
+  // relying on section order, which is how this test first failed.
+  fs.mkdirSync(sandbox, { recursive: true });
+  try {
+    writeLedger({
+      pending: [],
+      lastGreen: { at: '2026-09-01T00:00:00Z', head: 'f'.repeat(40), dirty: 'stale', content, scope: 'full' },
+    });
+    const moved = gate.status();
+    is(moved.current === true, 'a stamp over identical content stands whatever head and dirty say', JSON.stringify({ current: moved.current }));
+    is(moved.verified === true, '  so work that was tested and then committed is still verified');
+
+    writeLedger({
+      pending: [],
+      lastGreen: { at: '2026-09-01T00:00:00Z', head: gate.head(), dirty: gate.dirtyHash(), content: '0'.repeat(16), scope: 'full' },
+    });
+    is(gate.status().current === false, 'while different content fails even with head and dirty matching');
+  } finally {
+    if (savedState === undefined) delete process.env.CLAUDE_GATE_STATE;
+    else process.env.CLAUDE_GATE_STATE = savedState;
+    // Recreated above, so removed again here — otherwise every run of the suite
+    // leaves a directory behind in the temp folder.
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+
+  /**
+   * The exemption has to survive being committed.
+   *
+   * `dirtyHash` above filters through `isSource`, so editing a README does not
+   * expire the stamp. `status()` also compared `head()` raw, and a commit hash
+   * knows nothing about what is inside it — so the exemption held right until
+   * you saved your work and then vanished. In this repository, where an audit
+   * commits documentation constantly, that cost four full runs of the
+   * thirty-one suites in one session, for markdown. The comment on NOT_SOURCE
+   * says where that leads: it is how a gate earns its way into being switched
+   * off.
+   *
+   * Driven against real commits in this checkout rather than synthesised, since
+   * the whole question is what `git diff --name-only A..B` says about them.
+   * HEAD~1..HEAD is whatever was committed last; the pair below asks the
+   * question of two commits that are known to differ in a `.js` file, and of a
+   * commit against itself.
+   */
+  is(
+    gate.status().current !== undefined,
+    'status() answers whether the stamp still describes this tree',
+  );
+
+  const changedSince = (from) => {
+    const out = spawnSync('git', ['diff', '--name-only', `${from}..HEAD`], {
+      cwd: root, encoding: 'utf8', timeout: 10_000,
+    });
+    if (out.status !== 0) return null;
+    return String(out.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  };
+
+  const selfDiff = changedSince('HEAD');
+  is(Array.isArray(selfDiff) && selfDiff.length === 0, 'a commit differs from itself in nothing');
+
+  // An unknown ref must read as "changed", never as "nothing changed" — the
+  // stamped commit can be rebased away or amended, and guessing "clean" there
+  // would certify code no run has covered.
+  is(changedSince('0000000000000000000000000000000000000000') === null,
+    'and an unresolvable ref is an error, not an empty answer');
 
   // stamp() must be able to record a fingerprint taken before the suites ran.
   // Taking it afterwards certified whatever happened to be on disk when the run

@@ -136,10 +136,26 @@ export const CATALOG = [
     id: 'openai/o4-mini',
     provider: 'openai',
     model: 'o4-mini',
-    label: 'o4-mini',
+    // Still offered until the date, because it is still cheaper and still works;
+    // the label says it is going so nobody picks it fresh. See RETIREMENTS.
+    label: 'o4-mini (retiring 23 Oct 2026)',
     context: 200_000,
     maxOutput: 32_000,
     price: null,
+    tags: ['reasoning', 'retiring'],
+  },
+  {
+    // The replacement OpenAI names for o4-mini. Every figure below was read from
+    // https://developers.openai.com/api/docs/models/gpt-5.6-terra on 2026-09-14:
+    // 1,050,000 context, 128,000 max output, $2 in / $12 out per 1M, cached input
+    // $0.20 — a tenth of input, which is `CACHE_READ_RATE`, so no override.
+    id: 'openai/gpt-5.6-terra',
+    provider: 'openai',
+    model: 'gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+    context: 1_050_000,
+    maxOutput: 128_000,
+    price: { in: 2, out: 12 },
     tags: ['reasoning'],
   },
 
@@ -214,7 +230,16 @@ export const PROVIDERS = {
  */
 function derivedMaxOutput(context) {
   const window = Number(context);
-  if (!Number.isFinite(window) || window <= 0) return 32_000;
+  /*
+   * Unknown stays unknown. This returned 32,000 when the window was missing,
+   * which turned "nothing is known about this model" into a *stated* output cap
+   * before `outputBudget` ever saw the entry — so the cautious budget that
+   * function applies to an entry stating nothing (PERF-010) was never reached on
+   * the one path it was written for: an aggregator row with sparse metadata.
+   * Measured before the fix: such a row resolved to maxOutput 32000 and an
+   * output budget of 32000, unclamped (PERF-013).
+   */
+  if (!Number.isFinite(window) || window <= 0) return null;
   return Math.min(32_000, Math.max(1024, Math.floor(window / 2)));
 }
 
@@ -225,7 +250,39 @@ function derivedMaxOutput(context) {
  * caller has already looked it up — that is where everything beyond the
  * built-in first-party models lives.
  */
+/**
+ * Built-in models their provider has scheduled for shutdown, and what replaces them.
+ *
+ * A built-in that stops existing does not fail gracefully: every account that
+ * chose it as its default gets an error on every turn, from the day of the
+ * shutdown, with nothing in the app to say why. This happened once already —
+ * `gemini-2.5-flash` shipped here and stopped working — and it happened again
+ * during this audit to `generate_image`, whose Imagen 4 endpoint had been shut
+ * down for four weeks when it was found (GAP-008).
+ *
+ * The switch is dated rather than immediate. Before the date the retiring model
+ * still works and is usually the cheaper one, which is why somebody chose it;
+ * moving them early would change their bill for no reason. On and after the
+ * date, an id listed here resolves to its replacement, carrying `retiredFrom` so
+ * the loop can say so rather than switching silently.
+ *
+ * Each row names where the date came from, so the next person can re-check it.
+ */
+const RETIREMENTS = {
+  'openai/o4-mini': {
+    on: '2026-10-23',
+    replacedBy: 'openai/gpt-5.6-terra',
+    // "October 23, 2026 | o4-mini-2025-04-16 | o4-mini | gpt-5.6-terra", read 2026-09-14.
+    source: 'https://developers.openai.com/api/docs/deprecations',
+  },
+};
+
 export function resolveModel(id, sharedRow = null) {
+  const retirement = RETIREMENTS[id];
+  if (retirement && Date.now() >= Date.parse(`${retirement.on}T00:00:00Z`)) {
+    return { ...resolveModel(retirement.replacedBy, null), retiredFrom: id };
+  }
+
   // Every first-party model here reads images. They are the flagships of the
   // three vendors and all of them have for years.
   const found = CATALOG.find((m) => m.id === id);
@@ -266,7 +323,10 @@ export function resolveModel(id, sharedRow = null) {
         model,
         label: model,
         context: null,
-        maxOutput: 32_000,
+        // Unknown, not 32000 — the same reason as `derivedMaxOutput`. A stated
+        // figure here bypassed the cautious budget for a model nothing is known
+        // about (PERF-013).
+        maxOutput: null,
         price: null,
         // Unknown, so assumed capable: refusing to send an image to a model that
         // can take one is a worse mistake than the reverse, which now explains

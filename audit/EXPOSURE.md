@@ -1,11 +1,20 @@
 # EXPOSURE — what is public, and what that costs
 
-**Repo:** `https://github.com/Dansnyzzz/AI-remote.git`
+**Repo:** `https://github.com/Dansnyzzz/AI-Agency-Remote.git`
 **Visibility:** stated by the owner as PUBLIC. **Not independently confirmed** — the `gh` CLI is
 not installed on this machine, so I could not read the visibility flag from the API. Everything
 below assumes the owner's statement is correct.
 
-**223 tracked files.**
+**247 tracked files** (2026-09-11).
+
+> **Corrected 2026-09-11.** This file named `AI-remote.git` and counted 223 files. The remote is
+> `AI-Agency-Remote.git`, and there are 24 more files than when the classification was written —
+> so **the classification below has never been applied to them.** An exposure document that names
+> the wrong repository cannot be checked against the thing it describes, which is the whole point
+> of it. The 24 newer files are mostly `server/routes/`, `server/research/`, `audit/` and the
+> `.claude/` additions; by the categories below they fall under `KHÔNG NÊN` for the same reason
+> the rest of `.claude/` and `server/` does, but that is reasoning by analogy and not the
+> file-by-file pass §2 promises. Logged as `EXP-004`.
 
 ---
 

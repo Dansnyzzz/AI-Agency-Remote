@@ -545,6 +545,10 @@ export function createApp() {
     wrap(async (req, res) => {
       const { output, error, shot } = req.body || {};
       await getStore().completeJob(req.workerUser.id, req.params.id, {
+        // A job the server already closed — cancelled, or timed out and
+        // answered — keeps that record. A late result arriving after the stop
+        // would otherwise rewrite `cancelled` into `done`.
+        onlyIfOpen: true,
         status: error ? 'error' : 'done',
         // The picture is stored as an attachment and referenced by id — never
         // written into this row. A browsing session is dozens of these, and
@@ -553,6 +557,24 @@ export function createApp() {
         result: error ? { error } : { output, ...(shot ? { shot: await keepStepShot(req.workerUser.id, shot) } : {}) },
       });
       res.json({ ok: true });
+    }),
+  );
+
+  /**
+   * A running job asks whether it has been called off (AUTO-009).
+   *
+   * There is no way to push to a worker — every connection is one it opened —
+   * so while a job runs it asks here every few seconds, and stops if the answer
+   * is no longer `running`. Scoped to the worker's own account: a job id from
+   * somebody else's queue answers 404, the same as one that never existed, so
+   * this cannot be used to learn whether another account's job is live.
+   */
+  workerApi.get(
+    '/jobs/:id',
+    wrap(async (req, res) => {
+      const job = await getStore().getJob(req.workerUser.id, req.params.id);
+      if (!job) return res.status(404).json({ error: 'No such job.' });
+      return res.json({ status: job.status });
     }),
   );
 
@@ -1518,8 +1540,27 @@ export function createApp() {
         emit('ping', { t: Date.now() });
         store
           .touchChatRun(req.user.id, chatId, runId, runSeq)
-          .then((held) => {
-            if (held === false) controller.abort();
+          .then(async (held) => {
+            if (held !== false) return;
+            /**
+             * Losing the lease means one of two very different things, and the
+             * loop has to know which.
+             *
+             * The stop route clears `run_lock_by`: a person pressed stop, nobody
+             * else is writing to this conversation, and keeping the half of the
+             * reply they already read is right (CODE-016). A reconnection
+             * *claims* the lease instead — `run_lock_by` stays set, to another
+             * run or to this run id with a newer sequence — and that invocation
+             * is already streaming its own reply. Keeping this one's partial text
+             * then would put a stale fragment into the transcript alongside the
+             * live answer.
+             *
+             * That regression was mine: CODE-016 persisted on every abort, and
+             * supersession arrives as an abort. The reason travels on the signal
+             * so the loop can tell them apart.
+             */
+            const chat = await store.getChat(req.user.id, chatId).catch(() => null);
+            controller.abort(chat?.run_lock_by ? 'superseded' : 'stopped');
           })
           .catch(() => {});
       }, 15_000);
@@ -1537,6 +1578,10 @@ export function createApp() {
           chatId,
           modelId: req.body?.model,
           decision: req.body?.decision,
+          // The tool-call ids the prompt named when the person answered. A
+          // decision is about a specific batch, and until this was sent the
+          // server had no way to know whether it still was. See `runAgent`.
+          decisionFor: req.body?.decisionFor,
           // Which computer the browser is sitting at, learned from the worker on
           // that machine. Per request rather than stored: preferences belong to
           // the account, so two machines with the app open would take turns

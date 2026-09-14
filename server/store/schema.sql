@@ -692,3 +692,33 @@ DELETE FROM pairings a
 
 CREATE UNIQUE INDEX IF NOT EXISTS pairings_code_unclaimed_idx
     ON pairings (code_hash) WHERE claimed_at IS NULL;
+
+-- ── 18: a per-conversation sequence counter ─────────────────────────────────
+-- `appendMessage` used to number a message `MAX(seq) + 1`, read in the same
+-- statement that inserts. Two appends to one conversation at once read the same
+-- maximum and both write it — and `messages (chat_id, seq)` is not unique, so
+-- nothing refused the second. The transcript is ordered by `seq`, so a
+-- collision is two turns with no defined order between them (ARCH-007).
+--
+-- The fix is a counter the append *updates*, because Postgres re-reads a row it
+-- had to wait for a lock on before applying an UPDATE, where it does not re-run
+-- a subquery. Concurrent appends therefore take distinct numbers.
+--
+-- What this deliberately does NOT do is make (chat_id, seq) unique. Doing that
+-- means first renumbering any conversation that already holds a collision, and
+-- renumbering rewrites history: a summary records `covers`, the seq of the last
+-- message it stands for, and shifting the numbers under it would send the model
+-- the wrong tail — which is the exact failure ACC-007 fixed. New collisions stop
+-- here; old ones, if a database has any, are left as they were written.
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS next_seq BIGINT;
+
+-- Backfill only what has not been backfilled, so replaying this file over a
+-- migrated database changes nothing.
+UPDATE chats c
+   SET next_seq = COALESCE((SELECT MAX(m.seq) + 1 FROM messages m WHERE m.chat_id = c.id), 0)
+ WHERE c.next_seq IS NULL;
+
+-- The default comes after the backfill, not in the ADD COLUMN. A default there
+-- would fill every existing row with 0 at once, the backfill above would find
+-- nothing NULL, and every old conversation would start issuing seq 0 again.
+ALTER TABLE chats ALTER COLUMN next_seq SET DEFAULT 0;

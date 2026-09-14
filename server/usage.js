@@ -13,6 +13,41 @@ export function defaultTokenLimit() {
   return Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
+/**
+ * The most one turn may spend before it stops and asks to be continued.
+ *
+ * The monthly quota bounds an account; nothing bounded a turn. `maxSteps` is a
+ * count, and thirty steps of a flagship model — each re-sending the catalogue,
+ * the prompt and a transcript that only grows — has no upper bound in money. A
+ * tool that fails the same way thirty times pays thirty full prompts and nothing
+ * notices (PERF-009). An account well inside its month could still spend without
+ * limit inside one turn.
+ *
+ * Shaped by the same principle as the monthly limit above: a cap is for
+ * someone else's money. On the deployment's shared key the default is two
+ * million tokens a turn — room for a dozen near-full steps on a 200k window,
+ * well past any turn that is making progress. On the account's own key there is
+ * no default, because capping how somebody spends their own credit is not this
+ * app's call. `MAX_TURN_TOKENS` overrides both, and `0` turns it off.
+ *
+ * Counted in tokens rather than dollars on purpose: every provider reports
+ * tokens, while the cost estimate is missing for unpriced models, and a ceiling
+ * that silently reads zero is not a ceiling.
+ *
+ * Reaching it is a stop, not a failure. The turn ends like the step limit does,
+ * and sending a message continues with a fresh count.
+ */
+export const SHARED_TURN_TOKEN_LIMIT = 2_000_000;
+
+export function turnTokenLimit({ usingSharedKey }) {
+  const raw = process.env.MAX_TURN_TOKENS;
+  if (raw != null && raw !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n > 0 ? n : null;
+  }
+  return usingSharedKey ? SHARED_TURN_TOKEN_LIMIT : null;
+}
+
 export function limitFor(user) {
   // An explicit 0 means "unlimited" and must not fall through to the default.
   if (user?.monthly_token_limit != null) {

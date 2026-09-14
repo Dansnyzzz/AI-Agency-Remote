@@ -174,7 +174,7 @@ section('the XML reader');
   check('a relationship id is not confused with an element id', relationshipId(sldId) === 'rId2', relationshipId(sldId));
 
   check('escaping covers all five', escapeXml(`<a & "b" 'c'>`) === '&lt;a &amp; &quot;b&quot; &apos;c&apos;&gt;');
-  check('a control character is dropped rather than written', escapeXml('ab') === 'ab');
+  check('a control character is dropped rather than written', escapeXml('a\u000bb') === 'ab');
   check('a lone surrogate reference is left alone', decodeXml('&#xD800;') === '&#xD800;');
 }
 
@@ -670,6 +670,23 @@ let madeId;
   check('named with the right extension', created.file?.name === 'Báo giá tháng 8.docx', created.file?.name);
   check('the model is told the id, so it can revise it', created.content.includes(created.file.id));
   check('and told not to paste the document into its reply', /do not paste/i.test(created.content));
+
+  /**
+   * The envelope now goes on at `executeTool`'s single exit, so this is the
+   * cheapest real proof that the exit is selective rather than blanket: a
+   * document this application just wrote is the app's own words, and wrapping it
+   * would both cost tokens and teach the model to discount its own output.
+   *
+   * The positive half — a local tool's output arriving wrapped — is asserted on
+   * the declaration in `isolation.test.mjs` rather than end to end, because
+   * driving an in-process local tool starts the real worker runtime (a browser,
+   * the workspace, the screen) and this suite will not do that.
+   */
+  check(
+    'the app\'s own output is not put in an untrusted envelope',
+    !created.content.includes('<untrusted'),
+    created.content.slice(0, 60),
+  );
   madeId = created.file.id;
 
   const preview = await alice.call('GET', `/api/attachments/${madeId}/preview`);

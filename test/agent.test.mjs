@@ -92,6 +92,13 @@ section('sub-agents (run_parallel)');
   });
 
   check('the provider was actually driven', seen.calls === 2, `${seen.calls} calls`);
+  // This account has linked nothing, so a connector tool could only fail.
+  const offeredNames = (seen.tools || []).map((t) => t.name);
+  check(
+    'a sub-agent is not offered a connector the account has not linked',
+    offeredNames.length > 0 && !offeredNames.includes('github') && !offeredNames.includes('notion_search'),
+    offeredNames.filter((n) => n === 'github' || n === 'notion_search').join(',') || `${offeredNames.length} tools`,
+  );
   check('answers come back, not "(no answer)"', !output.includes('(no answer)'), output.slice(0, 80));
   check('the first answer is present', output.includes('Answer about the first thing.'));
   check('the second answer is present', output.includes('Answer about the second thing.'));
@@ -167,6 +174,50 @@ section('sub-agents may only use read-only tools');
     output.includes('I could not do that'),
     output.slice(-120),
   );
+}
+
+section('a sub-agent cannot start sub-agents');
+{
+  /*
+   * `run_parallel` and `deep_research` are `readOnly`, so `assessRisk` grades
+   * them `safe`, and "safe" was the only runtime question a sub-agent's tool
+   * call had to answer. `noSubagent` kept them out of the list a sub-agent is
+   * *offered* — and nothing checked what it *ran*. A sub-agent that named
+   * `run_parallel` anyway started six more, each able to do the same, on the
+   * account's own key and with no depth limit (SEC-026).
+   *
+   * The second provider turn sees the first turn's tool result, so that is where
+   * the refusal is read from.
+   */
+  const seenMessages = [];
+  let calls = 0;
+  const stream = async function* nesting(opts) {
+    calls += 1;
+    seenMessages.push(opts.messages);
+    if (calls === 1) {
+      yield {
+        type: 'done',
+        stopReason: 'tool_use',
+        toolCalls: [
+          { id: 'n1', name: 'run_parallel', input: { tasks: ['a', 'b', 'c', 'd', 'e', 'f'] } },
+          { id: 'n2', name: 'deep_research', input: { question: 'anything' } },
+        ],
+        usage: { input: 10, output: 5 },
+      };
+      return;
+    }
+    yield { type: 'text', delta: 'Reported instead.' };
+    yield { type: 'done', stopReason: 'end_turn', toolCalls: [], usage: { input: 10, output: 5 } };
+  };
+
+  const out = await runParallel({ user, chatId: null, tasks: ['fan out further'], stream });
+  const toolTurn = (seenMessages[1] || []).find((m) => m.role === 'tool');
+  const byName = Object.fromEntries((toolTurn?.results || []).map((r) => [r.name, r]));
+
+  check('run_parallel from inside a sub-agent is refused', byName.run_parallel?.isError === true && /not offered to this sub-agent/.test(byName.run_parallel?.content || ''), byName.run_parallel?.content);
+  check('  and so is deep_research', byName.deep_research?.isError === true && /not offered/.test(byName.deep_research?.content || ''), byName.deep_research?.content);
+  check('  so the provider was called for this sub-agent only, not for six more', calls === 2, `${calls} calls`);
+  check('  and the sub-agent still finishes with its own report', out.includes('Reported instead.'));
 }
 
 // ── the transcript reordering the main loop depends on ───────────────
@@ -332,16 +383,76 @@ section('what the model is sent after a fold');
   const again = activeTranscript(twice);
   check('a second fold supersedes the first', again.length === 2, `${again.length} messages`);
   check('using the newer summary', /Second summary/.test(again[0].text));
+
+  /**
+   * The shape the loop actually produces — which is not the shape above.
+   *
+   * Every case before this one hands `activeTranscript` a summary sitting in the
+   * middle of the array, and against that input the function is correct. The
+   * agent loop never builds that. `compact()` summarises `live.slice(0, tailStart)`
+   * — deliberately leaving the last eight turns out — and then **appends** the
+   * summary, both to the store (`MAX(seq)+1`) and to the in-memory array. So the
+   * summary is the last element, `slice(last + 1)` is empty, and the model was
+   * sent the summary and nothing else: not the kept turns, and not the question
+   * the user had just asked.
+   *
+   * The function was tested, correctly, against an input the system does not
+   * generate. That is the whole reason this survived.
+   *
+   * `covers` is what fixes it: the `seq` of the newest message the summary
+   * stands for. The tail is then everything newer than that, wherever the
+   * summary happens to sit.
+   */
+  const appended = [
+    { id: 'm1', seq: 1, role: 'user', text: 'old question' },
+    { id: 'm2', seq: 2, role: 'assistant', text: 'old answer' },
+    { id: 'm3', seq: 3, role: 'user', text: 'kept turn' },
+    { id: 'm4', seq: 4, role: 'assistant', text: 'kept reply' },
+    { id: 'm5', seq: 5, role: 'user', text: 'THE QUESTION JUST ASKED' },
+    { id: 's1', seq: 6, role: 'summary', covers: 2, text: 'Summary of the first two turns.' },
+  ];
+  const live = activeTranscript(appended);
+  check(
+    'a summary appended last still sends the turns it does not cover',
+    live.length === 4,
+    `${live.length} messages`,
+  );
+  check(
+    'including the question the user just asked',
+    live.some((m) => m.text === 'THE QUESTION JUST ASKED'),
+  );
+  check('the summary still leads', /Summary of the first two turns/.test(live[0].text));
+  check(
+    'and the turns it does cover are gone',
+    !live.some((m) => m.text === 'old question' || m.text === 'old answer'),
+  );
+
+  // Chaining has to keep working: the newer summary supersedes the older one,
+  // and the older one is older than `covers`, so it drops out by the same rule.
+  const chained = [
+    ...appended,
+    { id: 'm6', seq: 7, role: 'assistant', text: 'reply to it' },
+    { id: 's2', seq: 8, role: 'summary', covers: 6, text: 'Second summary.' },
+    { id: 'm7', seq: 9, role: 'user', text: 'newest' },
+  ];
+  const rolled = activeTranscript(chained);
+  check('a chained fold keeps only what the newest summary leaves', rolled.length === 3, `${rolled.length}`);
+  check('and it is the newest summary that leads', /Second summary/.test(rolled[0].text));
+  check('the first summary is not sent twice', !rolled.some((m) => /first two turns/.test(m.text)));
 }
 
 section('folding a conversation');
 {
-  const { compact } = await import('../server/compact.js');
+  const { compact, activeTranscript } = await import('../server/compact.js');
   const chat = await store.createChat(user.id, { id: 'c-compact', title: 'Long one', model: 'm' });
 
   const messages = [];
   for (let i = 0; i < 14; i += 1) {
-    messages.push({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', text: `turn number ${i}` });
+    // `seq` because that is what `listMessages` returns and what the loop holds.
+    // Without it this array is not the shape production hands to `compact()`,
+    // and a test built on a shape the system does not produce is how the fold
+    // bug above went unseen through four audit rounds.
+    messages.push({ id: `m${i}`, seq: i, role: i % 2 ? 'assistant' : 'user', text: `turn number ${i}` });
   }
 
   const { stream, seen } = scriptedProvider([{ text: 'They worked through fourteen turns about X.' }]);
@@ -359,9 +470,36 @@ section('folding a conversation');
   check('it is a message of its own', summary.role === 'summary');
   check('carrying the text', /fourteen turns/.test(summary.text));
   check('and saying how much it stands in for', summary.replaced === 6, String(summary.replaced));
+  check('and where it stops, by seq', summary.covers === 5, String(summary.covers));
+
+  /**
+   * The end-to-end check, driven the way `agent.js` drives it.
+   *
+   * The unit tests above prove `activeTranscript` handles an appended summary.
+   * This proves the two halves agree: the real `compact()` output, pushed onto
+   * the real array exactly as the loop pushes it, still sends the turns the
+   * summary deliberately did not cover — and above all the newest one, which is
+   * the question the user is waiting on an answer to.
+   */
+  messages.push(summary);
+  const sentToModel = activeTranscript(messages);
+  check(
+    'after a real fold the model still gets the turns it kept',
+    sentToModel.length === 9,
+    `${sentToModel.length} messages`,
+  );
+  check(
+    'and the newest turn is among them',
+    sentToModel.some((m) => m.text === 'turn number 13'),
+  );
+  check('with the summary leading', /fourteen turns/.test(sentToModel[0].text));
 
   const saved = await store.listMessages(user.id, chat.id);
   check('it is written into the conversation', saved.some((m) => m.role === 'summary'));
+  check(
+    'and the boundary survives the round trip through the store',
+    saved.find((m) => m.role === 'summary')?.covers === 5,
+  );
   check(
     'the summariser gets no tools — it is a writing job',
     seen.tools?.length === 0,
@@ -395,6 +533,29 @@ section('approval gating by policy');
   check('guarded gates only the destructive one', ids('guarded') === '3', ids('guarded'));
   check('ask gates everything that changes anything', ids('ask') === '2,3', ids('ask'));
   check('plan gates nothing either — it is readonly with a brief', ids('plan') === '');
+
+  /**
+   * An approval has to be an answer to the batch it was shown for.
+   *
+   * `decision` used to be a bare word, applied to whatever was outstanding when
+   * the resume arrived. Almost always the same batch — and the app mirrors
+   * across tabs, so a turn started in a second tab leaves a *different* batch
+   * waiting, and a click on the first tab's prompt approved calls nobody had
+   * been shown. The prompt lists every call and its arguments so the decision is
+   * informed; letting it land on another set makes that display decorative.
+   */
+  const { answersTheseCalls } = await import('../server/agent.js');
+
+  check('the ids it was shown answer it', answersTheseCalls(calls, ['1', '2', '3']));
+  check('  in any order, because a set is not a list', answersTheseCalls(calls, ['3', '1', '2']));
+  check('  a different batch does not', !answersTheseCalls(calls, ['1', '2', '9']));
+  check('  nor a subset of it', !answersTheseCalls(calls, ['1', '2']));
+  check('  nor a superset', !answersTheseCalls(calls, ['1', '2', '3', '4']));
+  check('  and an answer naming nothing does not answer anything', !answersTheseCalls(calls, undefined));
+  check('  including an empty list against pending calls', !answersTheseCalls(calls, []));
+  // Ids arrive as JSON and a provider may number them; comparing as strings is
+  // what stops 1 and '1' being two different calls.
+  check('numeric ids still match their string form', answersTheseCalls([{ id: 1 }, { id: 2 }], ['1', '2']));
 }
 
 section('planning mode is offered the reading tools and nothing else');
@@ -449,6 +610,58 @@ section('output budget follows the model');
   );
 
   /*
+   * An entry that states neither figure is the one case that used to get the
+   * flat 32000 back, unclamped — the exact hard-coded number `new-provider.md`
+   * forbids, and for the reason it gives: `openai/gpt-4` has an 8,191-token
+   * *total* window, so asking for 32000 asks for four times everything it has.
+   *
+   * First-party entries carry both fields and never took this path. Sparse
+   * metadata is what arrives from the aggregators, which are the two providers
+   * this app is built around — so the branch with no information is the one
+   * most likely to be taken.
+   */
+  /*
+   * Through `resolveModel`, not only with a raw object. The first version of
+   * this fix was tested on hand-built entries, and both real paths still handed
+   * back 32000: `derivedMaxOutput` and the hand-typed branch each materialised
+   * "unknown" as a stated 32000 before `outputBudget` saw the entry (PERF-013).
+   */
+  const sparse = resolveModel('openrouter/some/model', { id: 'openrouter/some/model', provider: 'openrouter', model: 'some/model', context: null, max_output: null });
+  check('an aggregator row with no window or cap resolves to no stated cap', sparse.maxOutput === null, String(sparse.maxOutput));
+  check('  and gets the cautious budget, not 32000', outputBudget(sparse) === 4096, String(outputBudget(sparse)));
+  const handTyped = resolveModel('openai/some-model-nobody-listed');
+  check('a hand-typed model id gets the cautious budget too', outputBudget(handTyped) === 4096, String(outputBudget(handTyped)));
+
+  /*
+   * A retiring built-in keeps working until its shutdown date, then resolves to
+   * its replacement. o4-mini shuts down on 2026-10-23 (OpenAI's deprecations
+   * page); switching before then would move somebody off the cheaper model they
+   * chose for no reason, and not switching after it is an error on every turn.
+   */
+  const realNow = Date.now;
+  try {
+    Date.now = () => Date.parse('2026-10-22T12:00:00Z');
+    const before = resolveModel('openai/o4-mini');
+    check('before its shutdown date a retiring model still resolves to itself', before.model === 'o4-mini' && !before.retiredFrom);
+    Date.now = () => Date.parse('2026-10-23T00:00:01Z');
+    const after = resolveModel('openai/o4-mini');
+    check('  and from the date it resolves to the replacement', after.model === 'gpt-5.6-terra', after.model);
+    check('  saying which model it replaced, so the loop can announce it', after.retiredFrom === 'openai/o4-mini');
+    check('  with the replacement\'s own verified limits', after.context === 1_050_000 && after.maxOutput === 128_000);
+  } finally {
+    Date.now = realNow;
+  }
+
+  const unknown = outputBudget({ id: 'openrouter/mystery/model', provider: 'openrouter' });
+  check('an entry that states nothing gets a cautious cap', unknown === 4096, String(unknown));
+  check('  not the flat 32000 that fits in no small window', unknown !== 32_000);
+  check(
+    '  while a stated cap with no window is still honoured',
+    outputBudget({ maxOutput: 16_000 }) === 16_000,
+    String(outputBudget({ maxOutput: 16_000 })),
+  );
+
+  /*
    * Built-ins carry their own figure and must be untouched by any of this.
    *
    * The number moved once already — Opus was being cut to a flat 32000, so long
@@ -468,7 +681,23 @@ section('output budget follows the model');
     outputBudget(resolveModel('anthropic/claude-sonnet-5')) === 128_000,
     String(outputBudget(resolveModel('anthropic/claude-sonnet-5'))),
   );
-  check('a model with no context at all still gets a usable number', outputBudget({}) === 32_000);
+  /*
+   * This asserted 32000 and now asserts 4096 — a deliberate reversal, so here
+   * is why rather than a quiet edit.
+   *
+   * 32000 is the one number `.claude/commands/new-provider.md` forbids by name,
+   * and for the reason it gives: `openai/gpt-4` has an 8,191-token *total*
+   * window, so asking it for 32000 asks for four times everything it has. The
+   * clamp a few lines up exists to prevent exactly that and was skipped on this
+   * branch, which is the branch taken when nothing is known about the model.
+   *
+   * Both directions cost something, and they do not cost the same. Too small
+   * truncates a reply that could have been longer — visible, and the user can
+   * ask for more. Too large is a request the provider rejects outright, and the
+   * turn produces nothing at all. 4096 is the smallest ceiling in common use
+   * and fits inside every window this app has met.
+   */
+  check('a model that states nothing gets the cautious cap, not the flat one', outputBudget({}) === 4_096, String(outputBudget({})));
 }
 
 // ── the compaction budget on a small window ─────────────────────────
@@ -809,6 +1038,269 @@ section('parallel tool calls have a ceiling');
   );
 
   check('an empty list is not a deadlock', (await mapWithLimit([], 4, async () => 1)).length === 0);
+}
+
+section('the app\'s own prompt has a version');
+{
+  /*
+   * Nothing identified which version of the system prompt a turn ran under, so
+   * a prompt edit could never be put beside the behaviour or cost that followed
+   * (GAP-003). The eval stamps the value; these check the value is worth stamping.
+   */
+  const { promptVersion, buildSystemPrompt } = await import('../server/agent.js');
+  const v = promptVersion();
+  check('the version is a short fingerprint', /^[0-9a-f]{12}$/.test(v), v);
+  check('  and the same on every call', promptVersion() === v);
+
+  // The raw prompt carries today's date. If the fingerprint included it, the
+  // version would change every midnight and a stamp would mean nothing.
+  const raw = buildSystemPrompt({ workerOnline: false, policy: 'guarded' });
+  check('  the prompt itself does carry a date', /Current date: \d{4}-\d{2}-\d{2}/.test(raw));
+  const shifted = raw.replace(/^Current date: .*$/m, 'Current date: 1999-01-01.');
+  const strip = (s) => s.replace(/^Current date: .*$/m, '');
+  check('  and removing it is what makes two days\' prompts identical', strip(raw) === strip(shifted));
+}
+
+section('read-only and plan mode hold even for a tool nobody offered');
+{
+  /*
+   * `needsApproval` returns nothing under readonly and plan, on the grounds that
+   * "the tools were never offered". A model can name one anyway — hallucinated,
+   * or told to by a page — and nothing checked before `executeTool`. So the two
+   * policies meant as "change nothing" ran a recursive delete with no prompt,
+   * while the looser `guarded` policy stopped to ask about the same call.
+   */
+  const { policyRefusal, needsApproval } = await import('../server/agent.js');
+  const { availableTools } = await import('../server/tools/definitions.js');
+  const del = { id: 'd1', name: 'delete_file', input: { path: 'important', recursive: true } };
+
+  for (const policy of ['readonly', 'plan']) {
+    const offered = availableTools({ workerOnline: true, desktopOnline: true, context: 200_000, policy }).map((t) => t.name);
+    check(`${policy}: the tool is not offered`, !offered.includes('delete_file'));
+    check(`  and approval would not have stopped it`, needsApproval([del], policy).length === 0);
+    const refused = policyRefusal(del, policy);
+    check(`  but it is refused at execution`, refused?.isError === true, refused?.content?.slice(0, 60));
+    check(`  and the model is told why`, new RegExp(policy === 'plan' ? 'plan' : 'read-only').test(refused?.content || ''));
+  }
+
+  // What makes the refusal safe to add: nothing these modes legitimately offer is
+  // refused by it. If a future tool is offered under plan mode without being
+  // read-only, this is the check that says plan mode just broke.
+  for (const policy of ['readonly', 'plan']) {
+    const offered = availableTools({ workerOnline: true, desktopOnline: true, context: 200_000, policy });
+    const wouldRefuse = offered.filter((t) => policyRefusal({ id: 't', name: t.name, input: {} }, policy)).map((t) => t.name);
+    check(`${policy}: no tool it offers is refused by it`, wouldRefuse.length === 0, wouldRefuse.join(', '));
+  }
+
+  const read = { id: 'r1', name: 'read_file', input: { path: 'notes.md' } };
+  check('a read-only tool still runs in read-only mode', policyRefusal(read, 'readonly') === null);
+  check('and nothing is refused this way under guarded — approval decides there', policyRefusal(del, 'guarded') === null);
+  check('  where the same delete does ask first', needsApproval([del], 'guarded').length === 1);
+}
+
+/*
+ * Unprompted messages to other people have a ceiling per turn.
+ *
+ * Under `auto` nothing asks before `send_email`, so a page carrying an
+ * instruction, or a model stuck retrying, could send the same email dozens of
+ * times in a turn — each one unrecallable.
+ */
+section('outbound messages under auto');
+{
+  const { outboundRefusal, OUTBOUND, OUTBOUND_PER_TURN, needsApproval } = await import('../server/agent.js');
+  const { assessRisk } = await import('../server/tools/definitions.js');
+  const mail = (i) => ({ id: `m${i}`, name: 'send_email', input: { to: 'a@example.com' } });
+
+  const sent = { count: 0 };
+  const outcomes = Array.from({ length: OUTBOUND_PER_TURN + 2 }, (_, i) => outboundRefusal(mail(i), 'auto', sent));
+  check(`the first ${OUTBOUND_PER_TURN} go out`, outcomes.slice(0, OUTBOUND_PER_TURN).every((r) => r === null));
+  check('  the next ones are refused', outcomes.slice(OUTBOUND_PER_TURN).every((r) => r?.isError === true));
+  check('  and the model is told to stop and report', /tell the user exactly what was sent/.test(outcomes.at(-1)?.content || ''), outcomes.at(-1)?.content);
+  check('reading is never counted', outboundRefusal({ id: 'r', name: 'read_file', input: {} }, 'auto', { count: 99 }) === null);
+  check('a fresh turn starts from zero', outboundRefusal(mail(0), 'auto', { count: 0 }) === null);
+
+  // The ceiling is only safe to leave off other policies because every one of
+  // these asks first there. If one stops being sensitive, that stops being true.
+  const unasked = [...OUTBOUND].filter((name) => assessRisk(name, {}) !== 'sensitive' || needsApproval([{ id: 'x', name, input: {} }], 'guarded').length !== 1);
+  check('every outbound tool asks first under guarded', unasked.length === 0, unasked.join(', '));
+  check('  so the ceiling does not apply there', outboundRefusal(mail(0), 'guarded', { count: 99 }) === null);
+
+  // The loop has two places that run tool calls; both must carry the counter.
+  const source = fs.readFileSync(new URL('../server/agent.js', import.meta.url), 'utf8');
+  const sites = source.split('await runToolCalls({').slice(1).map((rest) => rest.slice(0, rest.indexOf('})')));
+  check('both places the loop runs tools pass the per-turn counter', sites.length === 2 && sites.every((site) => site.includes('policy, sent')), `${sites.length} sites`);
+}
+
+section('pictures come from a model that still exists, and are booked');
+{
+  /*
+   * `generate_image` called Imagen 4, whose endpoints Google shut down on
+   * 2026-08-17 (GAP-008), and never recorded what it spent (CODE-024). The
+   * replacement is the Interactions API, one image per request. A stand-in
+   * client pins what is sent and what is read back — the real client needs a key
+   * and costs money per call, and no live call is made here.
+   */
+  const { requestImages } = await import('../server/tools/cloud.js');
+  const sent = [];
+  const client = {
+    interactions: {
+      create: async (req) => {
+        sent.push(req);
+        return {
+          output_image: { data: 'aGVsbG8=', mime_type: 'image/png' },
+          usage: { total_input_tokens: 12, total_output_tokens: 1290 },
+        };
+      },
+    },
+  };
+  const got = await requestImages(client, { model: 'gemini-3.1-flash-image', prompt: 'a lighthouse', count: 3, aspectRatio: '16:9' });
+  check('one request per picture', sent.length === 3, String(sent.length));
+  check('  to the replacement model, not the retired one', sent.every((r) => r.model === 'gemini-3.1-flash-image'));
+  check('  asking for an image in the requested shape', sent.every((r) => r.response_format?.type === 'image' && r.response_format?.aspect_ratio === '16:9'));
+  check('three pictures come back', got.images.length === 3 && got.images[0].mime === 'image/png');
+  check('and the provider\'s own token counts are summed for booking', got.usage.input === 36 && got.usage.output === 3870, JSON.stringify(got.usage));
+
+  const declining = { interactions: { create: async () => ({ output_text: 'I can\'t make that.', usage: { total_input_tokens: 9, total_output_tokens: 4 } }) } };
+  const refused = await requestImages(declining, { model: 'm', prompt: 'x', count: 1 });
+  check('a refusal is reported as a refusal, with its reason', refused.images.length === 0 && /can't make that/.test(refused.refusal || ''));
+  check('  and still booked — a declined request is still paid for', refused.usage.input === 9);
+
+  const broken = { interactions: { create: async () => { throw new Error('404 model not found'); } } };
+  let thrown = '';
+  try {
+    await requestImages(broken, { model: 'imagen-4.0-generate-001', prompt: 'x', count: 2 });
+  } catch (err) {
+    thrown = err.message;
+  }
+  check('every request failing is an error, not an empty success', /404/.test(thrown), thrown);
+}
+
+section('two memory notes written in one step both survive');
+{
+  /*
+   * `memory_write` read the whole memory object, changed one key and wrote the
+   * whole object back. The agent runs up to four tool calls at once, so a write
+   * beside an append both read the same object and the second erased the first
+   * — both reporting success (CODE-023). Its neighbours were moved to a merge
+   * for exactly this; it was not.
+   *
+   * This reproduces even on PGlite, where statements run one at a time, because
+   * the read and the write are two awaited statements and `Promise.all` lets both
+   * reads finish before either write.
+   */
+  const { executeTool } = await import('../server/tools/execute.js');
+  await Promise.all([
+    executeTool({ user, name: 'memory_write', input: { key: 'lease', content: 'deposit is two months' }, chatId: null }),
+    executeTool({ user, name: 'memory_append', input: { key: 'preferences', content: 'replies in Vietnamese' }, chatId: null }),
+    executeTool({ user, name: 'memory_write', input: { key: 'car', content: 'service due in March' }, chatId: null }),
+  ]);
+  const memory = (await store.getUserSetting(user.id, 'memory')) || {};
+  check('a note written beside two others survives', memory.lease?.content === 'deposit is two months', JSON.stringify(Object.keys(memory)));
+  check('  and so does the appended one', /Vietnamese/.test(memory.preferences?.content || ''));
+  check('  and the third', memory.car?.content === 'service due in March');
+
+  const poisoned = await executeTool({ user, name: 'memory_write', input: { key: '__proto__', content: 'x' }, chatId: null });
+  check('a note named __proto__ is refused rather than silently lost', poisoned.isError === true && /cannot be used as a note name/.test(poisoned.content), poisoned.content);
+}
+
+section('setting up work that runs unwatched asks first');
+{
+  /*
+   * `schedule_task` and `workflow_write` store a prompt the scheduler later runs
+   * with nobody at the approval bar; `skill_write` puts text into the trusted
+   * part of every future system prompt. All three were graded `ordinary`, so
+   * under the default policy a single injected instruction could set up
+   * recurring work, or a prompt injection that outlives the session, without
+   * anyone being asked (SEC-027).
+   */
+  const { needsApproval: approvalFor } = await import('../server/agent.js');
+  for (const name of ['schedule_task', 'workflow_write', 'skill_write']) {
+    check(`${name} asks under the default policy`, approvalFor([{ id: 'x', name, input: {} }], 'guarded').length === 1);
+  }
+  check('while cancelling a task — which only stops work — does not', approvalFor([{ id: 'x', name: 'cancel_task', input: {} }], 'guarded').length === 0);
+}
+
+section('a resume does not repeat what may already have happened');
+{
+  /*
+   * A resume finds an assistant turn with calls and no results. That has two
+   * causes — stopped before the calls began, or killed while they ran — and the
+   * resume used to treat both as the first, running everything again. A
+   * function timeout lands precisely in the second window, which is as long as
+   * the tools take. `send_email` run twice is two emails.
+   */
+  const { resumableCalls } = await import('../server/agent.js');
+
+  const calls = [
+    { id: 'c1', name: 'send_email', input: { to: 'a@example.com' } },
+    { id: 'c2', name: 'web_search', input: { query: 'x' } },
+    { id: 'c3', name: 'write_file', input: { path: 'a.txt', content: 'x' } },
+    { id: 'c4', name: 'mcp__server__do_thing', input: {} },
+  ];
+
+  const fresh = resumableCalls(calls, []);
+  check('calls that never started all run', fresh.run.length === 4 && fresh.skipped.length === 0);
+
+  const interrupted = resumableCalls(calls, ['c1', 'c2', 'c3', 'c4']);
+  const ranNames = interrupted.run.map((c) => c.name);
+  check('a started email is not sent again', !ranNames.includes('send_email'), ranNames.join(','));
+  check('  nor a started file write', !ranNames.includes('write_file'));
+  check('  nor a started MCP tool — outside the catalogue counts as able to change something', !ranNames.includes('mcp__server__do_thing'));
+  check('  while a started read runs again, because reading twice costs nothing', ranNames.includes('web_search'));
+
+  const said = interrupted.skipped.find((r) => r.name === 'send_email');
+  check('the skipped call gets a result the model can act on', said?.isError === true && /may have completed/i.test(said?.content || ''));
+  check('  and it is told to check rather than retry', /check whether it took effect/i.test(said?.content || ''));
+
+  const partly = resumableCalls(calls, ['c1']);
+  check('only the calls that started are held back', partly.skipped.length === 1 && partly.run.length === 3);
+}
+
+section('the modules in an import cycle can each be loaded first');
+{
+  /**
+   * There are three cycles through the agent loop, and they work — for a reason
+   * nobody is currently checking.
+   *
+   *   execute -> cloud -> subagents -> execute
+   *   agent   -> execute -> cloud -> scheduler -> agent
+   *   agent   -> execute -> cloud -> workflows -> agent
+   *
+   * ESM handles a cycle as long as every reference resolves when it is *called*
+   * rather than when the module is evaluated. None of these six files calls an
+   * imported function at module top level today, which is why nothing has
+   * broken. Add one `const X = importedFn()` up there and it is `undefined` on
+   * one entry path and defined on another, depending which module the process
+   * happened to reach first.
+   *
+   * Not hypothetical here: this same audit found import-time evaluation twice —
+   * `render.js` freezing its file nouns, `workflows.js` freezing two label maps
+   * — both written by people who did not expect it either.
+   *
+   * So each member is loaded first, in its own process. A top-level evaluation
+   * that only works from one direction fails here, and names the file.
+   */
+  const members = [
+    'server/agent.js',
+    'server/tools/execute.js',
+    'server/tools/cloud.js',
+    'server/subagents.js',
+    'server/scheduler.js',
+    'server/workflows.js',
+  ];
+
+  const { spawnSync } = await import('node:child_process');
+  for (const entry of members) {
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', `await import('./${entry}');`], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    check(
+      `${entry} loads as the first module in the graph`,
+      run.status === 0,
+      String(run.stderr || '').trim().split('\n').slice(-2).join(' ').slice(0, 160),
+    );
+  }
 }
 
 removeTemp(process.env.DATA_DIR);

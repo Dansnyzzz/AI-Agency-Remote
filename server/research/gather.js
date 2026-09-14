@@ -1,10 +1,49 @@
 import { search as defaultSearch } from '../search.js';
 import { registrableDomain, RANK_ORDER } from './confidence.js';
 
-const REPUTABLE = new Set([
+/**
+ * Which outlets carry the standing that lets two of them make a claim HIGH.
+ *
+ * This was twelve Anglophone outlets and nothing else. `grade()` awards HIGH
+ * only on two independent sources ranked `reputable` or better that were
+ * actually opened, and every host not on the list ranks `blog` — so a claim
+ * confirmed by VnExpress, Tuổi Trẻ and Thanh Niên, all fetched and read, was
+ * capped at MEDIUM, while the same claim from two Reuters pages was HIGH
+ * (ACC-006). For an app whose interface ships in Vietnamese and whose clients'
+ * questions are largely about a Vietnamese market, the grader was marking down
+ * exactly the sources most likely to be right about local facts, and a reader
+ * seeing MEDIUM could not tell that apart from thin evidence.
+ *
+ * Two changes, and they are different kinds of change.
+ *
+ * `REGIONAL` is a judgement, and it is stated as one: the national wire service
+ * (VNA) and the major national dailies and broadcasters, chosen by the same test
+ * the comment on `rankSource` gives — does it carry the weight of a wire service
+ * or a major outlet, or is it a blog. The owner of a deployment is better placed
+ * to make that call than this file is, which is the reason for the second change.
+ *
+ * `RESEARCH_REPUTABLE_DOMAINS` adds registrable domains, comma-separated, without
+ * editing code. A market this list does not know about needs a line in `.env`,
+ * not a release.
+ */
+const GLOBAL = [
   'reuters.com', 'apnews.com', 'bbc.co.uk', 'bbc.com', 'nytimes.com', 'wsj.com',
   'ft.com', 'economist.com', 'nature.com', 'science.org', 'bloomberg.com', 'theguardian.com',
-]);
+];
+const REGIONAL = [
+  // Vietnam: the national news agency, then national dailies and broadcasters.
+  'vnanet.vn', 'vnexpress.net', 'tuoitre.vn', 'thanhnien.vn', 'vietnamnet.vn',
+  'nhandan.vn', 'vtv.vn', 'vov.vn', 'baochinhphu.vn', 'vneconomy.vn',
+];
+const configured = () =>
+  String(process.env.RESEARCH_REPUTABLE_DOMAINS || '')
+    .split(',')
+    .map((d) => d.trim().toLowerCase().replace(/^www\./, ''))
+    .filter(Boolean);
+// Read per call rather than frozen at import, so a changed setting takes effect
+// without depending on module load order — the import-time freeze this audit
+// found twice elsewhere.
+const reputable = () => new Set([...GLOBAL, ...REGIONAL, ...configured()]);
 const PRIMARY = /(^|\.)gov($|\.)|(^|\.)edu($|\.)|europa\.eu$|who\.int$|arxiv\.org$/;
 const SOCIAL = /(^|\.)(twitter|x|reddit|facebook|instagram|tiktok|medium)\.com$/;
 
@@ -28,7 +67,7 @@ export function rankSource(url) {
     }
   })();
   if (PRIMARY.test(host)) return 'primary';
-  if (REPUTABLE.has(d)) return 'reputable';
+  if (reputable().has(d)) return 'reputable';
   if (SOCIAL.test(host)) return 'social';
   return 'blog';
 }

@@ -298,6 +298,60 @@ section('nothing reaches outside the workspace');
   // An absolute path is the same attempt, spelled differently.
   const absolute = await owner.call('GET', `/api/workspace/file?path=${q(OUTSIDE)}`);
   check('an absolute path outside is refused too', absolute.status >= 400, `got ${absolute.status}`);
+
+  /*
+   * A dangling link — one whose target does not exist yet — used to walk
+   * straight out. `existsSync` follows links, so the link read as absent, the
+   * containment probe climbed past it to the workspace root, and the name was
+   * approved as a new file inside. Writing to it followed the link and created
+   * the target wherever it pointed. A cloned repository can carry exactly such a
+   * link, aimed at a Startup folder.
+   *
+   * Creating a symlink on Windows needs Developer Mode or elevation, so the suite
+   * tries a file symlink and then a junction, and says plainly if it could make
+   * neither rather than passing without having tested anything.
+   */
+  const escapeTarget = path.join(os.tmpdir(), `ai-remote-dangling-target-${process.pid}.txt`);
+  fs.rmSync(escapeTarget, { force: true });
+  const linkName = 'dangling-link';
+  const linkPath = path.join(process.env.WORKSPACE, linkName);
+  let linkKind = null;
+  try {
+    fs.symlinkSync(escapeTarget, linkPath, 'file');
+    linkKind = 'symlink';
+  } catch {
+    try {
+      // A junction needs a directory target; aim it at a directory that does not exist.
+      fs.symlinkSync(`${escapeTarget}-dir`, linkPath, 'junction');
+      linkKind = 'junction';
+    } catch {
+      linkKind = null;
+    }
+  }
+
+  if (!linkKind) {
+    console.log('  [33m![0m  could not create a symlink or junction here — the dangling-link case was not exercised on this machine');
+  } else {
+    const via = linkKind === 'symlink' ? linkName : `${linkName}/evil.txt`;
+    const wrote = await owner.call('PUT', '/api/workspace/file', { path: via, content: 'escaped' });
+    /*
+     * Asserted on the reason, not the status. On a machine that can only make a
+     * junction, the old code also failed this write — with ENOENT, because the
+     * junction's target directory does not exist — so a status check passed on
+     * the broken code for an accidental reason. The containment refusal is what
+     * has to be seen.
+     */
+    const why = JSON.stringify(wrote.json || {});
+    check(
+      `a write through a dangling ${linkKind} is refused by the containment check`,
+      wrote.status >= 400 && /goes through a link/.test(why),
+      `got ${wrote.status}: ${why.slice(0, 90)}`,
+    );
+    const landed = linkKind === 'symlink' ? escapeTarget : path.join(`${escapeTarget}-dir`, 'evil.txt');
+    check('  and nothing was created where it pointed', !fs.existsSync(landed));
+    fs.rmSync(linkPath, { force: true, recursive: false });
+  }
+  fs.rmSync(escapeTarget, { force: true });
 }
 
 section('and nothing reaches another account');

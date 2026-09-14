@@ -181,6 +181,49 @@ section('the effort dial reaches Gemini');
   check('xhigh and max both clamp to HIGH', THINKING_LEVEL.xhigh === 'HIGH' && THINKING_LEVEL.max === 'HIGH');
 }
 
+section('an unattended run has to earn the word ok');
+{
+  /*
+   * `runTask` opened at `ok` and only an `error` event or a throw moved it. So a
+   * scheduled run that exhausted its step budget, came back truncated, refused
+   * or filtered, or halted for an approval nobody was awake to give, was stored
+   * as a success.
+   *
+   * That matters more here than in the transcript. An unattended run has no
+   * `emit` consumer, nobody watched the stream, and the conversation is read
+   * only if something prompts you to look — and `ok` is exactly what stops
+   * anybody looking.
+   *
+   * Driven across the whole STOP_KINDS vocabulary rather than a couple of
+   * examples, so a kind added later is covered by this the day it is added
+   * rather than the day somebody notices.
+   */
+  const { unattendedStatus } = await import('../server/scheduler.js');
+
+  for (const kind of STOP_KINDS) {
+    const got = unattendedStatus('ok', kind, false);
+    const shouldBeOk = isComplete(kind);
+    check(
+      `${kind} -> ${shouldBeOk ? 'ok' : 'stopped'}`,
+      shouldBeOk ? got === 'ok' : got === `stopped: ${kind}`,
+      got,
+    );
+  }
+
+  check(
+    'an approval nobody could answer is a stop, not a success',
+    unattendedStatus('ok', 'end_turn', true).startsWith('stopped:'),
+    unattendedStatus('ok', 'end_turn', true),
+  );
+  check(
+    'a real error outranks both — it says more than they can',
+    unattendedStatus('error: the provider refused the key', 'truncated', true)
+      === 'error: the provider refused the key',
+  );
+  check('and an ordinary finish is still ok', unattendedStatus('ok', 'end_turn', false) === 'ok');
+  check('as is one that never reported an ending at all', unattendedStatus('ok', null, false) === 'ok');
+}
+
 console.log(
   failures === 0
     ? '\n\x1b[32mAll stop-reason checks passed.\x1b[0m\n'

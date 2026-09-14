@@ -149,18 +149,50 @@ export function activeTranscript(messages) {
   if (last < 0) return messages;
 
   const summary = messages[last];
+
+  /**
+   * The tail is chosen by what the summary *covers*, not by where it sits.
+   *
+   * It used to be `messages.slice(last + 1)`, which is right only if the summary
+   * was inserted ahead of the turns it does not stand for. Nothing inserts it
+   * there. `compact()` writes it with `appendMessage` — `MAX(seq) + 1` — and the
+   * loop pushes it onto the end of the array, so it is the *last* element and
+   * that slice is empty. The model was handed the summary alone: not the eight
+   * turns `KEEP_RECENT` exists to preserve, and not the question the user had
+   * just asked, which had been appended moments earlier.
+   *
+   * It recovered on the following turn, because a new user message then landed
+   * after the summary — which is why this survived being looked at. What did not
+   * recover was the kept turns: excluded from the summary by design, excluded
+   * from the tail by position, and never sent again on any later turn either.
+   *
+   * `covers` is the `seq` of the newest message the summary stands for, so the
+   * tail is everything newer than that, wherever the summary happens to lie.
+   * Summaries written before this field existed do not have it; those fall back
+   * to the old slice, which is what they were stored expecting and which is
+   * harmless now — the turn they damaged is long past.
+   */
+  const covers = Number(summary.covers);
+  const tail = Number.isFinite(covers)
+    ? messages.filter((m, i) => i !== last && Number.isFinite(Number(m.seq)) && Number(m.seq) > covers)
+    : messages.slice(last + 1);
+
   return [
     // Handed over as something the user said, because that is the only role
     // every provider accepts unconditionally at the start of a transcript.
     {
       id: summary.id,
+      // Carried so a second fold can tell this apart from the turns after it.
+      // Without it the re-roled summary has no position, and `covers` on the
+      // next summary cannot be computed from the transcript it summarised.
+      seq: summary.seq,
       role: 'user',
       text:
         'Summary of the earlier part of this conversation, which has been folded up to save room:\n\n' +
         `${summary.text}\n\n` +
         'Continue from here. Ask if you need something from before that the summary does not cover.',
     },
-    ...messages.slice(last + 1),
+    ...tail,
   ];
 }
 
@@ -281,6 +313,16 @@ export async function compact({ userId, chatId, entry, prefs, messages, signal, 
     text: summary,
     // What it stands in for, so the interface can say so honestly.
     replaced: older.length,
+    /**
+     * The newest message this summary speaks for, by `seq`.
+     *
+     * `replaced` is a count, and a count cannot survive being appended: the
+     * summary lands at the end of the transcript, so "the first N" is no longer
+     * a position anybody can act on. `activeTranscript` needs a boundary rather
+     * than a quantity — everything newer than this is the tail, and the tail is
+     * the eight turns `KEEP_RECENT` kept plus whatever the user has said since.
+     */
+    covers: Number(older[older.length - 1]?.seq),
   };
   await store.appendMessage(userId, chatId, message);
   return message;

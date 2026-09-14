@@ -23,6 +23,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { claim, publishFrame, release, watcherPreference } from './screen.js';
 import { dataDir } from './paths.js';
+// The same address check `download_file` uses, so "reaching off this machine"
+// means one thing here rather than three. See `renderPdf`.
+import { assertPublic } from '../server/util/safeFetch.js';
 
 /**
  * One browsing session — the tabs, cookies and sign-ins of one conversation.
@@ -1562,13 +1565,45 @@ export async function userInput({ type, x, y, toX, toY, button = 'left', key, te
  * afterwards whatever happens — a print job must not leave litter behind.
  */
 export async function renderPdf({ html, url, landscape = false }) {
+  /**
+   * Checked before a browser is started, not after a tab is open.
+   *
+   * This was the only url-taking tool on this machine that checked nothing.
+   * `browserOpen` requires `^https?://`; `download_file` goes through
+   * `safeFetch`, which refuses every private range. This went straight to
+   * `goto` with whatever the model supplied, and `assessRisk` grades
+   * `export_pdf` `ordinary` — so under the default policy it ran with no
+   * prompt. `file:///C:/Users/…/.env` rendered somebody's secrets into a PDF
+   * inside the workspace, where `read_file` picks it up;
+   * `http://169.254.169.254/` did the same for cloud metadata on a hosted
+   * worker.
+   *
+   * The scheme test is what closes the local-file read outright. `assertPublic`
+   * is a mitigation and not a guarantee, and it is worth being exact about why:
+   * it resolves the name, and Playwright then resolves it again when it
+   * connects. That is the same time-of-check gap `safeFetch` closes by pinning
+   * the socket, and there is no equivalent hook in the browser — so a
+   * one-second-TTL rebind is still reachable. It stops every static private
+   * target, which is what is actually aimed at.
+   *
+   * Up here rather than beside the `goto` so a refusal costs nothing: no
+   * browser started, no tab opened, no tab to clean up.
+   */
+  const target = url ? String(url).trim() : '';
+  if (target) {
+    if (!/^https?:\/\//i.test(target)) {
+      throw new Error('Printing needs a full http(s) URL. To print your own markup, pass `html` instead.');
+    }
+    await assertPublic(new URL(target));
+  }
+
   const s = await sessionFor(null);
   const ctx = await ensureContext(s);
   const sheet = await ctx.newPage();
 
   try {
-    if (url) {
-      await sheet.goto(url, { waitUntil: 'load', timeout: NAV_TIMEOUT });
+    if (target) {
+      await sheet.goto(target, { waitUntil: 'load', timeout: NAV_TIMEOUT });
     } else {
       await sheet.setContent(String(html ?? ''), { waitUntil: 'load', timeout: NAV_TIMEOUT });
     }

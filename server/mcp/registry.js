@@ -54,6 +54,52 @@ export const slugify = (name) =>
     .slice(0, 32) || 'server';
 
 /**
+ * The longest tool name every provider accepts.
+ *
+ * Anthropic allows `^[a-zA-Z0-9_-]{1,128}$`; OpenAI-style function names stop
+ * at 64. The request goes to whichever provider the account picked, so the
+ * stricter rule is the one that holds.
+ */
+const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * Which of a server's tools can be offered to a model, and why the rest cannot.
+ *
+ * The server chooses these names and schemas, not this app. One tool named
+ * `search.files`, one name past the length limit, or an `inputSchema` that is
+ * not an object schema makes the provider refuse the **whole** request — so a
+ * single careless tool on one server used to break every turn on the account.
+ * Such a tool is left out and named in the server's status instead. A repeated
+ * name is left out too, for the same reason.
+ *
+ * @param {string} id  the server's slug
+ * @param {Array<{ name?: unknown, inputSchema?: unknown }>} list
+ */
+export function offerable(id, list) {
+  const usable = [];
+  const skipped = [];
+  const seen = new Set();
+  for (const tool of Array.isArray(list) ? list : []) {
+    const raw = typeof tool?.name === 'string' ? tool.name : '';
+    const schema = tool?.inputSchema;
+    let reason = null;
+    if (!raw || !TOOL_NAME.test(`${PREFIX}${id}__${raw}`)) reason = 'name has characters or a length providers refuse';
+    else if (seen.has(raw)) reason = 'name repeated';
+    else if (
+      schema != null &&
+      (typeof schema !== 'object' || Array.isArray(schema) || ('type' in schema && schema.type !== 'object'))
+    )
+      reason = 'input schema is not an object schema';
+    if (reason) skipped.push({ name: raw.slice(0, 80), reason });
+    else {
+      seen.add(raw);
+      usable.push(tool);
+    }
+  }
+  return { usable, skipped };
+}
+
+/**
  * A stored config, with its secrets brought back.
  *
  * Both catches used to swallow the failure and carry on with `{}`. That is the
@@ -167,8 +213,37 @@ export async function mcpTools(userId) {
   const tools = [];
   const servers = [];
 
+  /**
+   * Two servers whose names reduce to the same slug cannot both be offered.
+   *
+   * The store keeps names unique only case-insensitively, so "My Figma" and
+   * "my-figma" are two rows and one slug. The add route refuses that now, but
+   * rows saved before it did still exist. Both used to connect at once: the
+   * second `mine.set` replaced the first connection without closing it (a child
+   * process or socket nobody could reach again), and both advertised identical
+   * tool names, which providers reject as a malformed request — every turn on
+   * the account failed. The first row keeps the slug; the later one is reported
+   * broken with a message saying why.
+   */
+  const claimed = new Map();
+  const unique = [];
+  for (const row of enabled) {
+    const id = slugify(row.name);
+    if (claimed.has(id)) {
+      servers.push({
+        id,
+        name: row.name,
+        error: `Its tool names would collide with the server "${claimed.get(id)}". Rename one of them.`,
+        tools: 0,
+      });
+      continue;
+    }
+    claimed.set(id, row.name);
+    unique.push(row);
+  }
+
   await Promise.all(
-    enabled.map(async (row) => {
+    unique.map(async (row) => {
       const id = slugify(row.name);
       const held = mine.get(id);
 
@@ -184,13 +259,14 @@ export async function mcpTools(userId) {
 
       if (current?.connection) {
         tools.push(...current.tools);
-        servers.push({ id, name: row.name, tools: current.tools.length, server: current.connection.server });
+        servers.push({ id, name: row.name, tools: current.tools.length, skipped: current.skipped, server: current.connection.server });
         return;
       }
 
       try {
         const connection = await connectMcp(stored(row));
-        const advertised = connection.tools.map((tool) => ({
+        const { usable, skipped } = offerable(id, connection.tools);
+        const advertised = usable.map((tool) => ({
           name: `${PREFIX}${id}${'__'}${tool.name}`,
           scope: 'mcp',
           // Everything from outside is treated as changing something. See
@@ -201,10 +277,11 @@ export async function mcpTools(userId) {
             `[${row.name}] ${tool.description || tool.title || 'No description given by the server.'}`.slice(0, 1024),
           parameters: tool.inputSchema || { type: 'object', properties: {} },
         }));
+        if (skipped.length) log.warn('mcp: tools not offered', { server: id, skipped });
 
-        mine.set(id, { connection, tools: advertised, error: null, at: Date.now() });
+        mine.set(id, { connection, tools: advertised, skipped, error: null, at: Date.now() });
         tools.push(...advertised);
-        servers.push({ id, name: row.name, tools: advertised.length, server: connection.server });
+        servers.push({ id, name: row.name, tools: advertised.length, skipped, server: connection.server });
       } catch (err) {
         mine.set(id, { connection: null, tools: [], error: err.message, at: Date.now() });
         servers.push({ id, name: row.name, error: err.message, tools: 0 });
@@ -306,4 +383,4 @@ export function closeAllMcp() {
   for (const [userId] of live) forgetMcp(userId);
 }
 
-export const __testing = { live, slugify, splitMcpName };
+export const __testing = { live, slugify, splitMcpName, offerable };

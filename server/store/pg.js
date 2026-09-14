@@ -185,8 +185,13 @@ export function splitStatements(sql) {
  *      tool_jobs.device_id — plus the unique pairing code that 16 wrote down
  *      as needed and deferred, partial over unclaimed rows and backfilled
  *      first, so an installer can no longer be told the wrong account
+ *  18  chats.next_seq, a per-conversation counter that appendMessage bumps, so
+ *      two appends at once cannot both number themselves MAX(seq)+1; backfilled
+ *      from the messages already there before its default is set. Deliberately
+ *      not a unique (chat_id, seq) — that needs existing collisions renumbered,
+ *      and renumbering would move the seq a summary's `covers` points at
  */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /**
  * How long a run lease may go untouched before another run may take it.
@@ -269,13 +274,26 @@ export function createPgStore(connectionString) {
          * constraint "pg_type_typname_nsp_index"`. In a transaction the loser
          * rolls back cleanly instead of half-applying.
          *
-         * The fallback stays for the driver-object path the isolation tests
-         * use, which has no `transaction`.
+         * The driver-object path — PGlite on a laptop, and the tests — has no
+         * `transaction`, and used to run the statements bare. A failure half
+         * way (a disk filling, the process killed during a version bump) left
+         * the first half applied and the rest not: a schema matching no version
+         * of the code. The one connection that driver wraps takes an explicit
+         * BEGIN/COMMIT, and Postgres DDL is transactional, so it gets the same
+         * all-or-nothing the Neon path has. Nothing in schema.sql refuses to run
+         * in a transaction — the Neon path already proves that on every deploy.
          */
         if (typeof sql.transaction === 'function') {
           await sql.transaction(statements.map((stmt) => sql.query(stmt)));
         } else {
-          for (const stmt of statements) await sql.query(stmt);
+          await sql.query('BEGIN');
+          try {
+            for (const stmt of statements) await sql.query(stmt);
+            await sql.query('COMMIT');
+          } catch (err) {
+            await sql.query('ROLLBACK').catch(() => {});
+            throw err;
+          }
         }
 
         /**
@@ -1005,12 +1023,42 @@ export function createPgStore(connectionString) {
     },
     async appendMessage(userId, chatId, message) {
       const { id, role, ...rest } = message;
+      /**
+       * The number comes from bumping the conversation's counter, not from
+       * reading the highest one (ARCH-007).
+       *
+       * This computed `MAX(seq) + 1` inside the insert. Two appends to one
+       * conversation at once both read the same maximum and both wrote it, and
+       * nothing refused the second, so two turns shared a position the whole
+       * transcript is ordered by. An UPDATE is different in exactly the way that
+       * matters: when it has to wait for another writer's row lock, Postgres
+       * re-reads the row before applying it, so the second append sees the first
+       * one's increment. A subquery is not re-read that way.
+       *
+       * `GREATEST` with the old reading covers two edges, and both are rollout
+       * edges rather than steady state. A conversation created in the moment
+       * between adding the column and setting its default has a NULL counter,
+       * and `GREATEST` ignores NULL. And an instance still running the old code
+       * during a deploy inserts without bumping the counter; taking the larger of
+       * the two keeps the new code from handing out a number the old code has
+       * already used.
+       *
+       * The ownership test moved into the UPDATE's WHERE, so an append for a
+       * conversation that is not this account's bumps nothing and inserts
+       * nothing — the same refusal the EXISTS gave before.
+       */
       const rows = await q(
-        `INSERT INTO messages (id, chat_id, seq, role, content)
-         SELECT $1, $2,
-                COALESCE((SELECT MAX(seq) + 1 FROM messages WHERE chat_id = $2), 0),
-                $3, $4
-          WHERE EXISTS (SELECT 1 FROM chats WHERE id = $2 AND user_id = $5)
+        `WITH bump AS (
+           UPDATE chats
+              SET next_seq = GREATEST(
+                    next_seq,
+                    (SELECT COALESCE(MAX(seq) + 1, 0) FROM messages WHERE chat_id = $2)
+                  ) + 1
+            WHERE id = $2 AND user_id = $5
+        RETURNING next_seq - 1 AS seq
+         )
+         INSERT INTO messages (id, chat_id, seq, role, content)
+         SELECT $1, $2, bump.seq, $3, $4 FROM bump
       RETURNING id, seq`,
         [id, chatId, role, JSON.stringify(rest), userId],
       );
@@ -1041,6 +1089,37 @@ export function createPgStore(connectionString) {
      * Only user turns. An assistant message is a record of what a model
      * actually said, and editing that is forging evidence.
      */
+    /**
+     * Record that these tool calls have begun executing, on the assistant turn
+     * that asked for them.
+     *
+     * A run can be killed between a tool finishing and its result being stored —
+     * the function timeout on a deployment, a reconnection taking the lease — and
+     * the resume path then finds an assistant turn with calls and no results. It
+     * used to run them all again. For a read that is harmless; for `send_email`
+     * it is a second email. This marker is what lets the resume tell "never
+     * started" from "started, outcome unknown" (AUTO-007).
+     *
+     * Appended in SQL rather than read-modify-written in JS, because the two
+     * writers that race here are exactly the superseded run and the one that
+     * replaced it. Duplicates in the array are harmless; the reader takes a Set.
+     * Scoped through the owning chat like every other message write.
+     */
+    async markToolCallsStarted(userId, chatId, messageId, callIds) {
+      if (!Array.isArray(callIds) || !callIds.length) return;
+      await q(
+        `UPDATE messages m
+            SET content = jsonb_set(
+                  m.content,
+                  '{startedCalls}',
+                  COALESCE(m.content->'startedCalls', '[]'::jsonb) || $4::jsonb,
+                  true)
+           FROM chats c
+          WHERE m.id = $3 AND m.chat_id = $2 AND c.id = m.chat_id AND c.user_id = $1`,
+        [userId, chatId, messageId, JSON.stringify(callIds.map(String))],
+      );
+    },
+
     async editUserMessage(userId, chatId, messageId, text) {
       const rows = await q(
         `SELECT m.seq, m.content, m.role
@@ -1516,10 +1595,26 @@ export function createPgStore(connectionString) {
     },
 
     // ── worker presence ─────────────────────────────────────────────
+    /**
+     * A heartbeat may refresh a worker. It may not take one over.
+     *
+     * This used to set `user_id = EXCLUDED.user_id` on conflict, so whoever
+     * beat last owned the row. `app.js` identifies a paired machine by its
+     * device row and ignores the id it reports — but it falls back to the
+     * client's `workerId` for a legacy worker paired before devices existed, and
+     * on that path an account could name somebody else's worker id and take the
+     * row. The victim's `activeWorker` then finds nothing, so their local tools
+     * stop being offered with no error anywhere.
+     *
+     * Re-owning was never the intent — it reads as a convenience for a machine
+     * that changed hands. A machine that changes hands should be paired again,
+     * which is the path that proves who it belongs to.
+     */
     async heartbeat(userId, workerId, info) {
       await q(
         `INSERT INTO workers (id, user_id, last_seen, info) VALUES ($1, $2, NOW(), $3)
-         ON CONFLICT (id) DO UPDATE SET last_seen = NOW(), info = EXCLUDED.info, user_id = EXCLUDED.user_id`,
+         ON CONFLICT (id) DO UPDATE SET last_seen = NOW(), info = EXCLUDED.info
+         WHERE workers.user_id = $2`,
         [workerId, userId, JSON.stringify(info ?? {})],
       );
     },
@@ -1765,6 +1860,67 @@ export function createPgStore(connectionString) {
      * a single INSERT, and where the driver has `transaction` the delete and
      * the insert commit together or not at all.
      */
+    /**
+     * Every file in one batch, in two statements rather than two per file.
+     *
+     * `replaceDocChunks` is properly bulk for one path — one `unnest` insert for
+     * however many chunks it has. The caller then ran it in a loop, once per
+     * file, on a driver whose defining property is one round trip per statement:
+     * indexing a source tree of forty files paid forty sequential round trips
+     * with all the data already in hand.
+     *
+     * The DELETE takes the whole set of paths at once and the INSERT takes every
+     * row, so the cost stops scaling with the number of files. Where the driver
+     * has `transaction` the pair commits together, which also makes the batch
+     * atomic across files rather than merely within each one — a partial index
+     * refresh is a worse thing to leave behind than a failed one.
+     */
+    async replaceDocChunksMany(userId, groups) {
+      const entries = [...groups].filter(([, rows]) => Array.isArray(rows));
+      if (!entries.length) return;
+
+      const paths = entries.map(([p]) => p);
+      const rows = entries.flatMap(([p, list]) => list.map((r) => ({ ...r, path: p })));
+
+      const del = ['DELETE FROM doc_chunks WHERE user_id = $1 AND path = ANY($2::text[])', [userId, paths]];
+      if (!rows.length) {
+        await q(...del);
+        return;
+      }
+
+      const ins = [
+        `INSERT INTO doc_chunks (id, user_id, source, path, ordinal, heading, text, embedding, dims, model, mtime)
+         SELECT * FROM unnest(
+           $1::text[], $2::text[], $3::text[], $4::text[], $5::int[], $6::text[],
+           $7::text[], $8::text[], $9::int[], $10::text[], $11::bigint[]
+         )`,
+        [
+          rows.map((r) => r.id),
+          rows.map(() => userId),
+          rows.map((r) => r.source),
+          rows.map((r) => r.path),
+          rows.map((r) => r.ordinal),
+          rows.map((r) => r.heading ?? null),
+          rows.map((r) => r.text),
+          rows.map((r) => r.embedding),
+          rows.map((r) => r.dims),
+          rows.map((r) => r.model),
+          rows.map((r) => r.mtime ?? null),
+        ],
+      ];
+
+      if (typeof sql.transaction === 'function') {
+        await ready();
+        await sql.transaction([sql.query(del[0], del[1]), sql.query(ins[0], ins[1])]);
+        return;
+      }
+      // PGlite: no batch API, so two statements rather than one transaction —
+      // the same limitation `replaceDocChunks` documents, and the same one
+      // PERF-011 records as a local-development hazard.
+      await q(...del);
+      await q(...ins);
+    },
+
     async replaceDocChunks(userId, path, rows) {
       const del = ['DELETE FROM doc_chunks WHERE user_id = $1 AND path = $2', [userId, path]];
 
@@ -2438,6 +2594,7 @@ export function createPgStore(connectionString) {
            status = EXCLUDED.status, transcript = EXCLUDED.transcript, sources = EXCLUDED.sources,
            report = EXCLUDED.report, tokens_in = EXCLUDED.tokens_in, tokens_out = EXCLUDED.tokens_out,
            completed_at = NOW()
+         WHERE research_runs.user_id = $2
          RETURNING *`,
         [
           run.id,
@@ -2452,6 +2609,11 @@ export function createPgStore(connectionString) {
           run.tokensOut ?? 0,
         ],
       );
+      // The `WHERE` above means a run id owned by another account matches
+      // nothing and returns nothing, rather than being overwritten. Said out
+      // loud, because a bare `rows[0]` going undefined is the kind of silence
+      // that gets read as "the write worked" three call sites later.
+      if (!rows[0]) throw new Error('That research run belongs to another account.');
       return rows[0];
     },
     async getResearchRun(userId, id) {
@@ -2459,15 +2621,34 @@ export function createPgStore(connectionString) {
       return rows[0] ?? null;
     },
 
+    /**
+     * The `WHERE` on the conflict is the ownership check, and it has to be here.
+     *
+     * `id` is client-supplied — `routes/mcp.js` takes `req.body?.id` and only
+     * falls back to a fresh uuid — and the conflict target is the global primary
+     * key. Without the predicate, posting somebody else's server id rewrote
+     * their `name`, `config` and `enabled`, from any signed-in account. An MCP
+     * config is a program that runs on that account's machine or a URL its agent
+     * will trust, so this is not a settings scribble.
+     *
+     * A conflicting row owned by somebody else now matches nothing, so the
+     * statement updates nothing and inserts nothing — and `getMcpServer` scopes
+     * by `userId`, so it answers null. Turned into a refusal rather than left as
+     * a null: the route would have done `saved.id` on it and returned a 500,
+     * which reads as a bug in the app rather than as the boundary holding.
+     */
     async saveMcpServer(userId, server) {
       await q(
         `INSERT INTO mcp_servers (id, user_id, name, config, enabled)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (id) DO UPDATE SET
-           name = EXCLUDED.name, config = EXCLUDED.config, enabled = EXCLUDED.enabled`,
+           name = EXCLUDED.name, config = EXCLUDED.config, enabled = EXCLUDED.enabled
+         WHERE mcp_servers.user_id = $2`,
         [server.id, userId, server.name, JSON.stringify(server.config ?? {}), server.enabled !== false],
       );
-      return this.getMcpServer(userId, server.id);
+      const saved = await this.getMcpServer(userId, server.id);
+      if (!saved) throw new Error('That server id belongs to another account.');
+      return saved;
     },
     async setMcpServerEnabled(userId, id, enabled) {
       await q('UPDATE mcp_servers SET enabled = $3 WHERE user_id = $1 AND id = $2', [userId, id, !!enabled]);

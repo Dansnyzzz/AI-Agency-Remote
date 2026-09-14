@@ -9,7 +9,8 @@ inventing one here would break the mechanism that exists.
 
 ## How it actually works
 
-`server/store/pg.js` holds `SCHEMA_VERSION` (currently 12) above a numbered log
+`server/store/pg.js` holds `SCHEMA_VERSION` (18 at the time of writing — check it,
+this line has been wrong before) above a numbered log
 of what each version added. On boot, `ready()`:
 
 1. reads `schema_version` from `settings`;

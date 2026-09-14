@@ -194,7 +194,24 @@ export async function* streamOpenAICompatible({
     try {
       input = slot.args ? JSON.parse(slot.args) : {};
     } catch {
-      input = { __unparsed: slot.args };
+      /**
+       * The arguments never finished arriving, or arrived malformed.
+       *
+       * This is what a truncated stream looks like from here — and truncation is
+       * a first-class `stopReason` in this codebase precisely because it happens.
+       * The marker used to be `__unparsed`, written on this line and **read
+       * nowhere in the repository**, so the call went on to execute with every
+       * declared parameter `undefined` and the tools' own defaults widening it:
+       * `resolveInWorkspace(undefined)` is the workspace root, so a cut-off
+       * `index_folder` indexed the entire workspace and shipped it to the
+       * embedding endpoint.
+       *
+       * Renamed so the contract is visible, and `executeTool` now refuses it.
+       * The raw text travels along so the refusal can quote what arrived, which
+       * is the difference between a model that retries correctly and one that
+       * tries the same broken call again.
+       */
+      input = { __malformed: String(slot.args ?? '') };
     }
     return { id: slot.id || `call_${slot.name}`, name: slot.name, input };
   });

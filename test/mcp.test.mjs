@@ -33,7 +33,7 @@ process.env.ALLOW_MCP_STDIO = '1';
 
 const { connectMcp, __testing } = await import('../server/mcp/client.js');
 const { flatten } = __testing;
-const { slugify, splitMcpName } = (await import('../server/mcp/registry.js')).__testing;
+const { slugify, splitMcpName, offerable } = (await import('../server/mcp/registry.js')).__testing;
 const { assessRisk, riskReason, availableTools } = await import('../server/tools/definitions.js');
 
 const STUB = path.join(import.meta.dirname, 'fixtures', 'mcp-stub-server.mjs');
@@ -145,6 +145,32 @@ section('names');
   // "My Figma!" has to become something a model can actually be offered.
   check('a name is made safe for a tool id', slugify('My Figma!') === 'my_figma', slugify('My Figma!'));
   check('and never comes back empty', slugify('!!!') === 'server', slugify('!!!'));
+
+  /*
+   * A server names its own tools. One bad name or schema used to go straight
+   * into the provider request, and a provider refuses the whole request for it —
+   * so one careless tool broke every turn on the account.
+   */
+  const { usable, skipped } = offerable('figma', [
+    { name: 'get_file', inputSchema: { type: 'object', properties: {} } },
+    { name: 'search.files', inputSchema: { type: 'object' } },
+    { name: 'x'.repeat(60), inputSchema: { type: 'object' } },
+    { name: 'get_file', inputSchema: { type: 'object' } },
+    { name: 'list', inputSchema: { type: 'array' } },
+    { name: 'bare' },
+    { name: '' },
+    null,
+  ]);
+  check(
+    'only tools a provider accepts are offered',
+    usable.map((t) => t.name).join(',') === 'get_file,bare',
+    usable.map((t) => t.name).join(','),
+  );
+  check('and every other one is named with a reason', skipped.length === 6 && skipped.every((s) => s.reason), JSON.stringify(skipped));
+  check('  a dotted name is refused', skipped.some((s) => s.name === 'search.files'));
+  check('  an over-long name is refused', skipped.some((s) => s.name === 'x'.repeat(60)));
+  check('  a repeated name is refused', skipped.some((s) => s.reason === 'name repeated'));
+  check('  a non-object schema is refused', skipped.some((s) => s.name === 'list' && /schema/.test(s.reason)));
   check('a prefixed name splits back apart', JSON.stringify(splitMcpName('mcp__figma__get_file')) === '{"server":"figma","tool":"get_file"}');
   // Tool names containing __ must not be truncated at the first one.
   check(
@@ -224,6 +250,75 @@ section('an http server may not be pointed at a private address');
   check('and so is loopback', /private|public internet/i.test(loopback), loopback);
 }
 
+section('the http transport, against a server that answers');
+{
+  /**
+   * This path had no coverage at all, which is why it is here.
+   *
+   * Every http check before this one asserts a *refusal* — a private address is
+   * turned away — and none of them ever received a response. So `readSse`, the
+   * JSON branch, and the session-id handshake were three pieces of live
+   * integration code that no test had ever executed. That mattered the moment
+   * the transport had to move off the global `fetch`: `fetch` cannot be pinned
+   * to an address that was checked, which is the whole DNS-rebinding gap, and
+   * rewriting a stream loop with nothing behind it is not a fix, it is a
+   * different risk.
+   *
+   * The stub is loopback, so `ALLOW_PRIVATE_FETCH` has to be on for the duration
+   * — which does mean the *pinning* is not what is exercised here; the protocol
+   * plumbing over the real socket is. The refusals above are what cover the
+   * address check, and they still pass with the switch off.
+   */
+  const http = await import('node:http');
+  const saved = process.env.ALLOW_PRIVATE_FETCH;
+  process.env.ALLOW_PRIVATE_FETCH = '1';
+
+  let sawSession = null;
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      const msg = JSON.parse(raw || '{}');
+      sawSession = req.headers['mcp-session-id'] ?? sawSession;
+
+      if (msg.method === 'initialize') {
+        // A stateful server issues an id here and expects it back on every
+        // later call. Answered as plain JSON, the other of the two shapes.
+        res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'sess-42' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'stub-http', version: '1' } } }));
+        return;
+      }
+      if (msg.method === 'tools/list') {
+        // The SSE shape: the reply arrives as an event among possibly several,
+        // and the reader has to find the one matching this id.
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('event: message\ndata: {"jsonrpc":"2.0","id":"other","result":{}}\n\n');
+        res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'ping', description: 'Answer pong.', inputSchema: { type: 'object', properties: {} } }] } })}\n\n`);
+        res.end();
+        return;
+      }
+      res.writeHead(202).end();
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const live = await connectMcp({ transport: 'http', url: `http://127.0.0.1:${port}/mcp` });
+    check('an http server connects and lists its tools', live.tools?.length === 1, JSON.stringify(live.tools?.map((t) => t.name)));
+    check('  the tool survives the SSE frame it arrived in', live.tools?.[0]?.name === 'ping');
+    check('  a frame for a different id is not mistaken for the answer', live.tools?.[0]?.description === 'Answer pong.');
+    check('  and the session id is carried back on the next call', sawSession === 'sess-42', String(sawSession));
+  } catch (err) {
+    check('an http server connects and lists its tools', false, err.message);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (saved === undefined) delete process.env.ALLOW_PRIVATE_FETCH;
+    else process.env.ALLOW_PRIVATE_FETCH = saved;
+  }
+}
+
 section('flattening a result');
 {
   check('plain text passes through', flatten({ content: [{ type: 'text', text: 'hello' }] }) === 'hello');
@@ -279,6 +374,29 @@ section('a server plugged in reaches the assistant');
     offered.tools.map((t) => t.name).join(', '),
   );
   check('and the name says which server', offered.tools.every((t) => t.description.startsWith('[Stub Server]')));
+
+  /*
+   * Two rows, one slug. The store is unique on lower(name) only, so "Stub
+   * Server" and "stub-server" can both exist — a row from before the route's
+   * check. Both used to connect, the second replaced the first connection
+   * without closing it, and every tool name went out twice, which a provider
+   * refuses outright.
+   */
+  await store.saveMcpServer(mine.id, {
+    id: 'srv-twin',
+    name: 'stub-server',
+    config: sealConfig({ transport: 'stdio', command: process.execPath, args: [STUB] }),
+    enabled: true,
+  });
+  forgetMcp(mine.id);
+  const twins = await mcpTools(mine.id);
+  const twinNames = twins.tools.map((t) => t.name);
+  check('two servers with one slug never offer a tool name twice', new Set(twinNames).size === twinNames.length, `${twinNames.length} names`);
+  check('  the first keeps its tools', twinNames.length === 5, `${twinNames.length}`);
+  const twin = twins.servers.find((s) => s.name === 'stub-server');
+  check('  the later one is reported, and says why', /collide/.test(twin?.error || ''), JSON.stringify(twin));
+  await store.deleteMcpServer(mine.id, 'srv-twin');
+  forgetMcp(mine.id);
 
   // Through the executor the agent loop actually uses, not a direct call.
   const { executeTool } = await import('../server/tools/execute.js');

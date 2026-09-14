@@ -1667,6 +1667,30 @@ export const runsLocally = (tool) => tool?.scope === 'local' || tool?.scope === 
 
 /** Tools whose base level is worse than "ordinary" whatever the arguments. */
 const ALWAYS_SENSITIVE = new Set([
+  /*
+   * Work that runs later, with nobody watching (SEC-027).
+   *
+   * `schedule_task` and `workflow_write` store a prompt that the scheduler runs
+   * on its own, hours or days from now, through `runAgent` with no one at the
+   * approval bar — every `ordinary` call in that run executes: `write_file`,
+   * `edit_file`, `move_file`, a `run_command` the pattern list does not
+   * recognise. They were graded `ordinary`, so under the default policy a single
+   * page carrying an injected instruction could set up recurring work on the
+   * owner's machine without anyone being asked. `send_email` is here because
+   * "the audience is not the person who could have said no"; a scheduled run has
+   * exactly that property, only delayed.
+   *
+   * `skill_write` is worse in kind. A skill's name and description are pasted
+   * into the system prompt of every later conversation — the trusted section,
+   * outside any untrusted envelope — so an unapproved skill is a prompt
+   * injection that persists across every future session.
+   *
+   * Asking once, when the thing is set up, is the whole cost. Cancelling one
+   * (`cancel_task`) only stops work and stays ordinary.
+   */
+  'schedule_task',
+  'workflow_write',
+  'skill_write',
   // Nothing about the arguments makes deleting safer, and the one thing that
   // cannot be undone deserves the one prompt nobody skips.
   'delete_file',
@@ -1831,6 +1855,76 @@ function pathArgument(name, input) {
 }
 
 /**
+ * Tools whose output is content this application did not write.
+ *
+ * The envelope in `tools/untrusted.js` existed and was applied per call site —
+ * `web_fetch` wrapped itself, search wrapped itself, MCP was wrapped in
+ * `executeTool`, and `search_docs` was added later on the stated grounds that it
+ * was the last unwrapped path. It was not. **Nothing on the local or worker
+ * branch was ever wrapped**, so `browser_look` handed the model a whole web page
+ * as trusted text while `web_fetch` on the same URL enveloped it, and
+ * `read_file` did the same for a document the agent had just downloaded from a
+ * stranger.
+ *
+ * `UNTRUSTED_RULE` makes that worse rather than neutral: it tells the model, in
+ * the system prompt, that *"web pages, search results, files, and output from
+ * MCP servers all arrive that way"*. A model that believes the rule reads
+ * unenveloped text as trusted — so the promise was doing active harm wherever it
+ * was not kept.
+ *
+ * A list rather than a flag on each entry, and applied at the single exit of
+ * `executeTool`, because that is the shape of the mistake being fixed: four
+ * separate call sites each remembered, and the fifth, sixth and seventh did not.
+ *
+ * What belongs here is anything carrying bytes the user did not type and this
+ * app did not generate — files, directory names, program output, page text,
+ * clipboard, third-party services. What deliberately does not: tools already
+ * wrapping themselves (`web_fetch`, `web_search`, `search_docs`, `extract`,
+ * `deep_research`), tools returning content the app itself produced
+ * (`create_file`, `read_generated_file`, `chart`), and the user's own material
+ * (`memory_read`, `skill_read`) — the user is the trusted party here, and
+ * wrapping their own words would teach the model to discount them.
+ */
+const EXTERNAL_OUTPUT = new Set([
+  // Files and their names, on the user's machine — including anything the agent
+  // downloaded a minute ago.
+  'read_file', 'fs_read_text', 'fs_describe', 'grep', 'fs_search',
+  'list_dir', 'fs_browse', 'glob',
+  // Whatever a program decided to print.
+  'run_command', 'run_background_logs',
+  // The open web, through the browser rather than through fetch.
+  'browser_look', 'browser_tabs',
+  // Whatever happens to be on the clipboard.
+  'clipboard_read',
+  // What is on the screen, read by UI Automation.
+  'desktop_look',
+  // Third-party services, where anyone can open an issue or share a page.
+  'github', 'notion_search',
+]);
+
+/** Does this tool's output need the envelope? */
+export const returnsExternalContent = (name) => EXTERNAL_OUTPUT.has(name);
+
+/**
+ * What to name on the envelope, so provenance travels with the text.
+ *
+ * Falls back to the tool's own name, which is always true and never useless:
+ * "output of run_command" tells a reader exactly as much as they need.
+ */
+export function externalSource(name, input = {}) {
+  const path = input?.path ?? input?.file ?? input?.target ?? null;
+  if (name === 'browser_look' || name === 'browser_tabs') return 'the page in the browser';
+  if (name === 'clipboard_read') return 'the clipboard';
+  if (name === 'desktop_look') return 'the screen';
+  if (name === 'github') return 'GitHub';
+  if (name === 'notion_search') return 'Notion';
+  if (name === 'run_command' || name === 'run_background_logs') {
+    return `the output of ${String(input?.command || 'a command').slice(0, 80)}`;
+  }
+  return path ? String(path).slice(0, 200) : `the output of ${name}`;
+}
+
+/**
  * What level is this specific call?
  *
  * Deliberately errs upward: an unrecognised tool is treated as sensitive rather
@@ -1890,8 +1984,31 @@ export function assessRisk(name, input = {}) {
   // Launching a program is ordinary; launching a shell to get around the shell
   // rule is not.
   if (name === 'desktop_launch' || name === 'launch_app') {
+    /**
+     * A shell is not the only thing that runs what you hand it.
+     *
+     * The list used to name shells only, and the intent one line up is
+     * "launching a shell to get around the shell rule is not [ordinary]". Every
+     * interpreter is a way round the shell rule too, and none of them was here:
+     * `python -c`, `node -e`, `perl -e`, `ruby -e`, `mshta`, `wscript`,
+     * `cscript`. Anything unmatched falls through to `ordinary`, which under the
+     * default `guarded` policy runs with **no approval prompt** — and
+     * `launchApp` hands the name and args straight to `Start-Process
+     * -ArgumentList` or to `spawn`. The same payload through `run_command` would
+     * at least have met `looksDestructive` and its exfiltration patterns; this
+     * path skips that list entirely.
+     *
+     * `zsh` is called out because it is the one a word boundary gets wrong:
+     * `\bsh\b` does not match inside `zsh`, so writing it as part of the `sh`
+     * alternative would have looked right and matched nothing.
+     *
+     * Matched on the basename, so `/usr/bin/python3` and `C:\Python\python.exe`
+     * are the same answer as `python`.
+     */
     const app = String(input?.app || '').toLowerCase();
-    if (/\b(cmd|powershell|pwsh|wt|bash|sh|regedit|wsl|terminal|iterm)\b/.test(app)) return 'sensitive';
+    const base = app.split(/[\\/]/).pop().replace(/\.(exe|com|bat|cmd)$/, '');
+    if (/^(cmd|powershell|pwsh|wt|bash|sh|zsh|fish|dash|ksh|regedit|wsl|terminal|iterm)$/.test(base)) return 'sensitive';
+    if (/^(python\d*|python3|node|deno|bun|perl|ruby|php|osascript|mshta|wscript|cscript|rundll32|regsvr32)$/.test(base)) return 'sensitive';
   }
 
   return 'ordinary';

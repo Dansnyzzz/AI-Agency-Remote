@@ -15,58 +15,19 @@
  */
 
 import process from 'node:process';
-import { spawnSync } from 'node:child_process';
 
 /**
- * The branch HEAD is on, or '' when that cannot be answered.
+ * The fence around `main` — its definition, its switch, and how to ask which
+ * branch this is — now lives in `branch.js`, because `brief.js` announces the
+ * same fact and used to decide it independently. It got it wrong the moment the
+ * switch was added: see the header there, and CFG-012.
  *
- * Every rule below that uses this fails open when it is empty. A guard that
- * blocks because it could not run `git` is a guard that blocks in a worktree, in
- * a fresh clone, and on the day git is slow — which is to say, a guard that gets
- * removed.
+ * `currentBranch` returns '' when git cannot answer, and every rule below that
+ * uses it fails open on that. A guard that blocks because it could not run `git`
+ * is a guard that blocks in a worktree, in a fresh clone, and on the day git is
+ * slow — which is to say, a guard that gets removed.
  */
-function currentBranch(cwd) {
-  try {
-    const run = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: 5_000,
-    });
-    return run.status === 0 ? String(run.stdout || '').trim() : '';
-  } catch {
-    return '';
-  }
-}
-
-const PROTECTED_BRANCH = /^(main|master)$/;
-
-/**
- * Has the owner opened the gate on `main` for this session?
- *
- * Protection is on unless `AI_REMOTE_ALLOW_MAIN` is set in the environment
- * Claude Code itself runs in — `.claude/settings.json` under `env`, or an export
- * before `claude` starts.
- *
- * That the switch lives in the *environment* is the whole point, and it is worth
- * saying why, because the obvious alternative does not work.
- *
- * This file runs as a PreToolUse hook: Claude Code spawns it, hands it the
- * proposed command as JSON on stdin, and only runs the shell if it exits 0. The
- * hook's `process.env` is Claude Code's, not the shell's. So writing
- * `AI_REMOTE_ALLOW_MAIN=1 git push origin main` sets nothing here — that
- * assignment would be executed by a shell that has not started yet, by a command
- * this hook is deciding whether to permit. The model cannot type its way past
- * this the way it could past a flag in the command string.
- *
- * Turning it on is therefore a deliberate act by a person editing a file, and it
- * is visible in that file afterwards rather than buried in one command in a
- * transcript.
- *
- * It lifts exactly three rules — commit, merge and push on the protected branch.
- * Force-push, `reset --hard`, `rm -rf`, `DROP TABLE`, `npm publish` and
- * `vercel deploy` are not branch protection and are never lifted by it.
- */
-const mainWritesAllowed = () => /^(1|true|yes)$/i.test(String(process.env.AI_REMOTE_ALLOW_MAIN || ''));
+import { PROTECTED_BRANCH, mainWritesAllowed, currentBranch } from './branch.js';
 
 /**
  * Does this `git push` write to the protected branch?
@@ -199,6 +160,26 @@ const RULES = [
     'This package is private and unpublished. Publishing it would push the whole workspace to the public registry.',
   ],
   [
+    /**
+     * Cutting a release is publishing, and it was not covered.
+     *
+     * `npm publish` was blocked and everything beside it was not. Three
+     * installed skills drive exactly these commands — `claude-mem:version-bump`
+     * tags, releases and publishes; `superpowers:finishing-a-development-branch`
+     * decides how work integrates; `gitnexus-work` gates its own commits — and a
+     * decision recorded in `audit/SKILL_MAP.md` is a note, not a guard. CLAUDE.md
+     * §2 is explicit that a risk which can happen at any moment belongs in code
+     * rather than in prose.
+     *
+     * `git tag` is deliberately still allowed: this audit's own safety net is a
+     * backup tag, and a local tag publishes nothing. Pushing one does, and that
+     * is what `--tags` covers.
+     */
+    /\b(gh\s+(release|pr\s+merge)|npm\s+version|git\s+push[^\n|;&]*--tags)\b/,
+    'Cutting or publishing a release is the owner\'s call, not an automated step. '
+      + 'Local work and `git tag` are fine; announcing it is not. Say it is ready instead.',
+  ],
+  [
     /\bvercel\s+(deploy|--prod|env\s+rm)\b/,
     'Deploying or removing production env vars is the user\'s call, not an automated step. Ask first.',
   ],
@@ -250,8 +231,31 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
+  /**
+   * Every refusal also says what to do if the match was data rather than a
+   * command (CFG-021).
+   *
+   * This guard reads command text. It cannot tell `rm -rf build` from a
+   * sentence *about* `rm -rf` being written into a file by `node -e` or
+   * `printf`, and there is no safe way to teach it: `node -e "…execSync('rm -rf
+   * ~')"` is a real command inside quotes, and so is `bash -c "…"`. Stripping
+   * quoted text would open exactly the door the rules exist to close, so the
+   * rules are not loosened. Heredoc bodies are the one case that is
+   * unambiguously data, and those are already removed (CFG-002).
+   *
+   * What was wrong was the dead end. Refused twice during this audit while
+   * writing documentation about these very rules, the only useful next step was
+   * to use the Edit or Write tool — which is the right way to put text in a file
+   * anyway, and never passes through this hook. Saying so turns a false
+   * positive into a direction instead of into pressure to switch the guard off.
+   */
   const refuse = (why) => {
-    process.stderr.write(`Blocked by .claude/hooks/guard-bash.js\n\n${why}\n`);
+    process.stderr.write(
+      `Blocked by .claude/hooks/guard-bash.js\n\n${why}\n\n`
+        + 'If this command only writes text that mentions these words into a file, it is data, not a command — '
+        + 'but this guard reads command text and cannot tell the difference. Write the file with the Edit or '
+        + 'Write tool instead; do not rephrase the command to get past the match.\n',
+    );
     process.exit(2);
   };
 
@@ -269,7 +273,7 @@ process.stdin.on('end', () => {
   // most commands are not, and a subprocess on every shell call is a tax paid
   // all day for a rule that applies to a handful of them.
   if (!mainWritesAllowed() && /\bgit\s+(commit|merge|push)\b/.test(command)) {
-    const branch = process.env.CLAUDE_GUARD_BRANCH || currentBranch(cwd);
+    const branch = currentBranch(cwd);
     if (PROTECTED_BRANCH.test(branch)) {
       for (const [pattern, why] of BRANCH_RULES) {
         if (pattern.test(command)) refuse(`On branch \`${branch}\`. ${why}`);

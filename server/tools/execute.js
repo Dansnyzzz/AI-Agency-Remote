@@ -2,12 +2,13 @@ import crypto from 'node:crypto';
 import { getStore } from '../store/index.js';
 import { usesInProcessTools, inProcessImplementations, workerStatus } from '../localTools.js';
 import { getPrefs } from '../settings.js';
-import { TOOLS_BY_NAME } from './definitions.js';
+import { TOOLS_BY_NAME, returnsExternalContent, externalSource } from './definitions.js';
 import { CLOUD_IMPLEMENTATIONS } from './cloud.js';
 import { isMcpTool, callMcpTool, splitMcpName } from '../mcp/registry.js';
 import { keepStepShot } from '../attachments.js';
 import { redactSecrets } from '../redact.js';
 import { untrusted } from './untrusted.js';
+import { validateArguments } from './validate.js';
 
 const POLL_MS = 400;
 const DEFAULT_LOCAL_TIMEOUT_MS = 180_000;
@@ -64,8 +65,35 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (signal?.aborted) {
-      await store.completeJob(userId, id, { status: 'error', result: { error: 'Cancelled by the user.' } });
-      return { isError: true, content: 'Cancelled by the user.' };
+      /**
+       * Says what actually happened, which is less than it used to claim.
+       *
+       * This marks the job finished on the server and stops waiting. It does
+       * **not** reach the worker: there is no cancellation channel — the worker
+       * claims a job and runs it to completion, and nothing it polls carries a
+       * stop. So a `delete_file` already executing is not called back. The model
+       * was told "Cancelled by the user", concluded the file was still there,
+       * and said so.
+       *
+       * Telling the truth is the part that is cheap. Actually propagating the
+       * cancellation means a flag the worker checks mid-execution, which is a
+       * change across the store, the job protocol and the worker loop — raised
+       * as `AUTO-009` rather than half-done here behind an accurate sentence.
+       */
+      // `cancelled`, and only if the job is still open: the worker asks for this
+      // status while it runs and stops on it (worker/cancel.js), and a result
+      // that already landed must not be overwritten by the stop that lost the race.
+      await store.completeJob(userId, id, {
+        status: 'cancelled',
+        result: { error: 'Cancelled by the user.' },
+        onlyIfOpen: true,
+      });
+      return {
+        isError: true,
+        content:
+          'Stopped waiting for this at the user\'s request. If the machine had already started it, '
+          + 'it may still have finished — check before assuming it did not happen.',
+      };
     }
     await sleep(POLL_MS);
     const job = await store.getJob(userId, id);
@@ -120,11 +148,6 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
 }
 
 /**
- * Run one tool call and return `{content, isError}` — never throws, because a
- * thrown error would break the agent loop where the model could otherwise read
- * the failure and adjust.
- */
-/**
  * Which of these a caller actually has to supply.
  *
  * Written down because it was not: the agent loop passes all seven and the
@@ -133,7 +156,7 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
  * abort it, no device hint and no deliverable to collect. Without the optional
  * markers those calls read as missing four required arguments.
  *
- * @param {{
+ * @typedef {{
  *   user: { id: string },
  *   name: string,
  *   input?: any,
@@ -141,9 +164,158 @@ async function runViaWorker({ user, userId, name, input, chatId, timeoutMs, sign
  *   signal?: AbortSignal,
  *   deviceHint?: string|null,
  *   deliverable?: any,
- * }} args
+ *   raw?: boolean,
+ * }} ToolCallArgs
  */
-export async function executeTool({ user, name, input, chatId, signal, deviceHint, deliverable }) {
+
+/**
+ * What every branch hands back.
+ *
+ * Spelled out because the three optional fields are the ones that go missing:
+ * `widget` was dropped by one branch and made two tools silently inert, and
+ * `shot` had to be taught to a second branch after the first learned it. Naming
+ * the shape once means the type checker notices the next time a branch forgets,
+ * instead of a person noticing months later that a chart was never drawn.
+ *
+ * @typedef {{
+ *   content: string,
+ *   isError: boolean,
+ *   file?: any,
+ *   widget?: any,
+ *   shot?: any,
+ * }} ToolResult
+ */
+
+/**
+ * Run one tool call and return `{content, isError}` — never throws, because a
+ * thrown error would break the agent loop where the model could otherwise read
+ * the failure and adjust.
+ *
+ * @param {ToolCallArgs} args
+ * @returns {Promise<ToolResult>}
+ */
+export async function executeTool(args) {
+  /**
+   * A tool call whose arguments did not parse is refused, not run.
+   *
+   * `openaiCompatible` assembles each call's arguments as a JSON *string* across
+   * stream deltas and parses them itself, so a truncated reply lands here as
+   * invalid JSON. It used to become `{ __unparsed: … }` and carry on: this
+   * function checked the tool *name* and never the input *shape*, so the call
+   * ran with every declared parameter `undefined`, and the tools' own defaults
+   * turned a missing argument into a wide one — `resolveInWorkspace(undefined)`
+   * resolves to the workspace root, so a cut-off `index_folder` indexed
+   * everything and sent it to the embedding endpoint.
+   *
+   * Three of the five providers go through that adapter, and they are the two
+   * aggregators this app is built around plus OpenAI itself.
+   *
+   * Refusing here rather than in the adapter keeps it at the same choke point as
+   * the envelope below, so a future adapter that assembles its own arguments
+   * inherits the refusal instead of having to remember it.
+   *
+   * The raw text is quoted back deliberately. A model told only "that failed"
+   * tends to repeat the call; one shown the truncated fragment usually shortens
+   * its arguments and succeeds.
+   */
+  const malformed = args?.input?.__malformed;
+  if (malformed !== undefined) {
+    return {
+      isError: true,
+      content:
+        `The arguments for ${args?.name} were not valid JSON, so the call was not run. ` +
+        'This usually means the reply was cut off mid-call. Send it again with shorter arguments. ' +
+        `What arrived was: ${String(malformed).slice(0, 200)}`,
+    };
+  }
+
+  /*
+   * Arguments checked against the tool's own schema before anything runs — what
+   * provider-side strict mode would give, on every provider (GAP-004). Catalogue
+   * tools only: an MCP server validates its own tools, and its schemas are
+   * outside what `validate.js` is written to cover. See that file for what is
+   * refused and what is merely coerced.
+   */
+  const def = TOOLS_BY_NAME[args?.name];
+  if (def?.parameters) {
+    const checked = validateArguments(def.parameters, args.input);
+    if (!checked.ok) {
+      return {
+        isError: true,
+        content: `The arguments for ${args.name} did not match what it takes, so it was not run: ${checked.error}`,
+      };
+    }
+    args = { ...args, input: checked.input };
+  }
+
+  const result = await runTool(args);
+
+  /**
+   * One exit, and the envelope goes on here.
+   *
+   * Every other wrapping in this codebase happens at a call site — inside
+   * `web_fetch`, inside search, inside the MCP branch below — and the pattern
+   * failed exactly the way per-call-site rules do: the local branch and the
+   * worker branch were each written without one, so a web page read through
+   * `browser_look` reached the model as trusted text while the same page through
+   * `web_fetch` was enveloped. `search_docs` was added to the wrapped set on the
+   * explicit grounds that it was the last one missing. It was not.
+   *
+   * So this is the choke point. A tool named in `EXTERNAL_OUTPUT` gets the
+   * envelope wherever it ran — cloud, in-process, or out on the worker — and a
+   * new tool that returns somebody else's bytes is one line in a list rather
+   * than a call site somebody has to remember.
+   *
+   * Errors are left alone. Their text is this application's, and `SEC-018` is
+   * the separate question of what they may contain.
+   *
+   * `raw` is for the callers whose reader is not the model. The workspace routes
+   * run these same tools to draw a file browser and **parse the output as JSON**
+   * — an envelope round it is not a safety boundary there, it is a syntax error,
+   * and the suite said so within a minute of this being written. That route
+   * already opts out of the approval policy for the same underlying reason: a
+   * person pressing Save has already decided, and a person reading their own
+   * directory listing is not being told what to do by it.
+   *
+   * The default is to wrap. Forgetting `raw` costs a caller some noise;
+   * forgetting to wrap is the bug this whole change exists to close, so the
+   * safe direction is the one you get by saying nothing.
+   */
+  if (args?.raw || result?.isError || !returnsExternalContent(args?.name)) return result;
+  const content = redactedOutput(args.name, String(result?.content ?? ''));
+  if (!content.trim()) return result;
+
+  return { ...result, content: untrusted(externalSource(args.name, args.input), content) };
+}
+
+/**
+ * Tools whose output is scrubbed of recognisable credentials before the model
+ * reads it (SEC-031).
+ *
+ * `clipboard_read` is read-only, so it never asks — right for "fix what I just
+ * copied", and wrong for the other thing clipboards hold: the API key or token
+ * somebody copied out of a dashboard a minute ago. Unprompted, that went to a
+ * third-party model provider verbatim, and from there one `web_fetch` with it
+ * in the query string is a leak no approval prompt would have seen. Asking on
+ * every read would break the tool's whole purpose, so the recognisable shapes
+ * are removed instead and the model is told what was taken out. An ordinary
+ * password has no recognisable shape; that limit is real and not claimed away.
+ */
+const REDACTED_OUTPUT = new Set(['clipboard_read']);
+
+/** @param {string} name @param {string} content */
+export function redactedOutput(name, content) {
+  if (!REDACTED_OUTPUT.has(name)) return content;
+  const { text, found } = redactSecrets(content);
+  if (!found.length) return content;
+  return `${text}\n\n[${found.join(', ')} removed before this reached you. Tell the user it was not read, and ask them to paste the rest if they meant you to see it.]`;
+}
+
+/**
+ * @param {ToolCallArgs} args
+ * @returns {Promise<ToolResult>}
+ */
+async function runTool({ user, name, input, chatId, signal, deviceHint, deliverable }) {
   const userId = user.id;
 
   /**
@@ -226,7 +398,9 @@ export async function executeTool({ user, name, input, chatId, signal, deviceHin
       // The same second argument the worker passes, so a locally-run server and
       // a paired machine behave identically — a difference here would show up as
       // "it isolates conversations on my laptop but not on the VM".
-      const output = await impl(input || {}, { chatId: chatId ?? null });
+      // `signal` too: on the owner's own machine there is no job to cancel, so the
+      // tool itself has to hear the stop (AUTO-009).
+      const output = await impl(input || {}, { chatId: chatId ?? null, signal });
 
       /**
        * The same two result shapes the worker's job runner handles.

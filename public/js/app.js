@@ -1899,6 +1899,9 @@ async function streamOnce(decision) {
       chatId: state.chatId,
       model: state.model,
       decision,
+      // The calls the prompt named. Only sent with a decision, because only a
+      // decision is about a specific batch. See `approvalFor`.
+      decisionFor: decision ? approvalFor : undefined,
       runId: state.runId,
       signal: state.abort.signal,
       handlers: {
@@ -2100,7 +2103,20 @@ $('stop').addEventListener('click', () => {
 
 /* ── approval ──────────────────────────────────────────────────── */
 
+/**
+ * Which calls the prompt on screen is actually asking about.
+ *
+ * The answer used to be a bare word — `allow` — and the server applied it to
+ * whatever was outstanding when the resume arrived. Those are the same set
+ * almost always, and not always: with the app open in two tabs, a turn started
+ * in the second one leaves a *different* batch outstanding, and a click on the
+ * first tab's prompt then approves calls nobody was shown. Sending the ids back
+ * is what makes the answer be about the question.
+ */
+let approvalFor = [];
+
 function showApproval(toolCalls) {
+  approvalFor = toolCalls.map((c) => c.id);
   const box = $('approval');
   // Say why this one stopped. Under the guarded policy most things do not, so
   // when something does the reason is the whole point of the interruption.

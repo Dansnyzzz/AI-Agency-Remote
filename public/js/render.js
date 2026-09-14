@@ -718,6 +718,15 @@ export function assistantMessage() {
      */
     resetText() {
       rawText = '';
+      // A restarted reply restarts its reasoning too. Both callers are `retry`
+      // handlers, and keeping the abandoned attempt's thinking showed one trace
+      // that contradicts itself partway through — the server now discards it
+      // for the same reason (CODE-018).
+      if (thinkingBlock) {
+        thinkingBlock.remove();
+        thinkingBlock = null;
+        thinkingBody = null;
+      }
       // Cancel any frame still owed. Without this the queued paint would run
       // after the node was removed — harmless now that `appendText` re-checks
       // `prose`, but leaving a scheduled write to a discarded draft in flight is

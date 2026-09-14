@@ -293,9 +293,36 @@ async function grepTool({ pattern, path: target = '.', glob: globFilter, ignore_
   return clip(`${out.length} match${out.length === 1 ? '' : 'es'}\n${out.join('\n')}`);
 }
 
-function runCommand({ command, cwd = '.', timeout_ms = 120_000 }) {
+/**
+ * End a command and whatever it started.
+ *
+ * `spawn` with `shell: true` makes the shell the direct child, so on Windows
+ * `child.kill()` ends `cmd.exe` and leaves the program it launched running —
+ * a timed-out build carried on in the background, and a cancelled one would
+ * have too. `taskkill /T` takes the tree. Falls back to a plain kill if
+ * `taskkill` cannot be started, which is no worse than before.
+ */
+function terminate(child) {
+  if (process.platform === 'win32' && child.pid) {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    killer.on('error', () => child.kill('SIGKILL'));
+    return;
+  }
+  child.kill('SIGKILL');
+}
+
+/**
+ * @param {{ command: string, cwd?: string, timeout_ms?: number }} input
+ * @param {{ chatId?: string|null, signal?: AbortSignal }} [context]
+ */
+function runCommand({ command, cwd = '.', timeout_ms = 120_000 }, { signal } = {}) {
   const abs = resolveInWorkspace(cwd);
   const timeout = Math.min(Math.max(Number(timeout_ms) || 120_000, 1000), 600_000);
+
+  // Called off before it started: do not start it (AUTO-009).
+  if (signal?.aborted) {
+    return Promise.resolve(`$ ${command}\n\nNot run — the user stopped this before it started.`);
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, {
@@ -307,6 +334,7 @@ function runCommand({ command, cwd = '.', timeout_ms = 120_000 }) {
 
     let output = '';
     let killed = false;
+    let cancelled = false;
     const collect = (chunk) => {
       output += chunk.toString();
       if (output.length > MAX_OUTPUT * 2) output = output.slice(-MAX_OUTPUT * 2);
@@ -316,19 +344,35 @@ function runCommand({ command, cwd = '.', timeout_ms = 120_000 }) {
 
     const timer = setTimeout(() => {
       killed = true;
-      child.kill('SIGKILL');
+      terminate(child);
     }, timeout);
+
+    /*
+     * The person stopped the turn. Before this, the server stopped waiting and
+     * the process ran on regardless; now it is ended, and the result says so
+     * rather than reporting whatever exit code the kill produced as a failure of
+     * the command itself.
+     */
+    const onAbort = () => {
+      cancelled = true;
+      terminate(child);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     child.on('error', (err) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       reject(new Error(`Could not start the command: ${err.message}`));
     });
 
     child.on('close', (code) => {
       clearTimeout(timer);
-      const header = killed
-        ? `Killed after ${timeout}ms (timeout).`
-        : `Exit code ${code}${code === 0 ? '' : ' — the command failed'}.`;
+      signal?.removeEventListener('abort', onAbort);
+      const header = cancelled
+        ? 'Stopped — the user cancelled this while it was running.'
+        : killed
+          ? `Killed after ${timeout}ms (timeout).`
+          : `Exit code ${code}${code === 0 ? '' : ' — the command failed'}.`;
       resolve(clip(`$ ${command}\n(in ${rel(abs)}/)\n\n${output.trim() || '(no output)'}\n\n${header}`));
     });
   });
@@ -452,7 +496,11 @@ async function moveFile({ from, to, overwrite = false }) {
  */
 const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024;
 
-async function downloadFile({ url, path: target, overwrite = false, max_bytes: maxBytes }) {
+/**
+ * @param {{ url: string, path?: string, overwrite?: boolean, max_bytes?: number }} input
+ * @param {{ chatId?: string|null, signal?: AbortSignal }} [context]
+ */
+async function downloadFile({ url, path: target, overwrite = false, max_bytes: maxBytes }, { signal } = {}) {
   const limit = Math.min(Math.max(Number(maxBytes) || MAX_DOWNLOAD_BYTES, 1024), MAX_DOWNLOAD_BYTES);
 
   let parsed;
@@ -474,7 +522,9 @@ async function downloadFile({ url, path: target, overwrite = false, max_bytes: m
 
   const res = await safeFetch(parsed, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AI-Remote/1.0)', Accept: '*/*' },
-    signal: AbortSignal.timeout(180_000),
+    // Whichever comes first: the three-minute ceiling, or the person stopping
+    // the turn (AUTO-009). Before, only the ceiling could end a download.
+    signal: signal ? AbortSignal.any([AbortSignal.timeout(180_000), signal]) : AbortSignal.timeout(180_000),
   });
   if (!res.ok) throw new Error(`${parsed.host} returned HTTP ${res.status} ${res.statusText}`);
 

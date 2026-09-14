@@ -205,6 +205,22 @@ export async function stopAllBackground() {
   }
 }
 
+/**
+ * Stop everything and forget it — for when this machine changes accounts.
+ *
+ * `stopAllBackground` stops what is running and keeps the records, which is right
+ * at shutdown. It is wrong at re-pairing. `run_background_logs` with no id lists
+ * every job this process has started, finished ones included, with its command
+ * line and output — and the `jobs` Map was never cleared. So after a machine was
+ * unpaired and adopted by a different account, that account's assistant could
+ * read the previous account's commands and whatever they printed: a dev server's
+ * startup banner with a token in the URL, a script that echoed a key (SEC-028).
+ */
+export async function forgetAllBackground() {
+  await stopAllBackground();
+  jobs.clear();
+}
+
 export const BACKGROUND_IMPLEMENTATIONS = {
   run_background: runBackground,
   run_background_logs: backgroundLogs,

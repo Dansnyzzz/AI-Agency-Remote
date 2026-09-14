@@ -14,7 +14,7 @@ twenty times its length in production.
 
 | what | measured | where |
 |---|---|---|
-| tool catalogue | ~6,500 tok with deferral, ~12,000 without | `server/tools/definitions.js` |
+| tool catalogue | **~6,900 tok** with deferral on a 128k window, **~13,300** for the whole of `TOOLS` | `server/tools/definitions.js` |
 | system prompt | grows with worker, connectors, MCP, project briefing | `buildSystemPrompt` |
 | transcript | everything since the last summary | `activeTranscript` |
 | tool results | forever, once returned | wherever the tool returns |

@@ -1,13 +1,18 @@
 ---
 name: api-conventions
-description: Use when adding, changing, or reviewing an HTTP route in server/app.js — covers auth, error shape, status codes, rate limiting, validation, and the serverless constraints every route runs under.
+description: Use when adding, changing, or reviewing an HTTP route in server/app.js or server/routes/ — covers auth, error shape, status codes, rate limiting, validation, and the serverless constraints every route runs under.
 ---
 
 # API conventions
 
-Every route in this app lives in `server/app.js` and runs in two very different
-places. Read an adjacent route before writing a new one; the patterns below are
-already there.
+Routes live in `server/app.js` and in `server/routes/` — six modules
+(`chats`, `connectors`, `files`, `mcp`, `workflows`, `workspace`) were lifted out
+when `app.js` reached 2,838 lines. They all mount on the same `api` router and
+follow the same conventions, so where a new route goes is a question of which
+group it belongs to, not of which rules apply.
+
+Every one of them runs in two very different places. Read an adjacent route
+before writing a new one; the patterns below are already there.
 
 ## The shape
 

@@ -236,7 +236,10 @@ export async function ingestBatch(userId, { source, files }) {
   }
 
   const store = getStore();
-  for (const [path, rows] of byPath) await store.replaceDocChunks(userId, path, rows);
+  // One batch, not one round trip per file. The Neon driver does one round trip
+  // per *statement*, so a loop here was forty sequential network calls to index
+  // forty files with all the data already in hand.
+  await store.replaceDocChunksMany(userId, byPath);
   return { files: byPath.size, chunks: flat.length, model: embedder.model };
 }
 

@@ -320,6 +320,220 @@ section('launch_app is not a command line');
   check('an empty name still asks for one, not for control characters', /name the application/i.test(empty), empty);
 }
 
+section('an interpreter is a shell by another name');
+{
+  /*
+   * `assessRisk` graded `launch_app` on a list of shells, under a comment
+   * saying "launching a shell to get around the shell rule is not [ordinary]".
+   * Every interpreter is a way round the shell rule too, and none was listed:
+   * `python -c`, `node -e`, `perl -e`, `mshta`, `wscript`, `cscript`. Anything
+   * unmatched falls through to `ordinary`, which under the default `guarded`
+   * policy runs with no approval prompt — and the same payload sent through
+   * `run_command` would at least have met `looksDestructive` first.
+   *
+   * `zsh` earns its own case: `\bsh\b` does not match inside it, so folding it
+   * into the `sh` alternative would have looked right and matched nothing.
+   */
+  const risk = (app) => assessRisk('launch_app', { app });
+
+  for (const app of ['python', 'python3', 'node', 'deno', 'bun', 'perl', 'ruby', 'php', 'osascript', 'mshta', 'wscript', 'cscript', 'rundll32', 'regsvr32']) {
+    check(`${app} asks first`, risk(app) === 'sensitive', risk(app));
+  }
+  for (const app of ['cmd', 'powershell', 'pwsh', 'bash', 'sh', 'zsh', 'fish', 'wsl', 'regedit']) {
+    check(`${app} still asks first`, risk(app) === 'sensitive', risk(app));
+  }
+
+  // A full path is the same program. Matched on the basename so it cannot be
+  // walked around by spelling it out.
+  check('a windows path to an interpreter still asks', risk(String.raw`C:\Python311\python.exe`) === 'sensitive');
+  check('  and a posix one', risk('/usr/local/bin/node') === 'sensitive');
+  check('  and case does not matter', risk('PYTHON.EXE') === 'sensitive');
+  check('  nor does the extension', risk('cscript.exe') === 'sensitive');
+
+  // The guard must stay a fence rather than becoming a wall: launching an
+  // ordinary program is the whole point of the tool.
+  for (const app of ['notepad', 'chrome.exe', 'code', 'Excel.exe', String.raw`C:\Program Files\Chrome\chrome.exe`]) {
+    check(`${app} does not`, risk(app) === 'ordinary', risk(app));
+  }
+}
+
+section('changing accounts leaves nothing of the last one behind');
+{
+  /*
+   * Re-pairing a machine to a different account only swapped the token. The
+   * background commands and their output stayed in memory, and
+   * `run_background_logs` with no id lists every one of them, finished ones
+   * included — so the next account's assistant could read what the previous
+   * account's commands printed (SEC-028). `repair()` now calls this before it
+   * pairs again. A real short-lived process is started, so the listing is
+   * genuinely non-empty before the forget and not trivially empty after.
+   */
+  const { BACKGROUND_IMPLEMENTATIONS: bg, forgetAllBackground } = await import('../worker/background.js');
+  await bg.run_background({
+    command: `"${process.execPath}" -e "console.log('previous-account-secret-token'); setTimeout(() => {}, 20000)"`,
+    name: 'previous-account-job',
+    settle_ms: 800,
+  });
+  const before = await bg.run_background_logs({});
+  check('the previous account\'s job is listed before re-pairing', /previous-account-job/.test(before), before.split('\n')[2]);
+
+  await forgetAllBackground();
+  const after = await bg.run_background_logs({});
+  check('  and after forgetting, nothing of it is listed', !/previous-account-job/.test(after), after);
+  // Asserted on what leaks, not on how it is refused: with nothing recorded the
+  // tool answers "none started" before looking at the id, rather than throwing.
+  let byId = '';
+  try {
+    byId = await bg.run_background_logs({ id: 'previous-account-job' });
+  } catch (err) {
+    byId = err.message;
+  }
+  check('  nor readable by its id', !/previous-account-secret-token/.test(byId), byId.slice(0, 70));
+}
+
+section('a running command stops when the turn is stopped');
+{
+  /*
+   * The server used to stop *waiting* and the process ran on. Two halves are
+   * pinned: the watcher that hears the cancellation, and the command that ends
+   * on it. The second really starts a process — a node that sleeps — because a
+   * kill path that only works in a mock is not a kill path.
+   */
+  const { watchForCancel } = await import('../worker/cancel.js');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const cancelled = new AbortController();
+  const stop1 = watchForCancel('j1', cancelled, { getStatus: async () => 'cancelled', intervalMs: 20 });
+  await sleep(80);
+  stop1();
+  check('the watcher aborts once the server says the job is closed', cancelled.signal.aborted && cancelled.signal.reason === 'cancelled');
+
+  const running = new AbortController();
+  const stop2 = watchForCancel('j2', running, { getStatus: async () => 'running', intervalMs: 20 });
+  await sleep(80);
+  stop2();
+  check('  and not while it is still running', !running.signal.aborted);
+
+  const offline = new AbortController();
+  const stop3 = watchForCancel('j3', offline, {
+    getStatus: async () => {
+      throw new Error('server unreachable');
+    },
+    intervalMs: 20,
+  });
+  await sleep(80);
+  stop3();
+  check('  and an unreachable server is not read as a cancellation', !offline.signal.aborted);
+
+  /*
+   * The worker's token, and every job it runs, travel over SERVER_URL. Plain
+   * http to the internet lets anyone on the path send it commands (SEC-032).
+   */
+  const { serverTransport } = await import('../worker/serverUrl.js');
+  const level = (url, options) => serverTransport(url, options).level;
+  check('https is accepted anywhere', level('https://example.vercel.app') === 'ok');
+  check('  plain http to this machine is accepted', ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://[::1]:5173'].every((u) => level(u) === 'ok'));
+  check('  plain http on the local network warns but runs', level('http://192.168.1.20:5173') === 'warn' && level('http://nas.local') === 'warn');
+  check('  plain http to the internet is refused', level('http://example.com') === 'refuse' && level('http://203.0.113.7') === 'refuse');
+  check('    and says how to fix it', /https:/.test(serverTransport('http://example.com').message || ''));
+  check('    unless the owner has said otherwise', level('http://example.com', { allowInsecure: true }) === 'warn');
+  check('  something that is not a web address is refused', level('ftp://example.com') === 'refuse' && level('not a url') === 'refuse');
+
+  const run = LOCAL_IMPLEMENTATIONS.run_command;
+  const controller = new AbortController();
+  const began = Date.now();
+  const pending = run(
+    { command: `"${process.execPath}" -e "setTimeout(() => {}, 30000)"`, timeout_ms: 60_000 },
+    { signal: controller.signal },
+  );
+  setTimeout(() => controller.abort('cancelled'), 500);
+  const out = await pending;
+  const took = Date.now() - began;
+  check('a thirty-second command ends promptly when cancelled', took < 10_000, `${took}ms`);
+  check('  and says it was cancelled, not that it failed', /user cancelled/i.test(out), out.split('\n').slice(-1)[0]);
+
+  /*
+   * The other two long-running local tools. Each assertion is written so it
+   * cannot pass for the wrong reason: a download to a closed local port fails
+   * anyway, so the check is that it failed *as an abort*, not as a refused
+   * connection; and an index stopped at once must say it was stopped, not that
+   * the folder held nothing.
+   */
+  const gone = new AbortController();
+  gone.abort('cancelled');
+  const savedPrivate = process.env.ALLOW_PRIVATE_FETCH;
+  process.env.ALLOW_PRIVATE_FETCH = '1';
+  let downloadErr = '';
+  try {
+    await LOCAL_IMPLEMENTATIONS.download_file(
+      { url: 'http://127.0.0.1:1/file.bin', path: `cancel-test-${process.pid}.bin` },
+      { signal: gone.signal },
+    );
+  } catch (err) {
+    downloadErr = `${err?.name || ''} ${err?.message || ''}`;
+  } finally {
+    if (savedPrivate === undefined) delete process.env.ALLOW_PRIVATE_FETCH;
+    else process.env.ALLOW_PRIVATE_FETCH = savedPrivate;
+  }
+  check('a download stops on the signal — as an abort, not a refused connection', /abort/i.test(downloadErr) && !/ECONNREFUSED/.test(downloadErr), downloadErr.trim().slice(0, 80));
+
+  const { INDEX_IMPLEMENTATIONS } = await import('../worker/indexer.js');
+  const indexed = await INDEX_IMPLEMENTATIONS.index_folder({ path: '.', reindex: true }, { signal: gone.signal });
+  check('an index stopped at once says it was stopped', /user cancelled/i.test(indexed), indexed.slice(0, 90));
+  check('  rather than that the folder held nothing', !/Nothing in there/.test(indexed));
+
+  const early = new AbortController();
+  early.abort('cancelled');
+  const notStarted = await run({ command: 'echo should-not-run' }, { signal: early.signal });
+  check('a command cancelled before it starts is not started', /Not run/.test(notStarted) && !/should-not-run\n/.test(notStarted.split('\n\n')[1] || ''));
+}
+
+section('printing a page is reaching off this machine, and is checked like it');
+{
+  /*
+   * `export_pdf` was the one url-taking tool on this machine that checked
+   * nothing. `browserOpen` requires `^https?://`; `download_file` goes through
+   * `safeFetch`, which refuses every private range. This went straight to
+   * Playwright's `goto` with whatever the model supplied — and `assessRisk`
+   * grades it `ordinary`, so under the default policy it ran with no prompt.
+   *
+   * `file:///…/.env` therefore rendered somebody's secrets into a PDF inside
+   * the workspace, where `read_file` picks it straight back up. That is an
+   * arbitrary local file read dressed as a printing tool.
+   *
+   * These run without a browser on purpose: the check sits above `sessionFor`,
+   * so a refusal costs no process and leaves no tab. If someone moves it back
+   * below, these tests start needing Chromium and will say so by hanging.
+   */
+  const { renderPdf } = await import('../worker/browser.js');
+
+  const refusedFor = async (url) => {
+    try {
+      await renderPdf({ url });
+      return '';
+    } catch (err) {
+      return err?.message || '';
+    }
+  };
+
+  check('a file: url is refused', /full http\(s\) URL/i.test(await refusedFor('file:///C:/Users/x/.env')));
+  check('  and so is data:', /full http\(s\) URL/i.test(await refusedFor('data:text/html,<p>x</p>')));
+  check(
+    'cloud metadata is refused',
+    /private address/i.test(await refusedFor('http://169.254.169.254/latest/meta-data/')),
+  );
+  check('  and loopback', /private address/i.test(await refusedFor('http://127.0.0.1:8080/admin')));
+
+  // The refusal must be about the address, not about there being a url at all —
+  // printing a real page is the feature.
+  const publicUrl = await refusedFor('https://example.com/');
+  check(
+    'a public page is not refused by the check itself',
+    !/full http\(s\) URL|private address/i.test(publicUrl),
+    publicUrl.slice(0, 60) || '(reached the browser)',
+  );
+}
+
 console.log(
   failures === 0
     ? '\n[32mAll system-tool checks passed.[0m\n'

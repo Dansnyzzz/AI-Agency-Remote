@@ -68,7 +68,30 @@ export function outputBudget(entry) {
   const wanted = Number.isFinite(stated) && stated > 0 ? stated : 32_000;
 
   const context = Number(entry?.context);
-  if (!Number.isFinite(context) || context <= 0) return wanted;
+  /**
+   * An entry that states neither figure gets the cautious number, not the
+   * optimistic one.
+   *
+   * This returned `wanted` — a flat 32,000, unclamped — which is precisely the
+   * hard-coded value `.claude/commands/new-provider.md` forbids, and for the
+   * reason it gives: `openai/gpt-4` has an 8,191-token **total** window, so
+   * asking it for 32,000 output asks for four times everything it has. The
+   * clamp below exists and is right; it was simply skipped on the one path
+   * where nothing is known.
+   *
+   * First-party catalogue entries carry both fields, so this never fired for
+   * them. Sparse metadata is what arrives from the aggregators — OpenRouter and
+   * OrcaRouter — which are the two providers this app is built around, so the
+   * path with no information is the path most likely to be taken.
+   *
+   * 4,096 because it is the smallest ceiling in common use and fits inside
+   * every window this app has seen. A reply cut short is a visible, recoverable
+   * disappointment; a request rejected for asking beyond the model's total
+   * window is a turn that produces nothing at all.
+   */
+  if (!Number.isFinite(context) || context <= 0) {
+    return Number.isFinite(stated) && stated > 0 ? wanted : 4_096;
+  }
 
   // Leave the prompt somewhere to live. A model whose window is smaller than the
   // reply it is being asked for cannot produce that reply.

@@ -43,7 +43,8 @@ which is worse than not offering it at all.
 
 ## Then check the cost
 
-The whole catalogue is re-sent on **every request**. Roughly 7000 tokens today.
+The catalogue is re-sent on **every request** — about 6,900 tokens of it on a
+128k window, out of 13,300 if nothing were deferred.
 On a 128k model that is noise; on `openai/gpt-4` (8191) it is most of the window.
 So a description that earns its length on the flagship is charged to every user
 on every turn. Say what the tool *is* in one sentence, then stop.

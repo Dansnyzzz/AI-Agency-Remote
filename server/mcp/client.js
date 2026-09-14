@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { assertPublic } from '../util/safeFetch.js';
+import { assertPublic, safeFetch } from '../util/safeFetch.js';
 
 /**
  * Whether this deployment may start a stdio MCP server.
@@ -244,7 +244,28 @@ function httpTransport({ url, headers = {} }) {
   async function send(payload, timeoutMs) {
     if (closed) throw new Error(closed);
 
-    const res = await fetch(url, {
+    /**
+     * `safeFetch`, not `fetch`, and the difference is the whole point.
+     *
+     * `connectMcp` calls `assertPublic` once and used to throw its answer away,
+     * handing the *hostname* to `fetch` — which resolves it again, independently,
+     * on every request. `assertPublic` returns the records it approved precisely
+     * so a caller can pin the socket to them, and its own comment describes this
+     * gap in as many words: a record with a one-second TTL answers with a public
+     * address for the check and `169.254.169.254` for the connection a moment
+     * later. Node's `fetch` gives no way to say which address to connect to;
+     * `safeFetch` uses `http.request` with a `lookup` override for exactly that
+     * reason, so it is the only way to close this here.
+     *
+     * The check now also runs per request rather than once per connection, which
+     * is what a time-of-check gap needs — one check at connect time cannot say
+     * anything about a socket opened ten minutes later.
+     *
+     * `redirect: 'manual'` is kept, and kept deliberately: the headers here may
+     * carry a token, and this transport would rather refuse a hop than reason
+     * about where it points. `safeFetch` honours the flag rather than following.
+     */
+    const res = await safeFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -253,9 +274,6 @@ function httpTransport({ url, headers = {} }) {
         ...headers,
       },
       body: JSON.stringify(payload),
-      // The host was checked public before connecting; a redirect could still
-      // aim the next hop — and the headers, which may carry a token — at a
-      // private address. Not followed, the same rule connectors.js keeps.
       redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
     });

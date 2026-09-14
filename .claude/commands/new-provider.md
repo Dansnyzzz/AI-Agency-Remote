@@ -39,9 +39,14 @@ last quarter is the most expensive kind of bug to debug backwards.
   is worth trying. Only 401/402/403/429 and genuine quota or rate-limit messages
   qualify. A missing model or a malformed request fails identically on all five
   keys, and retrying turns one clear error into five slow ones.
-- **A key must not be retried once text has streamed.** Half a sentence followed
-  by a second attempt either duplicates or silently replaces what the user has
-  already read.
+- **A reply that has started streaming may only be restarted visibly.** Half a
+  sentence followed by a second attempt either duplicates or silently replaces
+  what the user has already read. `streamCompletion` does retry after text — the
+  same key for an upstream drop, the next key for a refused one — but only by
+  yielding a `retry` event first, which clears the draft on the server and in
+  the browser, text **and reasoning**, and shows why. A new adapter must not
+  retry after text without that event. (This line used to forbid the retry
+  outright, which the code has not done for some time.)
 
 ## Verify
 
