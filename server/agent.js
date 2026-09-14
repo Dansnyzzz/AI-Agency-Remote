@@ -411,6 +411,41 @@ export function normaliseOrder(messages) {
  * both bad in the same way: neither leaves the person any attention for the
  * cases that actually matter.
  */
+/**
+ * Refuse, rather than run, a call the policy promised could not happen.
+ *
+ * `needsApproval` below returns nothing for `readonly` and `plan`, and the
+ * comment above it says why: "the tools were never offered". That is true of the
+ * catalogue and false of the model. A model can name a tool it was not offered —
+ * a hallucination, or a page it just read telling it to — and nothing between
+ * the stream and `executeTool` checked. So under the two policies a person picks
+ * precisely to mean "change nothing", a recursive `delete_file` ran **with no
+ * prompt at all**, while the same call under the more permissive `guarded`
+ * policy stopped to ask. Measured, not inferred: offered under readonly — false;
+ * needs approval — false; `executeTool` finds it — true.
+ *
+ * Anthropic sets `strict: true` and will not emit an unoffered name. The
+ * OpenAI-compatible adapter and Gemini have no equivalent (GAP-004), so this is
+ * reachable on the providers this app leans on most.
+ *
+ * Checked at execution, per call, the same belt-and-braces `subagents.js`
+ * already applies for the same reason. Under every other policy this returns
+ * null and the ordinary approval rules decide.
+ */
+export function policyRefusal(call, policy) {
+  if (policy !== 'readonly' && policy !== 'plan') return null;
+  if (assessRisk(call.name, call.input) === 'safe') return null;
+  return {
+    toolCallId: call.id,
+    name: call.name,
+    content:
+      `"${call.name}" can change things, and this conversation is set to ${policy === 'plan' ? 'plan' : 'read-only'} mode, `
+      + 'so it was not run. Describe what you would do instead, and the user can switch modes if they want it done.',
+    isError: true,
+    ms: 0,
+  };
+}
+
 export function needsApproval(toolCalls, policy) {
   if (policy === 'auto' || policy === 'readonly' || policy === 'plan') return [];
   return toolCalls.filter((call) => {
@@ -492,11 +527,18 @@ export function resumableCalls(toolCalls, startedIds = []) {
   return { run, skipped };
 }
 
-async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable }) {
+async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable, policy }) {
   const results = await mapWithLimit(
     toolCalls,
     MAX_PARALLEL_TOOLS,
     async (call) => {
+      // The policy's promise, enforced where the call would actually run. See
+      // `policyRefusal`.
+      const refused = policyRefusal(call, policy);
+      if (refused) {
+        emit('tool_result', refused);
+        return refused;
+      }
       const started = Date.now();
       emit('tool_call', { id: call.id, name: call.name, input: call.input });
       const { content, isError, file, widget, shot } = await executeTool({
@@ -813,7 +855,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
 
       await store.markToolCallsStarted(userId, chatId, last.id, run.map((c) => c.id));
       const ran = run.length
-        ? await runToolCalls({ user, toolCalls: run, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() })
+        ? await runToolCalls({ user, toolCalls: run, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable(), policy })
         : { id: newId(), role: 'tool', results: [] };
 
       // Back into the order the model asked for them, which is the order it will
@@ -1132,7 +1174,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
     // Marked before anything runs, so a run killed mid-execution leaves a record
     // that these calls began — which is what stops a resume repeating them.
     await store.markToolCallsStarted(userId, chatId, assistant.id, assistant.toolCalls.map((c) => c.id));
-    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
+    const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable(), policy });
     // See the resume path: a superseded run leaves the results to the run that
     // replaced it, rather than writing a second tool message for one turn.
     if (signal?.reason === 'superseded') {

@@ -957,6 +957,43 @@ section('parallel tool calls have a ceiling');
   check('an empty list is not a deadlock', (await mapWithLimit([], 4, async () => 1)).length === 0);
 }
 
+section('read-only and plan mode hold even for a tool nobody offered');
+{
+  /*
+   * `needsApproval` returns nothing under readonly and plan, on the grounds that
+   * "the tools were never offered". A model can name one anyway — hallucinated,
+   * or told to by a page — and nothing checked before `executeTool`. So the two
+   * policies meant as "change nothing" ran a recursive delete with no prompt,
+   * while the looser `guarded` policy stopped to ask about the same call.
+   */
+  const { policyRefusal, needsApproval } = await import('../server/agent.js');
+  const { availableTools } = await import('../server/tools/definitions.js');
+  const del = { id: 'd1', name: 'delete_file', input: { path: 'important', recursive: true } };
+
+  for (const policy of ['readonly', 'plan']) {
+    const offered = availableTools({ workerOnline: true, desktopOnline: true, context: 200_000, policy }).map((t) => t.name);
+    check(`${policy}: the tool is not offered`, !offered.includes('delete_file'));
+    check(`  and approval would not have stopped it`, needsApproval([del], policy).length === 0);
+    const refused = policyRefusal(del, policy);
+    check(`  but it is refused at execution`, refused?.isError === true, refused?.content?.slice(0, 60));
+    check(`  and the model is told why`, new RegExp(policy === 'plan' ? 'plan' : 'read-only').test(refused?.content || ''));
+  }
+
+  // What makes the refusal safe to add: nothing these modes legitimately offer is
+  // refused by it. If a future tool is offered under plan mode without being
+  // read-only, this is the check that says plan mode just broke.
+  for (const policy of ['readonly', 'plan']) {
+    const offered = availableTools({ workerOnline: true, desktopOnline: true, context: 200_000, policy });
+    const wouldRefuse = offered.filter((t) => policyRefusal({ id: 't', name: t.name, input: {} }, policy)).map((t) => t.name);
+    check(`${policy}: no tool it offers is refused by it`, wouldRefuse.length === 0, wouldRefuse.join(', '));
+  }
+
+  const read = { id: 'r1', name: 'read_file', input: { path: 'notes.md' } };
+  check('a read-only tool still runs in read-only mode', policyRefusal(read, 'readonly') === null);
+  check('and nothing is refused this way under guarded — approval decides there', policyRefusal(del, 'guarded') === null);
+  check('  where the same delete does ask first', needsApproval([del], 'guarded').length === 1);
+}
+
 section('a resume does not repeat what may already have happened');
 {
   /*
