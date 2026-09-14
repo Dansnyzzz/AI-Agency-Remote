@@ -1621,6 +1621,78 @@ section('an upsert cannot cross an account boundary');
   check('  the owner\'s machine details are not overwritten either', ownerWorker?.info?.platform === 'win32', JSON.stringify(ownerWorker?.info));
 }
 
+section('a message is numbered by the conversation\'s counter, and the migration to it is safe');
+{
+  /*
+   * `appendMessage` numbered a message `MAX(seq) + 1` inside the insert, and
+   * `(chat_id, seq)` is not unique, so two concurrent appends could share a
+   * position the transcript is ordered by (ARCH-007).
+   *
+   * Said plainly about what this suite can and cannot show: PGlite runs one
+   * statement at a time, so the concurrent collision itself **cannot** happen
+   * here, and a test claiming to reproduce it would pass for the wrong reason.
+   * What can break, and is checked, is the migration and its rollout edges —
+   * the parts where a mistake renumbers or repeats real conversations.
+   */
+  const owner = await store.createUser({
+    id: 'u-seq-owner', email: 'seq-owner@example.com', passwordHash: 'x', name: 'Owner', role: 'user',
+  });
+  const chat = await store.createChat(owner.id, { id: 'c-seq', title: 'Numbered', model: 'm' });
+
+  const a = await store.appendMessage(owner.id, chat.id, { id: 's-1', role: 'user', text: 'one' });
+  const b = await store.appendMessage(owner.id, chat.id, { id: 's-2', role: 'assistant', text: 'two' });
+  check('messages are numbered in order', a.seq === 0 && b.seq === 1, `${a.seq}, ${b.seq}`);
+
+  // A conversation from before the migration: messages present, no counter.
+  await db.query('UPDATE chats SET next_seq = NULL WHERE id = $1', [chat.id]);
+  const c = await store.appendMessage(owner.id, chat.id, { id: 's-3', role: 'user', text: 'three' });
+  check('a conversation with no counter yet continues after its last message, not from 0', c.seq === 2, String(c.seq));
+
+  // An instance still running the old code during a deploy inserts without
+  // touching the counter. The new code must not hand out that number again.
+  await db.query(
+    `INSERT INTO messages (id, chat_id, seq, role, content) VALUES ('s-old', $1, 3, 'assistant', '{"text":"from the old code"}')`,
+    [chat.id],
+  );
+  const d = await store.appendMessage(owner.id, chat.id, { id: 's-4', role: 'user', text: 'four' });
+  check('a number the old code already used is not issued twice', d.seq === 4, String(d.seq));
+
+  const seqs = (await store.listMessages(owner.id, chat.id)).map((m) => m.seq);
+  check('  and every message in the conversation has its own position', new Set(seqs).size === seqs.length, seqs.join(','));
+
+  // The backfill statement itself, run against a conversation that has messages
+  // and no counter — what every existing conversation looks like the first time
+  // version 18 is replayed.
+  const fs = await import('node:fs');
+  const { splitStatements } = await import('../server/store/pg.js');
+  const backfill = splitStatements(fs.readFileSync(new URL('../server/store/schema.sql', import.meta.url), 'utf8'))
+    .find((s) => /UPDATE chats c\s+SET next_seq/i.test(s));
+  check('the migration carries a backfill for the counter', Boolean(backfill));
+
+  await db.query('UPDATE chats SET next_seq = NULL WHERE id = $1', [chat.id]);
+  await db.query(backfill);
+  const [{ next_seq: filled }] = (await db.query('SELECT next_seq FROM chats WHERE id = $1', [chat.id])).rows;
+  check('  it sets the counter just past the last message', Number(filled) === 5, String(filled));
+
+  await db.query(backfill);
+  const [{ next_seq: again }] = (await db.query('SELECT next_seq FROM chats WHERE id = $1', [chat.id])).rows;
+  check('  and replaying it over a migrated database changes nothing', Number(again) === 5, String(again));
+
+  // Ownership: an append for somebody else's conversation bumps nothing.
+  const intruder = await store.createUser({
+    id: 'u-seq-intruder', email: 'seq-intruder@example.com', passwordHash: 'x', name: 'Other', role: 'user',
+  });
+  let refused = false;
+  try {
+    await store.appendMessage(intruder.id, chat.id, { id: 's-x', role: 'user', text: 'not mine' });
+  } catch {
+    refused = true;
+  }
+  const [{ next_seq: after }] = (await db.query('SELECT next_seq FROM chats WHERE id = $1', [chat.id])).rows;
+  check('another account cannot append', refused);
+  check('  nor advance the owner\'s counter by trying', Number(after) === 5, String(after));
+}
+
 section('which tool calls have started is recorded on the turn, by its owner only');
 {
   /*

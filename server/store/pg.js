@@ -185,8 +185,13 @@ export function splitStatements(sql) {
  *      tool_jobs.device_id — plus the unique pairing code that 16 wrote down
  *      as needed and deferred, partial over unclaimed rows and backfilled
  *      first, so an installer can no longer be told the wrong account
+ *  18  chats.next_seq, a per-conversation counter that appendMessage bumps, so
+ *      two appends at once cannot both number themselves MAX(seq)+1; backfilled
+ *      from the messages already there before its default is set. Deliberately
+ *      not a unique (chat_id, seq) — that needs existing collisions renumbered,
+ *      and renumbering would move the seq a summary's `covers` points at
  */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /**
  * How long a run lease may go untouched before another run may take it.
@@ -1005,12 +1010,42 @@ export function createPgStore(connectionString) {
     },
     async appendMessage(userId, chatId, message) {
       const { id, role, ...rest } = message;
+      /**
+       * The number comes from bumping the conversation's counter, not from
+       * reading the highest one (ARCH-007).
+       *
+       * This computed `MAX(seq) + 1` inside the insert. Two appends to one
+       * conversation at once both read the same maximum and both wrote it, and
+       * nothing refused the second, so two turns shared a position the whole
+       * transcript is ordered by. An UPDATE is different in exactly the way that
+       * matters: when it has to wait for another writer's row lock, Postgres
+       * re-reads the row before applying it, so the second append sees the first
+       * one's increment. A subquery is not re-read that way.
+       *
+       * `GREATEST` with the old reading covers two edges, and both are rollout
+       * edges rather than steady state. A conversation created in the moment
+       * between adding the column and setting its default has a NULL counter,
+       * and `GREATEST` ignores NULL. And an instance still running the old code
+       * during a deploy inserts without bumping the counter; taking the larger of
+       * the two keeps the new code from handing out a number the old code has
+       * already used.
+       *
+       * The ownership test moved into the UPDATE's WHERE, so an append for a
+       * conversation that is not this account's bumps nothing and inserts
+       * nothing — the same refusal the EXISTS gave before.
+       */
       const rows = await q(
-        `INSERT INTO messages (id, chat_id, seq, role, content)
-         SELECT $1, $2,
-                COALESCE((SELECT MAX(seq) + 1 FROM messages WHERE chat_id = $2), 0),
-                $3, $4
-          WHERE EXISTS (SELECT 1 FROM chats WHERE id = $2 AND user_id = $5)
+        `WITH bump AS (
+           UPDATE chats
+              SET next_seq = GREATEST(
+                    next_seq,
+                    (SELECT COALESCE(MAX(seq) + 1, 0) FROM messages WHERE chat_id = $2)
+                  ) + 1
+            WHERE id = $2 AND user_id = $5
+        RETURNING next_seq - 1 AS seq
+         )
+         INSERT INTO messages (id, chat_id, seq, role, content)
+         SELECT $1, $2, bump.seq, $3, $4 FROM bump
       RETURNING id, seq`,
         [id, chatId, role, JSON.stringify(rest), userId],
       );

@@ -210,7 +210,10 @@ section('schema.sql and SCHEMA_VERSION move together');
   const fingerprint = crypto.createHash('sha256').update(source).digest('hex').slice(0, 16);
 
   /** Update BOTH of these, together, whenever schema.sql changes. */
-  const STAMPED = { version: 17, fingerprint: '73631c7ea98cd360' };
+  // 18: chats.next_seq, the per-conversation counter (ARCH-007). The failure
+  // message suggested 19 because it assumes the version was not bumped; it was,
+  // in the same change as the schema, so 18 is the version that owns this file.
+  const STAMPED = { version: 18, fingerprint: '5d014080351c633d' };
 
   check(
     'the recorded version matches the code',
