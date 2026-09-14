@@ -273,9 +273,9 @@ export const en = {
   'models.refreshing': 'Refreshing…',
   'models.refreshNow': 'Refresh now',
   'models.automatic': 'Automatic',
-  'models.autoName': 'Auto — best free model',
+  'models.autoName': 'Auto — OpenRouter free router',
   'models.autoMeta':
-    'Picks the strongest free model you can run right now. Image support is a toggle in Settings → Behaviour.',
+    'openrouter/free · OpenRouter picks a free model for every message, including one that reads images when you attach one. Needs an OpenRouter key.',
 
   /* ── the workspace file list and editor ──────────────────────── */
   'ws.deleteConfirm': 'Delete?',

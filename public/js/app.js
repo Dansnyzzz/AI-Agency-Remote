@@ -2968,7 +2968,6 @@ function fillSettings() {
   $('max-steps').value = prefs.maxSteps;
   $('auto-compact').value = prefs.autoCompact === false ? 'off' : 'on';
   $('auto-preview').value = prefs.autoPreview === false ? 'off' : 'on';
-  $('auto-vision').value = prefs.autoVision ? 'on' : 'off';
   $('system-prompt').value = prefs.systemPrompt || '';
   // Per-browser, not per-account — so it is read back from storage, not prefs.
   $('theme').value = storedTheme();
@@ -3464,7 +3463,6 @@ $('save-behaviour').addEventListener('click', async () => {
       maxSteps: Number($('max-steps').value),
       autoCompact: $('auto-compact').value !== 'off',
       autoPreview: $('auto-preview').value !== 'off',
-      autoVision: $('auto-vision').value === 'on',
       systemPrompt: $('system-prompt').value,
     });
     renderTopbar();

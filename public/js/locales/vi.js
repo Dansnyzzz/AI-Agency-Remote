@@ -332,9 +332,9 @@ export const vi = {
   'models.refreshing': 'Đang làm mới…',
   'models.refreshNow': 'Làm mới ngay',
   'models.automatic': 'Tự động',
-  'models.autoName': 'Auto — model miễn phí tốt nhất',
+  'models.autoName': 'Auto — bộ định tuyến miễn phí của OpenRouter',
   'models.autoMeta':
-    'Chọn model miễn phí mạnh nhất mà bạn chạy được ngay lúc này. Hỗ trợ ảnh là một công tắc trong Cài đặt → Hành vi.',
+    'openrouter/free · OpenRouter tự chọn một model miễn phí cho từng tin nhắn, kể cả model đọc được ảnh khi bạn đính kèm ảnh. Cần key OpenRouter.',
 
   /* ── danh sách tệp và trình sửa trong thư mục làm việc ───────── */
   'ws.deleteConfirm': 'Xoá nhé?',

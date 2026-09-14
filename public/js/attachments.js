@@ -154,9 +154,9 @@ export function createAttachments({ state, refreshSendState, renderTopbar, onboa
 
   async function refreshModelFacts() {
     if (!state.model) return;
-    // `auto` is not a real model id, so there is nothing to resolve. It only ever
-    // picks a free model, and a turn carrying an image lifts vision by itself, so
-    // the free badge is on and the vision warning stays off.
+    // `auto` is OpenRouter's free router, which is free and routes a turn
+    // carrying an image to a model that reads images — so the free badge is on
+    // and the vision warning stays off.
     if (state.model === 'auto') {
       modelIsFree = true;
       modelSeesImages = true;
