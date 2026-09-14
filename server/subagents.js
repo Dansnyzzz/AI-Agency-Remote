@@ -2,7 +2,8 @@ import { streamCompletion } from './providers/index.js';
 import { resolveForUser } from './autoPick.js';
 import { executeTool } from './tools/execute.js';
 import { availableTools, assessRisk } from './tools/definitions.js';
-import { getPrefs } from './settings.js';
+import { getPrefs, providerStatus } from './settings.js';
+import { connectorSummary } from './connectors.js';
 import { record as recordUsage } from './usage.js';
 import { workerStatus } from './localTools.js';
 import { priceTurn } from './providers/catalog.js';
@@ -221,7 +222,11 @@ export async function runParallel({
   // an id that cannot resolve — a sub-agent run must not crash because the
   // account's model is set to Auto.
   const entry = await resolveForUser(user.id, modelId || prefs.defaultModel, { vision: !!prefs.autoVision });
-  const worker = await workerStatus(user, prefs);
+  const [worker, connectors, providerKeys] = await Promise.all([
+    workerStatus(user, prefs),
+    connectorSummary(user.id),
+    providerStatus(user.id),
+  ]);
 
   // Read-only, and desktop control withheld entirely: a sub-agent has no screen
   // to share and no way to ask before it moves somebody's mouse.
@@ -235,6 +240,17 @@ export async function runParallel({
     // Six sub-agents each re-send the catalogue, so a window too small for it is
     // six times the problem it is on the main loop.
     context: entry.context,
+    /*
+     * The same eligibility the main loop applies. `availableTools` filters by
+     * connector and provider only when it is told them, and this call told it
+     * neither — so every sub-agent was offered `github` and `notion_search`
+     * on an account with neither linked. Those can only fail, cost schema six
+     * times over, and let a sub-agent report that it would search Notion.
+     */
+    connected: connectors.ids,
+    providers: Object.entries(providerKeys)
+      .filter(([, status]) => status?.configured)
+      .map(([provider]) => provider),
   });
 
   const started = Date.now();

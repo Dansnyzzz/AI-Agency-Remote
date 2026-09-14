@@ -92,6 +92,13 @@ section('sub-agents (run_parallel)');
   });
 
   check('the provider was actually driven', seen.calls === 2, `${seen.calls} calls`);
+  // This account has linked nothing, so a connector tool could only fail.
+  const offeredNames = (seen.tools || []).map((t) => t.name);
+  check(
+    'a sub-agent is not offered a connector the account has not linked',
+    offeredNames.length > 0 && !offeredNames.includes('github') && !offeredNames.includes('notion_search'),
+    offeredNames.filter((n) => n === 'github' || n === 'notion_search').join(',') || `${offeredNames.length} tools`,
+  );
   check('answers come back, not "(no answer)"', !output.includes('(no answer)'), output.slice(0, 80));
   check('the first answer is present', output.includes('Answer about the first thing.'));
   check('the second answer is present', output.includes('Answer about the second thing.'));
