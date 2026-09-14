@@ -13,32 +13,32 @@ import { limit as rateLimit } from '../ratelimit.js';
  * @param {{ wrap: Function }} ctx
  */
 export function mountConnectorRoutes(api, { wrap }) {
-    api.get(
-      '/connectors',
-      wrap(async (req, res) => {
-        res.json({ connectors: await connectedServices(req.user.id) });
-      }),
-    );
-
-    api.post(
-      '/connectors/:service',
-      // Each attempt makes an outbound call to a third party to verify the token;
-      // without a ceiling this endpoint is a free proxy for hammering their API.
-      rateLimit('connect', (req) => req.user?.id),
-      wrap(async (req, res) => {
-        try {
-          res.json(await connect(req.user.id, req.params.service, req.body?.token));
-        } catch (err) {
-          res.status(400).json({ error: err.message });
-        }
-      }),
-    );
-
-    api.delete(
-      '/connectors/:service',
-      wrap(async (req, res) => {
-        await disconnect(req.user.id, req.params.service);
-        res.json({ ok: true });
-      }),
-    );
+    api.get(
+      '/connectors',
+      wrap(async (req, res) => {
+        res.json({ connectors: await connectedServices(req.user.id) });
+      }),
+    );
+
+    api.post(
+      '/connectors/:service',
+      // Each attempt makes an outbound call to a third party to verify the token;
+      // without a ceiling this endpoint is a free proxy for hammering their API.
+      rateLimit('connect', (req) => req.user?.id),
+      wrap(async (req, res) => {
+        try {
+          res.json(await connect(req.user.id, req.params.service, req.body?.token));
+        } catch (err) {
+          res.status(400).json({ error: err.message });
+        }
+      }),
+    );
+
+    api.delete(
+      '/connectors/:service',
+      wrap(async (req, res) => {
+        await disconnect(req.user.id, req.params.service);
+        res.json({ ok: true });
+      }),
+    );
 }

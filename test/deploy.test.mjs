@@ -211,6 +211,25 @@ section('files read at runtime are present');
     dirty.length === 0,
     dirty.slice(0, 3).join('; '),
   );
+
+  /*
+   * And git reads every one of them as text.
+   *
+   * CODE-025: four route files lifted out of app.js were committed with a
+   * carriage return doubled before every line feed. A lone CR makes git classify
+   * the file as `-text`, and a non-text file gets no line diff — every later
+   * change to chats.js, files.js, mcp.js and connectors.js showed as "binary
+   * files differ", unreviewable. Asked of git itself, so it holds whatever the
+   * checkout's line-ending settings are. (The row format is
+   * `i/<index> w/<tree> attr/<attr> <TAB><path>`.)
+   */
+  const SOURCE = ['.js', '.mjs', '.cjs', '.css', '.html', '.sql', '.json', '.md', '.ps1', '.sh'];
+  const binaryish = execFileSync('git', ['ls-files', '--eol'], { cwd: root, encoding: 'utf8' })
+    .split(String.fromCharCode(10))
+    .filter((row) => row.startsWith('i/-text'))
+    .map((row) => row.split(String.fromCharCode(9)).pop() || '')
+    .filter((file) => SOURCE.some((ext) => file.endsWith(ext)));
+  check('git diffs every tracked source file as text', binaryish.length === 0, binaryish.slice(0, 4).join(', '));
 }
 
 // ── the app, running as a deployment ────────────────────────────────
