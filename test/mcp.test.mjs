@@ -33,7 +33,7 @@ process.env.ALLOW_MCP_STDIO = '1';
 
 const { connectMcp, __testing } = await import('../server/mcp/client.js');
 const { flatten } = __testing;
-const { slugify, splitMcpName } = (await import('../server/mcp/registry.js')).__testing;
+const { slugify, splitMcpName, offerable } = (await import('../server/mcp/registry.js')).__testing;
 const { assessRisk, riskReason, availableTools } = await import('../server/tools/definitions.js');
 
 const STUB = path.join(import.meta.dirname, 'fixtures', 'mcp-stub-server.mjs');
@@ -145,6 +145,32 @@ section('names');
   // "My Figma!" has to become something a model can actually be offered.
   check('a name is made safe for a tool id', slugify('My Figma!') === 'my_figma', slugify('My Figma!'));
   check('and never comes back empty', slugify('!!!') === 'server', slugify('!!!'));
+
+  /*
+   * A server names its own tools. One bad name or schema used to go straight
+   * into the provider request, and a provider refuses the whole request for it —
+   * so one careless tool broke every turn on the account.
+   */
+  const { usable, skipped } = offerable('figma', [
+    { name: 'get_file', inputSchema: { type: 'object', properties: {} } },
+    { name: 'search.files', inputSchema: { type: 'object' } },
+    { name: 'x'.repeat(60), inputSchema: { type: 'object' } },
+    { name: 'get_file', inputSchema: { type: 'object' } },
+    { name: 'list', inputSchema: { type: 'array' } },
+    { name: 'bare' },
+    { name: '' },
+    null,
+  ]);
+  check(
+    'only tools a provider accepts are offered',
+    usable.map((t) => t.name).join(',') === 'get_file,bare',
+    usable.map((t) => t.name).join(','),
+  );
+  check('and every other one is named with a reason', skipped.length === 6 && skipped.every((s) => s.reason), JSON.stringify(skipped));
+  check('  a dotted name is refused', skipped.some((s) => s.name === 'search.files'));
+  check('  an over-long name is refused', skipped.some((s) => s.name === 'x'.repeat(60)));
+  check('  a repeated name is refused', skipped.some((s) => s.reason === 'name repeated'));
+  check('  a non-object schema is refused', skipped.some((s) => s.name === 'list' && /schema/.test(s.reason)));
   check('a prefixed name splits back apart', JSON.stringify(splitMcpName('mcp__figma__get_file')) === '{"server":"figma","tool":"get_file"}');
   // Tool names containing __ must not be truncated at the first one.
   check(
@@ -348,6 +374,29 @@ section('a server plugged in reaches the assistant');
     offered.tools.map((t) => t.name).join(', '),
   );
   check('and the name says which server', offered.tools.every((t) => t.description.startsWith('[Stub Server]')));
+
+  /*
+   * Two rows, one slug. The store is unique on lower(name) only, so "Stub
+   * Server" and "stub-server" can both exist — a row from before the route's
+   * check. Both used to connect, the second replaced the first connection
+   * without closing it, and every tool name went out twice, which a provider
+   * refuses outright.
+   */
+  await store.saveMcpServer(mine.id, {
+    id: 'srv-twin',
+    name: 'stub-server',
+    config: sealConfig({ transport: 'stdio', command: process.execPath, args: [STUB] }),
+    enabled: true,
+  });
+  forgetMcp(mine.id);
+  const twins = await mcpTools(mine.id);
+  const twinNames = twins.tools.map((t) => t.name);
+  check('two servers with one slug never offer a tool name twice', new Set(twinNames).size === twinNames.length, `${twinNames.length} names`);
+  check('  the first keeps its tools', twinNames.length === 5, `${twinNames.length}`);
+  const twin = twins.servers.find((s) => s.name === 'stub-server');
+  check('  the later one is reported, and says why', /collide/.test(twin?.error || ''), JSON.stringify(twin));
+  await store.deleteMcpServer(mine.id, 'srv-twin');
+  forgetMcp(mine.id);
 
   // Through the executor the agent loop actually uses, not a direct call.
   const { executeTool } = await import('../server/tools/execute.js');

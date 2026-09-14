@@ -73,14 +73,16 @@ export function mountMcpRoutes(api, { wrap, body }) {
        * Two servers must not slug to the same prefix.
        *
        * Tools are advertised as `mcp__<slug>__<tool>`, so "Figma" and "Figma!"
-       * both become `figma` — and the registry connects both, stores both under
-       * one key, and pushes both sets of tools with identical names. A tool list
+       * both become `figma` — and the registry used to connect both, store both
+       * under one key, and push both sets of tools with identical names. A tool list
        * containing duplicate names is rejected outright by Anthropic and OpenAI,
        * so **every message in every conversation** then failed until one server
        * was removed. `callMcpTool` routes by the same slug, so whichever
        * connection survived also received calls meant for the other.
        *
        * Checked here because this is where a person can still be told why.
+       * `mcpTools` also refuses the later of two colliding rows, for rows saved
+       * before this check existed.
        */
       const slug = slugify(name);
       if (!slug) {
