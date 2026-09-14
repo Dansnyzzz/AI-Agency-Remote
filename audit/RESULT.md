@@ -117,6 +117,53 @@ as `GAP-011`), one `[UNKNOWN]` (latency, needs a live key).
   memory; a bounded re-scan of `worker/` stands in for them and is labelled as such
   in the ledger.
 
+## Regression checks
+
+| Check | Result | How |
+|---|---|---|
+| Diff against the safety net | 79 files, +6,679 / −1,071. **No lockfile, no `.env`, no deleted file.** One rename, `claude.md` → `CLAUDE.md` (`CFG-016`). `.env.example` changed only in comments and blank variable names | `git diff --stat` / `--name-status backup/pre-optimize-20260909-2011..HEAD` |
+| Skipped tests | **One, platform-conditional:** `desktop.test.mjs` skips window listing, clicking and typing through the Node host on Windows, because Windows desktop control goes through `worker/desktop/host.ps1`. It runs on macOS and Linux (CI is ubuntu). Nothing was skipped to make a run pass | gate log, every `–` line read |
+| `.typecheck-baseline.json` | **shrank** 363 → 362 | file diff |
+| Secrets in the new commits | **0 real.** Two scanner hits, both deliberate fake fixtures in `test/http.test.mjs` that test the redactor itself (`sk-or-v1-0123456789abcdef…`, `postgres://user:hunter2@db.example`) | patterns for `sk-`, `AIza`, `gh*_`, `xox*`, `AKIA`, private keys, credentialed URLs, env assignments with values, personal email domains, over `git log -p` of every new commit and message |
+| The app, running | **passes** — output below | `node server/index.js` on a throwaway `DATA_DIR`, port 5199, database and provider-key variables blanked so no hosted database or paid API could be reached |
+
+```
+GET  /api/session (anonymous)      200  {"authed":false}
+POST /api/register                 201  {"role":"admin"}
+GET  /api/session                  200  {"authed":true}
+GET  /api/bootstrap                200  {"toolPolicy":"guarded","keys":10}
+POST /api/projects                 201  {"id":true}
+GET  /api/projects                 200  {"count":1}
+GET  /api/mcp                      200  {"servers":0}
+POST /api/mcp (private http)       400  {"error":"That server did not start: 127.0.0.1 is a private address. This tool o"}
+GET  /api/admin/users              200  {"users":1}
+GET  /api/worker/jobs/x (no token) 401
+POST /api/logout                   200
+GET  /api/session (after logout)   200  {"authed":false}
+server log lines: 15, error-looking lines: 0
+```
+
+`CMD_RUN_LOCAL` itself (`npm start` → `scripts/launch.js`) was not used for this: it
+opens the real data directory, and `test/schema.test.mjs` records the day a second
+process on that directory destroyed its conversations. The server entry it launches
+is the one exercised above. No model turn was sent — that needs a live key.
+
+## Corrections to this audit's own findings
+
+| ID | First said | Measured |
+|---|---|---|
+| E11 (Phase 1) | Path containment **ĐẠT** | Wrong: a dangling link walked out until `SEC-025` |
+| SEC-024 | Backend agent's F2 | F2 was sub-agent nesting, fixed as `SEC-026`; SEC-024's own content stays DOWNGRADED |
+| ACC-007 | HIGH | **CRITICAL** — after compaction the model got the summary and nothing else, not even the question |
+| SEC-018 | 2 unredacted log sites | **10** |
+| CODE-020 | uncoerced `bigint` is a bug | real at the boundary, harmless at the only consumer — DOWNGRADED |
+| PERF-011 | `upsertModels`/`replaceDocChunks` are N+1 and non-transactional | wrong on both counts; the one real residual became `PERF-012` |
+| CODE-028 (store F5) | `updateUser` role unvalidated is a hole | its only role-carrying caller whitelists first — DOWNGRADED |
+| PERF-014 (store F6) | `listUsers` correlated subqueries are slow | both index-backed, admin-only — DOWNGRADED |
+| SEC-031 (F8c) | three read-only tools graded too loosely | one real (`clipboard_read`); `extract` and `browser_hover` are the same class as tools already accepted |
+| PERF-010 | fixed | bypassed through `resolveModel`; really fixed by `PERF-013` |
+| CFG-019 | first narrowing fixed it | it did not (`pending.length === 0` still swallowed reports); the second change, approved by the owner, did |
+
 ## Mistakes made during the work
 
 - The shell and the edit tool collapse a doubled backslash, and it bit five times:
@@ -132,7 +179,7 @@ as `GAP-011`), one `[UNKNOWN]` (latency, needs a live key).
 - `CODE-016` introduced a regression (a superseded run persisted partial text) that
   its own suite did not catch at first; fixed with an abort reason.
 - `PERF-010`'s fix was bypassed through `resolveModel`, found later as `PERF-013`.
-- Two commits carry two IDs each, and `16de288` bundled two; recorded in the ledger.
+- Three commits carry two IDs each (`9b3ffc2`, `9a0ba2a`, `3e72a86`), and `16de288` bundled two; recorded in the ledger.
 - One gate run went red with the failing step not captured and was green on an
   unchanged re-run. Recorded rather than explained away.
 

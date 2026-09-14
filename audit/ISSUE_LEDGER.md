@@ -266,7 +266,7 @@ it first, that is said. Severity is judged here; the final report sorts by it.
 
 **Corrections to rows above.**
 - `SEC-024` was logged as the backend agent's finding F2. It was not: F2 was sub-agents running tools they were never offered, which is `SEC-026` below. `SEC-024`'s own content (approval not bound to its calls) stands as written and stays DOWNGRADED.
-- `9b3ffc2` and `9a0ba2a` each carry **two** IDs (`GAP-008`+`CODE-024`, `PERF-013`+`GAP-009`), against the one-ID-per-commit rule. Both pairs change the same function and are tested together, which is the reason, not an excuse; recorded as a process slip alongside `16de288`.
+- `9b3ffc2`, `9a0ba2a` and `3e72a86` each carry **two** IDs (`GAP-008`+`CODE-024`, `PERF-013`+`GAP-009`, `AUTO-007`+`AUTO-008`), against the one-ID-per-commit rule. Both pairs change the same function and are tested together, which is the reason, not an excuse; recorded as a process slip alongside `16de288`.
 
 | ID | Sev | Nhóm | Mô tả | Bằng chứng | Prov | Trạng thái |
 |---|---|---|---|---|---|---|
