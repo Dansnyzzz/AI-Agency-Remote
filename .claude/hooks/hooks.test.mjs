@@ -165,6 +165,21 @@ check('guard-bash.js', bash(['git', 'push', '--tags', 'origin', 'feature'].join(
 check('guard-bash.js', bash(['git', 'tag', 'backup/pre-optimize-x'].join(' ')), ALLOW, 'tagging locally is fine');
 check('guard-bash.js', bash(['gh', 'pr', 'view', '4'].join(' ')), ALLOW, 'and reading a pull request is too');
 
+/*
+ * A refusal must say what to do when the match was text, not a command (CFG-021).
+ *
+ * The rules are not loosened — a quoted string can be a real command, so there is
+ * no safe way to strip one. What changed is the dead end: writing a file whose
+ * *contents* mention a blocked command gets pointed at the Edit tool, rather than
+ * leaving rephrasing-until-it-passes as the only visible option.
+ */
+{
+  const writesText = bash(`node -e "require('fs').writeFileSync('notes.md', 'never run ${['npm', 'publish'].join(' ')} here')"`);
+  const run = check('guard-bash.js', writesText, BLOCK, 'text that names a blocked command is still refused — the rule is not loosened');
+  is(/Edit or\s+Write tool/.test(run.stderr || ''), '  but the refusal says to write the file with the Edit tool instead');
+  is(/do not rephrase/i.test(run.stderr || ''), '  and not to rephrase around the match');
+}
+
 console.log('\n[1mguard-write[0m');
 check('guard-write.js', write('server/app.js'), ALLOW, 'ordinary source is editable');
 check('guard-write.js', write('test/deploy.test.mjs'), ALLOW, 'so are tests');

@@ -231,8 +231,31 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
+  /**
+   * Every refusal also says what to do if the match was data rather than a
+   * command (CFG-021).
+   *
+   * This guard reads command text. It cannot tell `rm -rf build` from a
+   * sentence *about* `rm -rf` being written into a file by `node -e` or
+   * `printf`, and there is no safe way to teach it: `node -e "…execSync('rm -rf
+   * ~')"` is a real command inside quotes, and so is `bash -c "…"`. Stripping
+   * quoted text would open exactly the door the rules exist to close, so the
+   * rules are not loosened. Heredoc bodies are the one case that is
+   * unambiguously data, and those are already removed (CFG-002).
+   *
+   * What was wrong was the dead end. Refused twice during this audit while
+   * writing documentation about these very rules, the only useful next step was
+   * to use the Edit or Write tool — which is the right way to put text in a file
+   * anyway, and never passes through this hook. Saying so turns a false
+   * positive into a direction instead of into pressure to switch the guard off.
+   */
   const refuse = (why) => {
-    process.stderr.write(`Blocked by .claude/hooks/guard-bash.js\n\n${why}\n`);
+    process.stderr.write(
+      `Blocked by .claude/hooks/guard-bash.js\n\n${why}\n\n`
+        + 'If this command only writes text that mentions these words into a file, it is data, not a command — '
+        + 'but this guard reads command text and cannot tell the difference. Write the file with the Edit or '
+        + 'Write tool instead; do not rephrase the command to get past the match.\n',
+    );
     process.exit(2);
   };
 
