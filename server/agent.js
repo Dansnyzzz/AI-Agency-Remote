@@ -767,6 +767,12 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
 
   // Say which model auto landed on, so the choice is never invisible.
   if (autoNotice) emit('status', { message: autoNotice });
+  // A built-in the provider has shut down resolves to its replacement; say so,
+  // rather than let the model — and the bill — change without a word. See
+  // RETIREMENTS in providers/catalog.js.
+  if (entry?.retiredFrom) {
+    emit('status', { message: `${entry.retiredFrom} has been shut down by its provider, so this is using ${entry.label} instead.` });
+  }
 
   // The question decides which passages of a long shelf are worth sending, so
   // the sources are chosen after the transcript is known rather than before.

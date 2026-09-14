@@ -613,6 +613,38 @@ section('output budget follows the model');
    * this app is built around — so the branch with no information is the one
    * most likely to be taken.
    */
+  /*
+   * Through `resolveModel`, not only with a raw object. The first version of
+   * this fix was tested on hand-built entries, and both real paths still handed
+   * back 32000: `derivedMaxOutput` and the hand-typed branch each materialised
+   * "unknown" as a stated 32000 before `outputBudget` saw the entry (PERF-013).
+   */
+  const sparse = resolveModel('openrouter/some/model', { id: 'openrouter/some/model', provider: 'openrouter', model: 'some/model', context: null, max_output: null });
+  check('an aggregator row with no window or cap resolves to no stated cap', sparse.maxOutput === null, String(sparse.maxOutput));
+  check('  and gets the cautious budget, not 32000', outputBudget(sparse) === 4096, String(outputBudget(sparse)));
+  const handTyped = resolveModel('openai/some-model-nobody-listed');
+  check('a hand-typed model id gets the cautious budget too', outputBudget(handTyped) === 4096, String(outputBudget(handTyped)));
+
+  /*
+   * A retiring built-in keeps working until its shutdown date, then resolves to
+   * its replacement. o4-mini shuts down on 2026-10-23 (OpenAI's deprecations
+   * page); switching before then would move somebody off the cheaper model they
+   * chose for no reason, and not switching after it is an error on every turn.
+   */
+  const realNow = Date.now;
+  try {
+    Date.now = () => Date.parse('2026-10-22T12:00:00Z');
+    const before = resolveModel('openai/o4-mini');
+    check('before its shutdown date a retiring model still resolves to itself', before.model === 'o4-mini' && !before.retiredFrom);
+    Date.now = () => Date.parse('2026-10-23T00:00:01Z');
+    const after = resolveModel('openai/o4-mini');
+    check('  and from the date it resolves to the replacement', after.model === 'gpt-5.6-terra', after.model);
+    check('  saying which model it replaced, so the loop can announce it', after.retiredFrom === 'openai/o4-mini');
+    check('  with the replacement\'s own verified limits', after.context === 1_050_000 && after.maxOutput === 128_000);
+  } finally {
+    Date.now = realNow;
+  }
+
   const unknown = outputBudget({ id: 'openrouter/mystery/model', provider: 'openrouter' });
   check('an entry that states nothing gets a cautious cap', unknown === 4096, String(unknown));
   check('  not the flat 32000 that fits in no small window', unknown !== 32_000);
