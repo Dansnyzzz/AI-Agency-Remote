@@ -17,6 +17,8 @@ import { safeFetch } from '../util/safeFetch.js';
 import { searchDocs, listSources, forgetSource } from '../rag.js';
 import { createDocument, extensionOf } from '../office/index.js';
 import { saveGenerated } from '../attachments.js';
+import { record as recordUsage } from '../usage.js';
+import { log } from '../util/trace.js';
 import { search, formatResults } from '../search.js';
 import { untrusted } from './untrusted.js';
 // Only to tell a real tool name from one the model invented — see loadToolsTool.
@@ -996,6 +998,71 @@ async function sendEmailTool({ to, subject, body, html }) {
  * works, so it appears as something to look at and download rather than a wall of
  * base64 in the transcript.
  */
+/**
+ * The image model, and why it is not the one this used to name.
+ *
+ * `generate_image` called `ai.models.generateImages` with `imagen-4.0-generate-001`.
+ * Google's own model page says the Imagen 4 standard, ultra and fast endpoints
+ * "are deprecated and will be shut down on August 17, 2026", and recommends
+ * migrating to Gemini 3.1 Flash Image (https://ai.google.dev/gemini-api/docs/models/imagen,
+ * read 2026-09-14). That date had passed when this was found: with no
+ * `IMAGE_MODEL` override, the tool was calling an endpoint that no longer exists,
+ * for every account (GAP-008).
+ *
+ * The replacement is a different API — Interactions rather than `generateImages`,
+ * one image per request, bytes on `output_image.data` — confirmed against the
+ * `@google/genai` 2.20.0 type declarations installed here, not assumed from the
+ * docs alone. It has not been run against a live key: no key is available to this
+ * audit, and spending the owner's credit to prove it was not authorised.
+ */
+const IMAGE_MODEL = 'gemini-3.1-flash-image';
+
+/**
+ * Ask for `count` images and gather what came back.
+ *
+ * Separated from the tool so the request shape and the reading of the response can
+ * be pinned with a stand-in client — the real one needs a key and costs money per
+ * call. One interaction per image, sent together, because this API returns one.
+ *
+ * @returns {Promise<{ images: Array<{ data: string, mime: string }>, usage: { input: number, output: number }, refusal: string|null }>}
+ */
+export async function requestImages(client, { model, prompt, count, aspectRatio }) {
+  const settled = await Promise.allSettled(
+    Array.from({ length: count }, () =>
+      client.interactions.create({
+        model,
+        input: prompt,
+        response_format: { type: 'image', ...(aspectRatio ? { aspect_ratio: String(aspectRatio) } : {}) },
+        // Nothing about a picture request needs to be kept on Google's side.
+        store: false,
+      })),
+  );
+
+  const images = [];
+  const usage = { input: 0, output: 0 };
+  let refusal = null;
+  let failure = null;
+  for (const outcome of settled) {
+    if (outcome.status === 'rejected') {
+      failure = failure || outcome.reason;
+      continue;
+    }
+    const interaction = outcome.value || {};
+    usage.input += Number(interaction.usage?.total_input_tokens) || 0;
+    usage.output += Number(interaction.usage?.total_output_tokens) || 0;
+    const image = interaction.output_image;
+    if (image?.data) {
+      images.push({ data: image.data, mime: image.mime_type || 'image/png' });
+    } else if (!refusal) {
+      // A model that declines usually says why in text, or in the errors list.
+      refusal = interaction.errors?.[0]?.message || interaction.output_text || null;
+    }
+  }
+  // Every request failing outright is an error to report, not an empty result.
+  if (!images.length && !refusal && failure) throw failure;
+  return { images, usage, refusal };
+}
+
 async function generateImageTool({ prompt, name, aspect_ratio: aspectRatio, count }, { userId, chatId }) {
   const text = String(prompt || '').trim();
   if (!text) throw new Error('Describe the image you want.');
@@ -1012,24 +1079,32 @@ async function generateImageTool({ prompt, name, aspect_ratio: aspectRatio, coun
   const wanted = Math.min(Math.max(Number(count) || 1, 1), 4);
   const { GoogleGenAI } = await import('@google/genai');
   const ai = new GoogleGenAI({ apiKey: key });
+  const model = process.env.IMAGE_MODEL || IMAGE_MODEL;
 
-  const response = await ai.models.generateImages({
-    model: process.env.IMAGE_MODEL || 'imagen-4.0-generate-001',
-    prompt: text,
-    config: {
-      numberOfImages: wanted,
-      ...(aspectRatio ? { aspectRatio: String(aspectRatio) } : {}),
-    },
-  });
+  const { images, usage, refusal } = await requestImages(ai, { model, prompt: text, count: wanted, aspectRatio });
 
-  const images = (response?.generatedImages || []).filter((image) => image?.image?.imageBytes);
+  /*
+   * Booked, which it never was (CODE-024). One call makes up to four pictures on
+   * the account's own Google key, and nothing recorded it: an account making many
+   * images looked free on the usage page, and a monthly limit set by an admin did
+   * not count this spend at all. The Interactions API reports tokens for image
+   * output, so what is recorded is the provider's own figure — no per-image price
+   * is guessed here.
+   */
+  if (usage.input || usage.output) {
+    // `costUsd` 0 on purpose: the tokens are the provider's own figure and count
+    // against the monthly limit, while a dollar amount would need a price table
+    // entry for this model that nothing here has verified.
+    await recordUsage(userId, { chatId, model: `google/${model}`, usage, costUsd: 0, role: 'image' }).catch((err) =>
+      log.error('image usage not recorded', err, { model }));
+  }
+
   if (!images.length) {
     // A refusal is not an empty result, and reporting it as one would have the
     // model try again with the same prompt.
-    const refused = response?.generatedImages?.find((image) => image?.raiFilteredReason)?.raiFilteredReason;
     throw new Error(
-      refused
-        ? `Google declined to make that image: ${refused}`
+      refusal
+        ? `Google declined to make that image: ${refusal}`
         : 'Google returned no image and gave no reason. Try describing it differently.',
     );
   }
@@ -1037,12 +1112,12 @@ async function generateImageTool({ prompt, name, aspect_ratio: aspectRatio, coun
   const base = String(name || text).replace(/[\\/:*?"<>|]/g, '-').slice(0, 60).trim() || 'image';
   const saved = [];
   for (const [index, image] of images.entries()) {
-    const mime = image.image.mimeType || 'image/png';
+    const { mime } = image;
     const extension = mime.includes('jpeg') ? 'jpg' : mime.split('/')[1] || 'png';
     const file = await saveGenerated(userId, {
       name: `${base}${images.length > 1 ? ` ${index + 1}` : ''}.${extension}`,
       mime,
-      data: image.image.imageBytes,
+      data: image.data,
       chatId,
     });
     saved.push(file);
@@ -1053,8 +1128,9 @@ async function generateImageTool({ prompt, name, aspect_ratio: aspectRatio, coun
     content:
       `Made ${saved.length} image${saved.length === 1 ? '' : 's'}: ${saved.map((f) => f.name).join(', ')}. ` +
       `${saved.length === 1 ? 'It is' : 'They are'} in the conversation now — the user can see and download ` +
-      `${saved.length === 1 ? 'it' : 'them'}, so do not try to describe the pixels back to them.` +
-      (images[0].enhancedPrompt ? `\n\nThe prompt was expanded to: ${images[0].enhancedPrompt}` : ''),
+      // Imagen returned an `enhancedPrompt`; the Interactions API has no such field,
+      // so the line that reported it is gone rather than left reading undefined.
+      `${saved.length === 1 ? 'it' : 'them'}, so do not try to describe the pixels back to them.`,
     file: { id: first.id, name: first.name, mime: first.mime, kind: first.kind, bytes: first.bytes },
   };
 }

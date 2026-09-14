@@ -1059,6 +1059,50 @@ section('read-only and plan mode hold even for a tool nobody offered');
   check('  where the same delete does ask first', needsApproval([del], 'guarded').length === 1);
 }
 
+section('pictures come from a model that still exists, and are booked');
+{
+  /*
+   * `generate_image` called Imagen 4, whose endpoints Google shut down on
+   * 2026-08-17 (GAP-008), and never recorded what it spent (CODE-024). The
+   * replacement is the Interactions API, one image per request. A stand-in
+   * client pins what is sent and what is read back — the real client needs a key
+   * and costs money per call, and no live call is made here.
+   */
+  const { requestImages } = await import('../server/tools/cloud.js');
+  const sent = [];
+  const client = {
+    interactions: {
+      create: async (req) => {
+        sent.push(req);
+        return {
+          output_image: { data: 'aGVsbG8=', mime_type: 'image/png' },
+          usage: { total_input_tokens: 12, total_output_tokens: 1290 },
+        };
+      },
+    },
+  };
+  const got = await requestImages(client, { model: 'gemini-3.1-flash-image', prompt: 'a lighthouse', count: 3, aspectRatio: '16:9' });
+  check('one request per picture', sent.length === 3, String(sent.length));
+  check('  to the replacement model, not the retired one', sent.every((r) => r.model === 'gemini-3.1-flash-image'));
+  check('  asking for an image in the requested shape', sent.every((r) => r.response_format?.type === 'image' && r.response_format?.aspect_ratio === '16:9'));
+  check('three pictures come back', got.images.length === 3 && got.images[0].mime === 'image/png');
+  check('and the provider\'s own token counts are summed for booking', got.usage.input === 36 && got.usage.output === 3870, JSON.stringify(got.usage));
+
+  const declining = { interactions: { create: async () => ({ output_text: 'I can\'t make that.', usage: { total_input_tokens: 9, total_output_tokens: 4 } }) } };
+  const refused = await requestImages(declining, { model: 'm', prompt: 'x', count: 1 });
+  check('a refusal is reported as a refusal, with its reason', refused.images.length === 0 && /can't make that/.test(refused.refusal || ''));
+  check('  and still booked — a declined request is still paid for', refused.usage.input === 9);
+
+  const broken = { interactions: { create: async () => { throw new Error('404 model not found'); } } };
+  let thrown = '';
+  try {
+    await requestImages(broken, { model: 'imagen-4.0-generate-001', prompt: 'x', count: 2 });
+  } catch (err) {
+    thrown = err.message;
+  }
+  check('every request failing is an error, not an empty success', /404/.test(thrown), thrown);
+}
+
 section('two memory notes written in one step both survive');
 {
   /*
