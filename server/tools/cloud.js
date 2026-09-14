@@ -985,10 +985,9 @@ async function sendEmailTool({ to, subject, body, html }) {
 /**
  * Make a picture.
  *
- * Through Google's Imagen, on the account's own Google key. The shape here was
- * read off the installed SDK's own type definitions rather than remembered:
- * `models.generateImages({ model, prompt, config })` answering with
- * `generatedImages[].image.imageBytes` as base64.
+ * Through Google's Gemini image model, on the account's own Google key — see
+ * `IMAGE_MODEL` and `requestImages` below for the model, the request shape, and
+ * why it is no longer Imagen.
  *
  * OpenAI can also do this and is deliberately not wired up. One verified path is
  * worth more than two half-checked ones, and the error below names exactly what
