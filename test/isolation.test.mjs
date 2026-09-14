@@ -1338,6 +1338,18 @@ section('the untrusted-content boundary');
     check(`${name} is the app's or the user's own words, not wrapped`, returnsExternalContent(name) === false);
   }
 
+  /*
+   * The clipboard never asks, and often holds a key copied a minute ago
+   * (SEC-031). Built at runtime so this file carries no key-shaped literal.
+   */
+  const { redactedOutput } = await import('../server/tools/execute.js');
+  const copied = `Clipboard (60 characters):${String.fromCharCode(10)}${['sk', 'proj', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('-')}`;
+  const scrubbed = redactedOutput('clipboard_read', copied);
+  check('a key on the clipboard does not reach the model', !scrubbed.includes('A1b2C3d4E5f6'), scrubbed);
+  check('  and the model is told something was removed', /removed before this reached you/.test(scrubbed));
+  check('  ordinary copied text is untouched', redactedOutput('clipboard_read', 'fix this sentence') === 'fix this sentence');
+  check('  other tools are not scrubbed this way', redactedOutput('read_file', copied) === copied);
+
   /**
    * A tool call that never finished arriving must not run on its defaults.
    *

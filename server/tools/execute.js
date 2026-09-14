@@ -282,10 +282,33 @@ export async function executeTool(args) {
    * safe direction is the one you get by saying nothing.
    */
   if (args?.raw || result?.isError || !returnsExternalContent(args?.name)) return result;
-  const content = String(result?.content ?? '');
+  const content = redactedOutput(args.name, String(result?.content ?? ''));
   if (!content.trim()) return result;
 
   return { ...result, content: untrusted(externalSource(args.name, args.input), content) };
+}
+
+/**
+ * Tools whose output is scrubbed of recognisable credentials before the model
+ * reads it (SEC-031).
+ *
+ * `clipboard_read` is read-only, so it never asks — right for "fix what I just
+ * copied", and wrong for the other thing clipboards hold: the API key or token
+ * somebody copied out of a dashboard a minute ago. Unprompted, that went to a
+ * third-party model provider verbatim, and from there one `web_fetch` with it
+ * in the query string is a leak no approval prompt would have seen. Asking on
+ * every read would break the tool's whole purpose, so the recognisable shapes
+ * are removed instead and the model is told what was taken out. An ordinary
+ * password has no recognisable shape; that limit is real and not claimed away.
+ */
+const REDACTED_OUTPUT = new Set(['clipboard_read']);
+
+/** @param {string} name @param {string} content */
+export function redactedOutput(name, content) {
+  if (!REDACTED_OUTPUT.has(name)) return content;
+  const { text, found } = redactSecrets(content);
+  if (!found.length) return content;
+  return `${text}\n\n[${found.join(', ')} removed before this reached you. Tell the user it was not read, and ask them to paste the rest if they meant you to see it.]`;
 }
 
 /**
