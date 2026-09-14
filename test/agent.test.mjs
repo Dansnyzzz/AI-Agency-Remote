@@ -957,6 +957,42 @@ section('parallel tool calls have a ceiling');
   check('an empty list is not a deadlock', (await mapWithLimit([], 4, async () => 1)).length === 0);
 }
 
+section('a resume does not repeat what may already have happened');
+{
+  /*
+   * A resume finds an assistant turn with calls and no results. That has two
+   * causes — stopped before the calls began, or killed while they ran — and the
+   * resume used to treat both as the first, running everything again. A
+   * function timeout lands precisely in the second window, which is as long as
+   * the tools take. `send_email` run twice is two emails.
+   */
+  const { resumableCalls } = await import('../server/agent.js');
+
+  const calls = [
+    { id: 'c1', name: 'send_email', input: { to: 'a@example.com' } },
+    { id: 'c2', name: 'web_search', input: { query: 'x' } },
+    { id: 'c3', name: 'write_file', input: { path: 'a.txt', content: 'x' } },
+    { id: 'c4', name: 'mcp__server__do_thing', input: {} },
+  ];
+
+  const fresh = resumableCalls(calls, []);
+  check('calls that never started all run', fresh.run.length === 4 && fresh.skipped.length === 0);
+
+  const interrupted = resumableCalls(calls, ['c1', 'c2', 'c3', 'c4']);
+  const ranNames = interrupted.run.map((c) => c.name);
+  check('a started email is not sent again', !ranNames.includes('send_email'), ranNames.join(','));
+  check('  nor a started file write', !ranNames.includes('write_file'));
+  check('  nor a started MCP tool — outside the catalogue counts as able to change something', !ranNames.includes('mcp__server__do_thing'));
+  check('  while a started read runs again, because reading twice costs nothing', ranNames.includes('web_search'));
+
+  const said = interrupted.skipped.find((r) => r.name === 'send_email');
+  check('the skipped call gets a result the model can act on', said?.isError === true && /may have completed/i.test(said?.content || ''));
+  check('  and it is told to check rather than retry', /check whether it took effect/i.test(said?.content || ''));
+
+  const partly = resumableCalls(calls, ['c1']);
+  check('only the calls that started are held back', partly.skipped.length === 1 && partly.run.length === 3);
+}
+
 section('the modules in an import cycle can each be loaded first');
 {
   /**

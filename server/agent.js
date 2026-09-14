@@ -5,7 +5,7 @@ import { checkQuota, record as recordUsage } from './usage.js';
 import { streamCompletion } from './providers/index.js';
 import { resolve as resolveModelId } from './models.js';
 import { isAuto, pickAutoModel } from './autoPick.js';
-import { availableTools, assessRisk, riskReason } from './tools/definitions.js';
+import { availableTools, assessRisk, riskReason, TOOLS_BY_NAME } from './tools/definitions.js';
 import { UNTRUSTED_RULE } from './tools/untrusted.js';
 import { executeTool } from './tools/execute.js';
 import { normalisePlan, PLAN_MIN_STEPS } from './tools/cloud.js';
@@ -447,6 +447,51 @@ export function answersTheseCalls(toolCalls, decisionFor) {
   return answered.length === waiting.length && answered.every((id, i) => id === waiting[i]);
 }
 
+/**
+ * Which outstanding calls a resume may run, and what to say about the rest.
+ *
+ * A resume finds an assistant turn with tool calls and no results, and it used
+ * to run every one of them (AUTO-007). But "no results stored" has two causes:
+ * the run stopped before the calls started — for approval, or cut off early —
+ * or it was killed while they ran, after a tool had done its work and before
+ * the results were written. A deployment's function timeout lands in exactly
+ * that window, and it is as long as the tools take, which for `run_command` is
+ * minutes. Running `send_email` again from there is a second email.
+ *
+ * `startedCalls`, written just before execution, separates the two. A call that
+ * never started runs normally. A call that started and is read-only runs again,
+ * because reading twice costs nothing. A call that started and can change
+ * something is **not** run again: it gets a result saying it may already have
+ * happened, so the model checks rather than repeats. Tools outside the catalogue
+ * — MCP — count as able to change something, the same conservative default
+ * `assessRisk` uses.
+ *
+ * Pure, and exported, because the loop around it needs a store, an account and a
+ * live model to drive, and this is the decision worth holding still.
+ */
+export function resumableCalls(toolCalls, startedIds = []) {
+  const started = new Set((startedIds || []).map(String));
+  const run = [];
+  const skipped = [];
+  for (const call of toolCalls || []) {
+    const readOnly = TOOLS_BY_NAME[call.name]?.readOnly === true;
+    if (started.has(String(call.id)) && !readOnly) {
+      skipped.push({
+        toolCallId: call.id,
+        name: call.name,
+        content:
+          'This call had already started when the previous run was interrupted, so it was not run a second time. '
+          + 'It may have completed. Check whether it took effect before trying it again.',
+        isError: true,
+        ms: 0,
+      });
+    } else {
+      run.push(call);
+    }
+  }
+  return { run, skipped };
+}
+
 async function runToolCalls({ user, toolCalls, chatId, emit, signal, deviceHint, onLoadTools, deliverable }) {
   const results = await mapWithLimit(
     toolCalls,
@@ -761,7 +806,30 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
       };
       for (const r of toolMessage.results) emit('tool_result', r);
     } else {
-      toolMessage = await runToolCalls({ user, toolCalls: last.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
+      // Never started runs; started and read-only runs again; started and able
+      // to change something does not. See `resumableCalls`.
+      const { run, skipped } = resumableCalls(last.toolCalls, last.startedCalls);
+      for (const r of skipped) emit('tool_result', r);
+
+      await store.markToolCallsStarted(userId, chatId, last.id, run.map((c) => c.id));
+      const ran = run.length
+        ? await runToolCalls({ user, toolCalls: run, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() })
+        : { id: newId(), role: 'tool', results: [] };
+
+      // Back into the order the model asked for them, which is the order it will
+      // read the results in.
+      const byId = new Map([...skipped, ...ran.results].map((r) => [String(r.toolCallId), r]));
+      toolMessage = { ...ran, results: last.toolCalls.map((c) => byId.get(String(c.id))).filter(Boolean) };
+    }
+    /*
+     * Not written by a run that was superseded mid-way. The invocation that took
+     * the lease is resuming this same turn, and it will write this turn's results
+     * itself — two tool messages answering one assistant turn is a transcript no
+     * provider accepts (AUTO-008).
+     */
+    if (signal?.reason === 'superseded') {
+      emit('done', { stopReason: 'aborted' });
+      return;
     }
     // The stored copy, which carries the `seq` `absorbNewMessages` reads as its
     // high-water mark.
@@ -944,7 +1012,14 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
          * what the resume path picks up — so persisting them would turn a stop
          * into a queued action.
          */
-        if (assistant.text.trim()) {
+        /*
+         * Except when this run was superseded. A reconnection that took the
+         * lease is already streaming its own reply to the same question, so
+         * this fragment would land in the transcript beside the live answer.
+         * `app.js` puts the reason on the signal when the heartbeat loses the
+         * lease.
+         */
+        if (assistant.text.trim() && signal?.reason !== 'superseded') {
           assistant.model = entry.id;
           assistant.toolCalls = [];
           assistant.stopped = true;
@@ -1054,7 +1129,16 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
       return; // The client resumes by calling back with a decision.
     }
 
+    // Marked before anything runs, so a run killed mid-execution leaves a record
+    // that these calls began — which is what stops a resume repeating them.
+    await store.markToolCallsStarted(userId, chatId, assistant.id, assistant.toolCalls.map((c) => c.id));
     const toolMessage = await runToolCalls({ user, toolCalls: assistant.toolCalls, chatId, emit, signal, deviceHint, onLoadTools: activate, deliverable: loadable() });
+    // See the resume path: a superseded run leaves the results to the run that
+    // replaced it, rather than writing a second tool message for one turn.
+    if (signal?.reason === 'superseded') {
+      emit('done', { stopReason: 'aborted' });
+      return;
+    }
     messages.push(await store.appendMessage(userId, chatId, toolMessage));
   }
 

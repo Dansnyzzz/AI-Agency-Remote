@@ -1041,6 +1041,37 @@ export function createPgStore(connectionString) {
      * Only user turns. An assistant message is a record of what a model
      * actually said, and editing that is forging evidence.
      */
+    /**
+     * Record that these tool calls have begun executing, on the assistant turn
+     * that asked for them.
+     *
+     * A run can be killed between a tool finishing and its result being stored —
+     * the function timeout on a deployment, a reconnection taking the lease — and
+     * the resume path then finds an assistant turn with calls and no results. It
+     * used to run them all again. For a read that is harmless; for `send_email`
+     * it is a second email. This marker is what lets the resume tell "never
+     * started" from "started, outcome unknown" (AUTO-007).
+     *
+     * Appended in SQL rather than read-modify-written in JS, because the two
+     * writers that race here are exactly the superseded run and the one that
+     * replaced it. Duplicates in the array are harmless; the reader takes a Set.
+     * Scoped through the owning chat like every other message write.
+     */
+    async markToolCallsStarted(userId, chatId, messageId, callIds) {
+      if (!Array.isArray(callIds) || !callIds.length) return;
+      await q(
+        `UPDATE messages m
+            SET content = jsonb_set(
+                  m.content,
+                  '{startedCalls}',
+                  COALESCE(m.content->'startedCalls', '[]'::jsonb) || $4::jsonb,
+                  true)
+           FROM chats c
+          WHERE m.id = $3 AND m.chat_id = $2 AND c.id = m.chat_id AND c.user_id = $1`,
+        [userId, chatId, messageId, JSON.stringify(callIds.map(String))],
+      );
+    },
+
     async editUserMessage(userId, chatId, messageId, text) {
       const rows = await q(
         `SELECT m.seq, m.content, m.role

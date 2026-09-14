@@ -1518,8 +1518,27 @@ export function createApp() {
         emit('ping', { t: Date.now() });
         store
           .touchChatRun(req.user.id, chatId, runId, runSeq)
-          .then((held) => {
-            if (held === false) controller.abort();
+          .then(async (held) => {
+            if (held !== false) return;
+            /**
+             * Losing the lease means one of two very different things, and the
+             * loop has to know which.
+             *
+             * The stop route clears `run_lock_by`: a person pressed stop, nobody
+             * else is writing to this conversation, and keeping the half of the
+             * reply they already read is right (CODE-016). A reconnection
+             * *claims* the lease instead — `run_lock_by` stays set, to another
+             * run or to this run id with a newer sequence — and that invocation
+             * is already streaming its own reply. Keeping this one's partial text
+             * then would put a stale fragment into the transcript alongside the
+             * live answer.
+             *
+             * That regression was mine: CODE-016 persisted on every abort, and
+             * supersession arrives as an abort. The reason travels on the signal
+             * so the loop can tell them apart.
+             */
+            const chat = await store.getChat(req.user.id, chatId).catch(() => null);
+            controller.abort(chat?.run_lock_by ? 'superseded' : 'stopped');
           })
           .catch(() => {});
       }, 15_000);

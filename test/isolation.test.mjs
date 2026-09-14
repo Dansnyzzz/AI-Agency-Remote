@@ -1584,6 +1584,38 @@ section('an upsert cannot cross an account boundary');
   check('  the owner\'s machine details are not overwritten either', ownerWorker?.info?.platform === 'win32', JSON.stringify(ownerWorker?.info));
 }
 
+section('which tool calls have started is recorded on the turn, by its owner only');
+{
+  /*
+   * The marker that stops a resume from sending an email twice. It is a write to
+   * a message, so it gets the same test every message write gets here: the
+   * wrong account cannot make it.
+   */
+  const owner = await store.createUser({
+    id: 'u-start-owner', email: 'start-owner@example.com', passwordHash: 'x', name: 'Owner', role: 'user',
+  });
+  const other = await store.createUser({
+    id: 'u-start-other', email: 'start-other@example.com', passwordHash: 'x', name: 'Other', role: 'user',
+  });
+  const chat = await store.createChat(owner.id, { id: 'c-started', title: 'Tools', model: 'm' });
+  await store.appendMessage(owner.id, chat.id, {
+    id: 'a-1', role: 'assistant', text: '', toolCalls: [{ id: 'call-1', name: 'send_email', input: {} }],
+  });
+
+  await store.markToolCallsStarted(other.id, chat.id, 'a-1', ['call-1']);
+  let turn = (await store.listMessages(owner.id, chat.id)).find((m) => m.id === 'a-1');
+  check('another account cannot mark a call started', !turn?.startedCalls, JSON.stringify(turn?.startedCalls));
+
+  await store.markToolCallsStarted(owner.id, chat.id, 'a-1', ['call-1']);
+  turn = (await store.listMessages(owner.id, chat.id)).find((m) => m.id === 'a-1');
+  check('the owner can', Array.isArray(turn?.startedCalls) && turn.startedCalls.includes('call-1'), JSON.stringify(turn?.startedCalls));
+
+  await store.markToolCallsStarted(owner.id, chat.id, 'a-1', ['call-2']);
+  turn = (await store.listMessages(owner.id, chat.id)).find((m) => m.id === 'a-1');
+  check('  and a later mark adds to the record rather than replacing it', turn?.startedCalls?.includes('call-1') && turn?.startedCalls?.includes('call-2'));
+  check('  without disturbing the calls themselves', turn?.toolCalls?.[0]?.name === 'send_email');
+}
+
 section('concurrent writes to one setting compose instead of racing');
 {
   // Artifact storage was read-all, mutate, setUserSetting — the read-modify-write
