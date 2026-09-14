@@ -148,3 +148,62 @@ door. That is an argument for fixing at choke points rather than at call sites.
 **Bốn trong bốn claim của agent mà tôi kiểm sâu đều lệch.** Two up (`ACC-007` High→Critical,
 `SEC-018` 2 sites→10), two down (`CODE-020` and `PERF-011` downgraded to non-defects).
 The `Prov` column is not bureaucracy; it is the difference between an audit and a rumour.
+
+---
+
+## Re-score — Phase 3, 2026-09-14
+
+Re-judged against the tree at `013c916` (gate green, full). The Phase 1 table above
+is kept as it was scored; this section is what is true now. A row moves only when
+every ID it cites is `FIXED` in `ISSUE_LEDGER.md` (checked by script, not by eye), or
+when this round found the Phase 1 verdict itself was wrong.
+
+| Row | Phase 1 | Now | Why it moved, or why it did not |
+|---|---|---|---|
+| A7, C2, G2 | CHƯA ĐẠT / một phần | **ĐẠT** | `ACC-006` FIXED — regional national press carries standing; `RESEARCH_REPUTABLE_DOMAINS` extends it |
+| A8, F1, H2 | CHƯA ĐẠT / có lỗ | **ĐẠT** | `ACC-007` FIXED — the summary records the seq it covers; recent turns and the question survive |
+| B3, E3 | CHƯA ĐẠT | **ĐẠT** | `AUTO-005` FIXED — a truncated call is refused, not run on defaults; `GAP-004` validates arguments server-side for every provider |
+| B7 | CHƯA ĐẠT | **ĐẠT** | `AUTO-007` FIXED — started non-read-only calls are not re-run on resume |
+| B8 | CHƯA ĐẠT | **ĐẠT** | `AUTO-006` FIXED |
+| B9 | CHƯA ĐẠT | **ĐẠT** | `CODE-017` + `AUTO-009` FIXED — cancellation reaches the worker and kills the process tree |
+| C5 | CHƯA ĐẠT | **ĐẠT, có ghi chú** | `ARCH-008` guarded, not removed: a test loads each cycle member first. The cycles still exist |
+| C7 | CHƯA ĐẠT | **ĐẠT** | `ARCH-007` FIXED — schema 18 `next_seq` |
+| D3 | CHƯA ĐẠT | **ĐẠT** | `PERF-009` FIXED — per-turn token ceiling on shared keys |
+| D6 | CHƯA ĐẠT | **ĐẠT** | `PERF-010` + `PERF-013` FIXED — the second closed the first fix's bypass |
+| D7 | CHƯA ĐẠT | **ĐẠT** | `PERF-012` FIXED |
+| D8 | [UNKNOWN] | **[UNKNOWN]** | Unchanged: needs a live key and authorised spend |
+| E2 | CHƯA ĐẠT | **ĐẠT** | `SEC-018` FIXED |
+| E4 | CHƯA ĐẠT | **ĐẠT** | `SEC-015`, `SEC-019` FIXED at one choke point; `SEC-031` adds redaction for the clipboard |
+| E5 | có ghi chú | **ĐẠT, có ghi chú** | `SEC-020` FIXED (the bypass is logged); fail-open stays by design. `SEC-030` adds a per-turn outbound ceiling under `auto` |
+| E7 | CHƯA ĐẠT | **ĐẠT** | `SEC-016` FIXED; `SEC-029` hardens what MCP servers can put in a request |
+| E8 | CHƯA ĐẠT | **ĐẠT** | `SEC-017`, `SEC-027` FIXED |
+| E11 | ĐẠT | **ĐẠT — Phase 1 was wrong** | A dangling link walked out of the workspace until `SEC-025`. The row said ĐẠT while that was true; it is ĐẠT now |
+| E (new) | — | — | Found this round and FIXED, no Phase 1 row to move: `SEC-026` sub-agent offered-set, `SEC-028` re-pairing residue, `SEC-032` plain-http worker transport |
+| F4 | CHƯA ĐẠT | **ĐẠT** | `CODE-012`–`CODE-015`, `CFG-015` FIXED; `CODE-027` fixed a drift this round introduced |
+| F6 | CHƯA ĐẠT | **ĐẠT** | `CODE-016` FIXED |
+| G4 | có lỗ | **ĐẠT, có lỗ** | Now has an ID: `GAP-010`, **PROPOSED** — a feature for the owner to decide |
+| H1 | một phần | **ĐẠT một phần** | Arguments are validated server-side (`GAP-004`); the provider `strict` flag on OpenAI-compatible routes is `GAP-006`, **BLOCKED** on live verification |
+| H3 | CHƯA ĐẠT | **CHƯA ĐẠT** | Now has an ID: `GAP-011`, **PROPOSED** — design space, not built unasked |
+| H4 | CHƯA ĐẠT | **ĐẠT một phần** | `GAP-003` FIXED: prompts carry a version fingerprint the eval pins. A/B is `GAP-005`, **BLOCKED** on a live budget |
+| H5 | một phần | **ĐẠT một phần** | `eval:live` still never run — same blocker as D8 |
+
+### Điểm tổng — Phase 3
+
+| Nhóm | ĐẠT | ĐẠT một phần / có ghi chú | CHƯA ĐẠT | [UNKNOWN] |
+|---|---|---|---|---|
+| A Độ chính xác | 7 | 1 | 0 | 0 |
+| B Tool-use | 8 | 0 (1 N/A) | 0 | 0 |
+| C Kiến trúc | 6 | 1 | 0 | 0 |
+| D Hiệu năng | 7 | 0 | 0 | 1 |
+| E Bảo mật | 11 | 1 | 0 | 0 |
+| F Chất lượng | 6 | 0 | 0 | 0 |
+| G Đầu ra | 4 | 1 | 0 | 0 |
+| H Năng lực model | 2 | 3 | 1 | 0 |
+| **Tổng** | **51** | **7** | **1** | **1** |
+
+61 rows (the Phase 1 total of 62 double-counted B2's N/A). Phase 1 → Phase 3:
+ĐẠT 31 → 51, CHƯA ĐẠT 22 → 1.
+
+What is left is not hidden in "một phần": the one `CHƯA ĐẠT` (H3) and G4's hole
+are features awaiting a decision; H1/H4/H5 and D8 each wait on something only the
+owner can authorise — a live key and spend. None of those is claimed as done.

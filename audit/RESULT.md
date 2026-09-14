@@ -3,6 +3,143 @@
 Every row is a command that was run and an output that was read. Where something
 could not be measured it says so; nothing here is interpolated.
 
+Two rounds are recorded. **Round 2** (this section) is the server/worker audit:
+before = `audit/BASELINE.md` 2026-09-09 column, `main` at `3e8273e`; after =
+`audit/server-worker-2026-09-09` at `9db11a2` plus the audit documents, measured
+2026-09-14. **Round 1** follows unchanged below.
+
+---
+
+# Round 2 — server/ + worker/, 2026-09-09 → 2026-09-14
+
+## The gate, and what runs outside it
+
+| Thing | Before | After | How measured |
+|---|---|---|---|
+| `npm run gate` | green | **green (full)**, re-run after the last code commit | `npm run gate` → "Gate green (full)" |
+| `npm run lint` | 0 problems | **0 problems** | inside the gate |
+| Suites in `npm test` | 31 | **31**, all pass | `scripts.test.split('&&').length`; gate |
+| `npm run test:hooks` | 128 checks | **168 checks** | "All 168 hook checks passed." |
+| `npm run eval` (scripted) | 13/13 | **13/13** | "All 13 cases passed." — `--live` not run |
+| `npm run test:ui` | — | **exit 0, 498 checks, 0 failures** | real Chromium; the one "skip" in the log is a check named "skipping closes it" |
+| `npm run test:sandbox` | — | **exit 0, 31 checks** | run by hand; not in the gate |
+| Gate stamp integrity | head + dirty hash | **content fingerprint** — a docs commit no longer expires a stamp; a code change always does (`CFG-018`, `CFG-020`) | hooks.test.mjs |
+
+## Type checking
+
+| | Before | After |
+|---|---|---|
+| Real `tsc` errors | 363 | **362** |
+| Recorded ceiling | 363 | **362** — moved down once, never up |
+| Errors above the ceiling | 0 | 0 |
+
+Every type error the Phase 2 work introduced along the way (four times) was fixed
+with a real JSDoc contract, not by re-recording the baseline.
+
+## Coverage — the first re-measurement since 2026-09-02
+
+| | 2026-09-02 | 2026-09-14 | How |
+|---|---|---|---|
+| Statements / lines | 57.81% | **61.06%** (28,058 / 45,944) | `npm run coverage` (c8 over all 31 suites), exit 0 |
+| Branches | 74.28% | **75.21%** (4,090 / 5,438) | same |
+| Functions | 68.59% | **75.32%** (800 / 1,062) | same |
+
+The first attempt this round stopped at suite 3 with ENOTEMPTY — a clean-up race,
+not a failed check. That was fixed as `CODE-029` and the run repeated; the numbers
+above are from the repeat.
+
+## Size
+
+| | Before | After | How |
+|---|---|---|---|
+| Tracked files | 243 | **250** | `git ls-files \| wc -l` |
+| Lines of code | 76,108 | **80,300** | same filter as BASELINE |
+| `server/app.js` | 1,663 | 1,708 | `wc -l` |
+| HTTP route handlers | 111 | **112** — `GET /api/worker/jobs/:id`, the cancellation poll | one regex applied to `git show` of both revisions |
+| `SCHEMA_VERSION` | 17 | **18** — `chats.next_seq` (`ARCH-007`) | `pg.js` |
+| Commits on the branch past `3e8273e` | — | 77 commits, 78 files, +6,437 / −1,071 | `git rev-list --count`, `git diff --shortstat` at `9db11a2` |
+
+## Token cost per turn
+
+| | Before | After | How |
+|---|---|---|---|
+| Tool catalogue @128k | 48 tools, 6,896 tok | **48 tools, 6,896 tok** | `availableTools(...)`, `JSON.stringify().length/4` |
+| @40k / @8k | 4,401 / 4,325 | **4,401 / 4,325** | same |
+| System prompt: no worker / worker+desktop / read-only | `[UNKNOWN]` on 09-09 | **1,791 / 3,592 / 1,231** | `buildSystemPrompt(v).length/4` |
+
+No per-turn token regression from anything added. New ceilings bound spend
+instead: a per-turn token limit on shared keys (`PERF-009`), a cautious output
+budget for sparse catalogue entries (`PERF-010`, `PERF-013`).
+
+## Measured security and correctness — each a test that failed before its fix
+
+| ID | Before | After | How |
+|---|---|---|---|
+| SEC-015/019 | browser, file, shell, GitHub, Notion output reached the model as trusted text | enveloped at one choke point | isolation.test.mjs |
+| SEC-016 | MCP http transport re-opened DNS rebinding | pinned lookup, manual redirects | mcp.test.mjs |
+| SEC-023 | readonly/plan ran an unoffered `delete_file` with no prompt | refused at execution | agent.test.mjs |
+| SEC-025 | a dangling link wrote outside the workspace | refused | workspace.test.mjs |
+| SEC-026 | a sub-agent ran tools it was never offered | refused | agent.test.mjs |
+| SEC-029 | one bad MCP tool, or two same-slug servers, failed every turn | 10 names for 5 tools → 5 | mcp.test.mjs, negative control on HEAD |
+| SEC-030 | unlimited unapproved sends under `auto` | five per turn | agent.test.mjs |
+| SEC-031 | a copied key went to the provider | redacted, model told | isolation.test.mjs |
+| SEC-032 | worker accepted plain http to the internet | refused before pairing | `SERVER_URL=http://example.com node worker/index.js` → exit 1 |
+| ACC-007 | after compaction the model saw only the summary | summary + recent turns + the question | agent.test.mjs |
+| AUTO-007/008 | resume re-ran a started `send_email`; a superseded run could still write | not re-run; aborted as superseded | agent.test.mjs |
+| AUTO-009 | cancelling a tool left the process running | worker polls, kills the tree | system.test.mjs — a 30 s command ends in under 10 s |
+| ARCH-009 | a failed PGlite schema replay left half a schema | rolled back | schema.test.mjs, negative control on HEAD |
+| GAP-008 | `generate_image` called an endpoint shut down 2026-08-17 | current model, shape checked against installed SDK types | cloud unit test with a stand-in client — **not run live** |
+
+## Ledger reconciliation
+
+`audit/ISSUE_LEDGER.md`, counted by script over every row: **143 rows, no duplicate
+IDs, 0 OPEN.**
+
+| Status | Count |
+|---|---|
+| FIXED | 123 |
+| DOWNGRADED (with the reason in the row) | 11 |
+| RESOLVED | 3 |
+| DUPLICATE (kept, never deleted) | 1 |
+| BLOCKED — need something only the owner can authorise | 3 — `GAP-005`, `GAP-006`, `CODE-021` |
+| PROPOSED — features for the owner to decide | 2 — `GAP-010`, `GAP-011` |
+
+`audit/GAP_ANALYSIS.md` re-score: ĐẠT **31 → 51**, CHƯA ĐẠT **22 → 1** (H3, proposed
+as `GAP-011`), one `[UNKNOWN]` (latency, needs a live key).
+
+## Not measured, and why
+
+- **End-to-end latency, LLM calls and tokens per real request, `eval:live`.** Need a
+  live provider key; spending the owner's credit was never authorised.
+- **The new image path against Google.** Same reason. The request and response
+  shape were checked against the installed `@google/genai` type declarations only.
+- **About six worker-agent findings that never arrived.** Not reconstructed from
+  memory; a bounded re-scan of `worker/` stands in for them and is labelled as such
+  in the ledger.
+
+## Mistakes made during the work
+
+- The shell and the edit tool collapse a doubled backslash, and it bit five times:
+  a raw NUL written into `server/agent.js` (`CODE-022`, now guarded by a test),
+  regexes that silently lost their escapes, and a newline escape that became a
+  literal line break. Each was caught by reading the bytes back, never by a check
+  passing.
+- A `String.replace` whose replacement contained `` $` `` spliced the whole file
+  into itself (`server/mcp/registry.js`). Caught by lint's duplicate-declaration
+  error before any commit; redone with function replacers.
+- `git stash push --keep-index` was used mid-edit and captured a broken test file;
+  dropped after confirming the staged work survived in the index.
+- `CODE-016` introduced a regression (a superseded run persisted partial text) that
+  its own suite did not catch at first; fixed with an abort reason.
+- `PERF-010`'s fix was bypassed through `resolveModel`, found later as `PERF-013`.
+- Two commits carry two IDs each, and `16de288` bundled two; recorded in the ledger.
+- One gate run went red with the failing step not captured and was green on an
+  unchanged re-run. Recorded rather than explained away.
+
+---
+
+# Round 1 — 2026-09-03 → 2026-09-04
+
 Before = `6d10ae4`, the commit this audit started from.
 After = `integrate/2026-09-04`, merged with `origin/main`.
 
