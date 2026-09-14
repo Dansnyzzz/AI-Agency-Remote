@@ -19,6 +19,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { removeTemp } from './lib/tmp.mjs';
 
 const DATA_DIR = path.join(os.tmpdir(), `ai-remote-schema-test-${process.pid}`);
 fs.rmSync(DATA_DIR, { recursive: true, force: true });
@@ -322,7 +323,8 @@ section('two processes cannot open the same database');
   await store.close();
   check('closing releases it', !fs.existsSync(`${dir}/owner.pid`));
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  // After a PGlite close, so through the retrying helper: see test/lib/tmp.mjs.
+  removeTemp(dir);
 }
 
 // ── what version 17 added ─────────────────────────────────────────────
@@ -413,7 +415,7 @@ section('two processes cannot open the same database');
   check('with no comment marker left in any of them', !real.some((s) => s.includes('--') || s.includes('/*')));
 }
 
-fs.rmSync(DATA_DIR, { recursive: true, force: true });
+removeTemp(DATA_DIR);
 console.log(
   failures ? `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n` : '\n\x1b[32mAll schema checks passed.\x1b[0m\n',
 );
