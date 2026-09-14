@@ -212,8 +212,14 @@ export function isSource(rel) {
    * then refused a completion claim over an "unproven" file the suites could
    * never prove, because it is not part of the project. A guard that cries wolf
    * is the guard people switch off — the same argument NOT_SOURCE is built on.
+   *
+   * Both platforms' rules are asked, not only the one this runs on (CFG-022).
+   * On Linux `path.isAbsolute` does not know a drive letter, so a Windows path
+   * read as a relative file name and this said yes — which failed the hook
+   * suite on every CI run since 2026-09-09 while every local run, on Windows,
+   * passed. No file in this repository is named like a drive.
    */
-  if (path.isAbsolute(rel) || rel.startsWith('..')) return false;
+  if (path.isAbsolute(rel) || path.win32.isAbsolute(rel) || rel.startsWith('..')) return false;
 
   return !NOT_SOURCE.some((re) => re.test(rel));
 }
