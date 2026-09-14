@@ -357,6 +357,40 @@ section('an interpreter is a shell by another name');
   }
 }
 
+section('changing accounts leaves nothing of the last one behind');
+{
+  /*
+   * Re-pairing a machine to a different account only swapped the token. The
+   * background commands and their output stayed in memory, and
+   * `run_background_logs` with no id lists every one of them, finished ones
+   * included — so the next account's assistant could read what the previous
+   * account's commands printed (SEC-028). `repair()` now calls this before it
+   * pairs again. A real short-lived process is started, so the listing is
+   * genuinely non-empty before the forget and not trivially empty after.
+   */
+  const { BACKGROUND_IMPLEMENTATIONS: bg, forgetAllBackground } = await import('../worker/background.js');
+  await bg.run_background({
+    command: `"${process.execPath}" -e "console.log('previous-account-secret-token'); setTimeout(() => {}, 20000)"`,
+    name: 'previous-account-job',
+    settle_ms: 800,
+  });
+  const before = await bg.run_background_logs({});
+  check('the previous account\'s job is listed before re-pairing', /previous-account-job/.test(before), before.split('\n')[2]);
+
+  await forgetAllBackground();
+  const after = await bg.run_background_logs({});
+  check('  and after forgetting, nothing of it is listed', !/previous-account-job/.test(after), after);
+  // Asserted on what leaks, not on how it is refused: with nothing recorded the
+  // tool answers "none started" before looking at the id, rather than throwing.
+  let byId = '';
+  try {
+    byId = await bg.run_background_logs({ id: 'previous-account-job' });
+  } catch (err) {
+    byId = err.message;
+  }
+  check('  nor readable by its id', !/previous-account-secret-token/.test(byId), byId.slice(0, 70));
+}
+
 section('a running command stops when the turn is stopped');
 {
   /*

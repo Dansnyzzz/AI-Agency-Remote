@@ -309,6 +309,30 @@ async function repair() {
   console.log('\n  Asking to be paired again…\n');
   clearToken();
 
+  /**
+   * Nothing from the last account carries over to the next (SEC-028).
+   *
+   * This only swapped the token. The worker process kept everything it held for
+   * the previous account: the background commands and their output, readable by
+   * the next account through `run_background_logs`; and the sandbox browser's
+   * sessions, with the cookies of whatever that account had signed into. A
+   * machine unpaired from one account and adopted by another — a shared office
+   * computer, a laptop moved from a personal account to a work one — handed the
+   * second the first's logins.
+   *
+   * Cleared before the new pairing, so there is no moment where the new token
+   * and the old state coexist. The persistent `profile` browser mode keeps its
+   * on-disk profile on purpose: it is opted into on this machine, by its owner,
+   * through the environment, and deleting it here would destroy that choice.
+   */
+  // Imported here, the way `shutdown` imports them, rather than at the top.
+  const [{ forgetAllBackground }, { closeBrowser }] = await Promise.all([
+    import('./background.js'),
+    import('./browser.js'),
+  ]);
+  await forgetAllBackground().catch((err) => console.log(`  (could not stop background commands: ${err?.message || err})`));
+  await closeBrowser().catch((err) => console.log(`  (could not close the browser: ${err?.message || err})`));
+
   const paired = await pairUntilAdopted();
   TOKEN = paired.token;
   WORKER_ID = paired.deviceId || WORKER_ID;
