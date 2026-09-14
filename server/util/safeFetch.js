@@ -21,7 +21,7 @@ import https from 'node:https';
 const MAX_REDIRECTS = 5;
 
 /** Address ranges that are not the public internet. */
-function isPrivateAddress(address) {
+export function isPrivateAddress(address) {
   if (net.isIPv4(address)) {
     const [a, b] = address.split('.').map(Number);
     if (a === 0) return true; // "this network"

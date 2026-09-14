@@ -8,6 +8,7 @@ import { LOCAL_IMPLEMENTATIONS, workerInfo } from './tools.js';
 import { setFrameSink } from './screen.js';
 import { setIndexSink } from './indexer.js';
 import { watchForCancel } from './cancel.js';
+import { serverTransport } from './serverUrl.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +31,19 @@ function loadEnv() {
 loadEnv();
 
 const SERVER_URL = (process.env.SERVER_URL || `http://localhost:${process.env.PORT || 5173}`).replace(/\/$/, '');
+
+// Before the token or any job goes over the wire. See serverUrl.js (SEC-032).
+{
+  const transport = serverTransport(SERVER_URL, {
+    allowInsecure: /^(1|true|yes)$/i.test(process.env.ALLOW_INSECURE_SERVER || ''),
+  });
+  if (transport.level === 'refuse') {
+    console.error(`\n  ${transport.message}\n`);
+    process.exit(1);
+  }
+  if (transport.level === 'warn') console.warn(`\n  ${transport.message}\n`);
+}
+
 const WORKSPACE = process.env.WORKSPACE || path.join(os.homedir(), 'AI-Remote-Workspace');
 const DEVICE_NAME = process.env.DEVICE_NAME || os.hostname() || 'A computer';
 

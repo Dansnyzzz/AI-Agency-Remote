@@ -425,6 +425,20 @@ section('a running command stops when the turn is stopped');
   stop3();
   check('  and an unreachable server is not read as a cancellation', !offline.signal.aborted);
 
+  /*
+   * The worker's token, and every job it runs, travel over SERVER_URL. Plain
+   * http to the internet lets anyone on the path send it commands (SEC-032).
+   */
+  const { serverTransport } = await import('../worker/serverUrl.js');
+  const level = (url, options) => serverTransport(url, options).level;
+  check('https is accepted anywhere', level('https://example.vercel.app') === 'ok');
+  check('  plain http to this machine is accepted', ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://[::1]:5173'].every((u) => level(u) === 'ok'));
+  check('  plain http on the local network warns but runs', level('http://192.168.1.20:5173') === 'warn' && level('http://nas.local') === 'warn');
+  check('  plain http to the internet is refused', level('http://example.com') === 'refuse' && level('http://203.0.113.7') === 'refuse');
+  check('    and says how to fix it', /https:/.test(serverTransport('http://example.com').message || ''));
+  check('    unless the owner has said otherwise', level('http://example.com', { allowInsecure: true }) === 'warn');
+  check('  something that is not a web address is refused', level('ftp://example.com') === 'refuse' && level('not a url') === 'refuse');
+
   const run = LOCAL_IMPLEMENTATIONS.run_command;
   const controller = new AbortController();
   const began = Date.now();
