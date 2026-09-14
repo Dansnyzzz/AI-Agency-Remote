@@ -227,7 +227,11 @@ export function chunk(text, { size = CHUNK_CHARS, overlap = CHUNK_OVERLAP } = {}
  * embedding is billed per token, and re-reading an unchanged archive every time
  * would be a bill for nothing.
  */
-export async function indexFolder({ path: target = '.', reindex = false }) {
+/**
+ * @param {{ path?: string, reindex?: boolean }} input
+ * @param {{ chatId?: string|null, signal?: AbortSignal }} [context]
+ */
+export async function indexFolder({ path: target = '.', reindex = false }, { signal } = {}) {
   const root = resolveInWorkspace(target);
   const stat = await fsp.stat(root).catch(() => null);
   if (!stat) throw new Error(`There is nothing at ${target} on this computer.`);
@@ -257,6 +261,9 @@ export async function indexFolder({ path: target = '.', reindex = false }) {
 
   for await (const file of walk(root)) {
     if (seen >= MAX_FILES) break;
+    // Checked per file: stopping the turn stops the walk, and what was already
+    // sent stays indexed rather than being half-undone (AUTO-009).
+    if (signal?.aborted) break;
     seen += 1;
 
     const info = await fsp.stat(file).catch(() => null);
@@ -299,6 +306,13 @@ export async function indexFolder({ path: target = '.', reindex = false }) {
   if (skipped) lines.push(`${skipped} unchanged since last time, so they were not re-read.`);
   if (unreadable) lines.push(`${unreadable} could not be read${failures.length ? `: ${failures.join('; ')}` : '.'}`);
   if (seen >= MAX_FILES) lines.push(`Stopped at ${MAX_FILES} files. Index a narrower folder to reach the rest.`);
+  if (signal?.aborted) {
+    // Said first and plainly. Without it a walk stopped on its first file fell
+    // through to "nothing in there was a document this can read", which tells
+    // the model the folder is empty when it was only cut short.
+    lines.push('Stopped part-way because the user cancelled it; what is listed above was indexed before that.');
+    return lines.join(' ');
+  }
   if (!indexed && !skipped) {
     lines.push(
       'Nothing in there was a document this can read — it looks for text, code, Markdown, PDFs, ' +

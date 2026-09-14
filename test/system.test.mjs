@@ -404,6 +404,36 @@ section('a running command stops when the turn is stopped');
   check('a thirty-second command ends promptly when cancelled', took < 10_000, `${took}ms`);
   check('  and says it was cancelled, not that it failed', /user cancelled/i.test(out), out.split('\n').slice(-1)[0]);
 
+  /*
+   * The other two long-running local tools. Each assertion is written so it
+   * cannot pass for the wrong reason: a download to a closed local port fails
+   * anyway, so the check is that it failed *as an abort*, not as a refused
+   * connection; and an index stopped at once must say it was stopped, not that
+   * the folder held nothing.
+   */
+  const gone = new AbortController();
+  gone.abort('cancelled');
+  const savedPrivate = process.env.ALLOW_PRIVATE_FETCH;
+  process.env.ALLOW_PRIVATE_FETCH = '1';
+  let downloadErr = '';
+  try {
+    await LOCAL_IMPLEMENTATIONS.download_file(
+      { url: 'http://127.0.0.1:1/file.bin', path: `cancel-test-${process.pid}.bin` },
+      { signal: gone.signal },
+    );
+  } catch (err) {
+    downloadErr = `${err?.name || ''} ${err?.message || ''}`;
+  } finally {
+    if (savedPrivate === undefined) delete process.env.ALLOW_PRIVATE_FETCH;
+    else process.env.ALLOW_PRIVATE_FETCH = savedPrivate;
+  }
+  check('a download stops on the signal — as an abort, not a refused connection', /abort/i.test(downloadErr) && !/ECONNREFUSED/.test(downloadErr), downloadErr.trim().slice(0, 80));
+
+  const { INDEX_IMPLEMENTATIONS } = await import('../worker/indexer.js');
+  const indexed = await INDEX_IMPLEMENTATIONS.index_folder({ path: '.', reindex: true }, { signal: gone.signal });
+  check('an index stopped at once says it was stopped', /user cancelled/i.test(indexed), indexed.slice(0, 90));
+  check('  rather than that the folder held nothing', !/Nothing in there/.test(indexed));
+
   const early = new AbortController();
   early.abort('cancelled');
   const notStarted = await run({ command: 'echo should-not-run' }, { signal: early.signal });

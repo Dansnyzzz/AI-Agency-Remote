@@ -496,7 +496,11 @@ async function moveFile({ from, to, overwrite = false }) {
  */
 const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024;
 
-async function downloadFile({ url, path: target, overwrite = false, max_bytes: maxBytes }) {
+/**
+ * @param {{ url: string, path?: string, overwrite?: boolean, max_bytes?: number }} input
+ * @param {{ chatId?: string|null, signal?: AbortSignal }} [context]
+ */
+async function downloadFile({ url, path: target, overwrite = false, max_bytes: maxBytes }, { signal } = {}) {
   const limit = Math.min(Math.max(Number(maxBytes) || MAX_DOWNLOAD_BYTES, 1024), MAX_DOWNLOAD_BYTES);
 
   let parsed;
@@ -518,7 +522,9 @@ async function downloadFile({ url, path: target, overwrite = false, max_bytes: m
 
   const res = await safeFetch(parsed, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AI-Remote/1.0)', Accept: '*/*' },
-    signal: AbortSignal.timeout(180_000),
+    // Whichever comes first: the three-minute ceiling, or the person stopping
+    // the turn (AUTO-009). Before, only the ceiling could end a download.
+    signal: signal ? AbortSignal.any([AbortSignal.timeout(180_000), signal]) : AbortSignal.timeout(180_000),
   });
   if (!res.ok) throw new Error(`${parsed.host} returned HTTP ${res.status} ${res.statusText}`);
 
