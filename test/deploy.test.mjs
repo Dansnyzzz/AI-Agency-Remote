@@ -178,6 +178,39 @@ section('files read at runtime are present');
   const html = read('public/index.html');
   check('the page loads no external stylesheet', !/<link[^>]+href="https?:\/\//i.test(html));
   check('and no external script', !/<script[^>]+src="https?:\/\//i.test(html));
+
+  /*
+   * No tracked source file carries a raw control byte.
+   *
+   * CODE-004 removed a literal NUL from `worker/tools.js`, where it stood in for
+   * a binary-file guard — and nothing held the line afterwards, so a second one
+   * arrived in `server/agent.js` during the same audit, written by the auditor:
+   * a `join('\n\0\n')` whose escape became the byte itself. A file with a NUL in
+   * it reads as binary to grep, diff and review tools, so the line containing it
+   * is effectively invisible, and a formatter that normalises it changes what the
+   * code does. The runtime string happened to be identical this time; nothing
+   * guarantees that next time.
+   *
+   * ESC is allowed: several suites print colour with a literal escape. Tab, line
+   * feed and carriage return are ordinary text.
+   */
+  const { execFileSync } = await import('node:child_process');
+  const tracked = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
+    .split('\n')
+    .filter((f) => /\.(js|mjs|cjs|css|html|sql|json|md|ps1|sh)$/.test(f));
+  const dirty = [];
+  for (const rel of tracked) {
+    const full = path.join(root, rel);
+    if (!fs.existsSync(full)) continue;
+    const bytes = fs.readFileSync(full);
+    const at = bytes.findIndex((b) => b < 32 && b !== 9 && b !== 10 && b !== 13 && b !== 27);
+    if (at !== -1) dirty.push(`${rel} (byte ${bytes[at]} at offset ${at})`);
+  }
+  check(
+    `no tracked source file contains a raw control byte (${tracked.length} checked)`,
+    dirty.length === 0,
+    dirty.slice(0, 3).join('; '),
+  );
 }
 
 // ── the app, running as a deployment ────────────────────────────────

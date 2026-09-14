@@ -174,7 +174,7 @@ section('the XML reader');
   check('a relationship id is not confused with an element id', relationshipId(sldId) === 'rId2', relationshipId(sldId));
 
   check('escaping covers all five', escapeXml(`<a & "b" 'c'>`) === '&lt;a &amp; &quot;b&quot; &apos;c&apos;&gt;');
-  check('a control character is dropped rather than written', escapeXml('ab') === 'ab');
+  check('a control character is dropped rather than written', escapeXml('a\u000bb') === 'ab');
   check('a lone surrogate reference is left alone', decodeXml('&#xD800;') === '&#xD800;');
 }
 
