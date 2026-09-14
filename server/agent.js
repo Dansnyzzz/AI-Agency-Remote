@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { getStore } from './store/index.js';
 import { getPrefs, usesSharedKey, providerStatus } from './settings.js';
-import { checkQuota, record as recordUsage } from './usage.js';
+import { checkQuota, record as recordUsage, turnTokenLimit } from './usage.js';
 import { streamCompletion } from './providers/index.js';
 import { resolve as resolveModelId } from './models.js';
 import { isAuto, pickAutoModel } from './autoPick.js';
@@ -696,9 +696,11 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
   }
 
   // Refuse before spending anything, and say plainly how to lift the cap.
-  const quota = await checkQuota(user, {
-    usingSharedKey: await usesSharedKey(userId, entry.provider),
-  });
+  const usingSharedKey = await usesSharedKey(userId, entry.provider);
+  const quota = await checkQuota(user, { usingSharedKey });
+  // Per turn, alongside the monthly quota above. See `turnTokenLimit`.
+  const turnLimit = turnTokenLimit({ usingSharedKey });
+  let turnTokens = 0;
   if (!quota.allowed) {
     emit('error', { message: quota.reason, code: 'quota_exceeded' });
     emit('done', { stopReason: 'quota_exceeded' });
@@ -925,6 +927,16 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
       return;
     }
 
+    // Checked before the next request, not after: the point is not to send it.
+    if (turnLimit && turnTokens >= turnLimit) {
+      emit('status', {
+        phase: 'token_limit',
+        message: `Stopped after ${turnTokens.toLocaleString()} tokens in this turn. Send a message to continue.`,
+      });
+      emit('done', { stopReason: 'token_limit' });
+      return;
+    }
+
     await absorbNewMessages();
 
     /**
@@ -1111,6 +1123,7 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
        * the turn itself, so the order now reflects that.
        */
       pendingUsage = { chatId, model: entry.id, usage: done.usage, costUsd: priced?.usd || 0, role: 'turn' };
+      turnTokens += (Number(done.usage.input) || 0) + (Number(done.usage.output) || 0);
     }
     assistant.model = entry.id;
 

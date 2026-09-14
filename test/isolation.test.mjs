@@ -1072,6 +1072,43 @@ check('leftover words stay as text', parseQuery('free gemini flash').text === 'f
 check('plain words are left alone', parseQuery('sonnet').text === 'sonnet');
 
 // ── suspension and quota ────────────────────────────────────────────
+section('one turn has a ceiling, on somebody else\'s money');
+{
+  /*
+   * The monthly quota bounds an account; nothing bounded a turn. `maxSteps` is a
+   * count, so thirty steps of a flagship model re-sending a growing transcript
+   * had no upper bound in money, and an account well inside its month could
+   * spend without limit inside one turn (PERF-009).
+   *
+   * Same principle as the monthly limit: the default applies to the shared key
+   * only. Capping how someone spends their own credit is not this app's call.
+   */
+  const { turnTokenLimit, SHARED_TURN_TOKEN_LIMIT } = await import('../server/usage.js');
+  const saved = process.env.MAX_TURN_TOKENS;
+  try {
+    delete process.env.MAX_TURN_TOKENS;
+    check('a turn on the shared key has a default ceiling', turnTokenLimit({ usingSharedKey: true }) === SHARED_TURN_TOKEN_LIMIT);
+    check('  a turn on the account\'s own key does not', turnTokenLimit({ usingSharedKey: false }) === null);
+
+    process.env.MAX_TURN_TOKENS = '500000';
+    check('the operator can set one for everyone', turnTokenLimit({ usingSharedKey: false }) === 500_000);
+    check('  and it replaces the shared default too', turnTokenLimit({ usingSharedKey: true }) === 500_000);
+
+    process.env.MAX_TURN_TOKENS = '0';
+    check('zero turns it off, rather than meaning "no tokens at all"', turnTokenLimit({ usingSharedKey: true }) === null);
+
+    process.env.MAX_TURN_TOKENS = 'lots';
+    check('a value that is not a number falls back to the default rather than to no ceiling', turnTokenLimit({ usingSharedKey: true }) === SHARED_TURN_TOKEN_LIMIT);
+  } finally {
+    if (saved === undefined) delete process.env.MAX_TURN_TOKENS;
+    else process.env.MAX_TURN_TOKENS = saved;
+  }
+
+  // An unattended run that hits it has to say so, not report success (AUTO-006).
+  const { unattendedStatus } = await import('../server/scheduler.js');
+  check('a scheduled run stopped by the ceiling is not recorded as ok', unattendedStatus('ok', 'token_limit', false) === 'stopped: token_limit');
+}
+
 section('suspension and usage quota');
 await store.updateUser(bob.id, { suspended: true });
 check('suspension is recorded', (await store.getUserById(bob.id)).suspended_at !== null);
