@@ -34,7 +34,24 @@ const asJson = process.argv.includes('--json');
 const { availableTools, assessRisk } = await import('../../server/tools/definitions.js');
 const { UNTRUSTED_RULE } = await import('../../server/tools/untrusted.js');
 const { renderProject } = await import('../../server/projects.js');
-const { buildSystemPrompt } = await import('../../server/agent.js');
+const { buildSystemPrompt, promptVersion } = await import('../../server/agent.js');
+
+/**
+ * The prompt version this eval was last reviewed against (GAP-003).
+ *
+ * The system prompt is where most of this app's behaviour lives, and it changed
+ * with no record — a paragraph edited inside an unrelated commit left nothing
+ * to measure the next week's behaviour against. `promptVersion()` fingerprints
+ * every branch of the prompt the app itself writes, and this stamp makes a change
+ * to it a deliberate act: the eval fails until the new value is written here, so
+ * the change shows up as its own line in the diff, with the eval re-run beside it.
+ *
+ * Same shape as the schema stamp in `test/schema.test.mjs`, for the same reason.
+ * When this fails after an intended prompt edit: read the cases above, confirm
+ * they still pass for the reason they claim, then update the value and say in the
+ * commit what the prompt change was for.
+ */
+const PROMPT_STAMP = '2b8200d849a2';
 
 const bold = (s) => `\x1b[1m${s}\x1b[0m`;
 const green = (s) => `\x1b[32m${s}\x1b[0m`;
@@ -241,12 +258,17 @@ for (const testCase of CASES) {
   results.push({ ...testCase, why0: testCase.why, ...outcome, ms: Date.now() - started });
 }
 
+const promptNow = promptVersion();
+const promptStamped = promptNow === PROMPT_STAMP;
+
 if (asJson) {
   console.log(
     JSON.stringify(
       {
         mode: live ? 'live' : 'scripted',
         at: new Date().toISOString(),
+        promptVersion: promptNow,
+        promptStamped,
         total: results.length,
         passed: results.filter((r) => r.pass).length,
         byAxis: Object.fromEntries(
@@ -280,6 +302,19 @@ if (asJson) {
     console.log();
   }
 
+  console.log(bold('prompt version'));
+  if (promptStamped) {
+    console.log(`  ${green('PASS')}  ${promptNow} is the version these cases were last reviewed against\n`);
+  } else {
+    console.log(`  ${red('FAIL')}  the prompt changed: ${PROMPT_STAMP} -> ${promptNow}`);
+    for (const line of wrap(
+      'Intended? Re-read the cases above and confirm they still pass for the reason they state, '
+        + `then set PROMPT_STAMP in test/eval/run.mjs to '${promptNow}' and say in the commit what the prompt change was for.`,
+      88,
+    )) console.log(dim(`        ${line}`));
+    console.log();
+  }
+
   const passed = results.filter((r) => r.pass).length;
   console.log(
     `${passed === results.length ? green('All') : red(`${results.length - passed} of`)} ` +
@@ -295,4 +330,4 @@ if (asJson) {
   }
 }
 
-process.exit(results.every((r) => r.pass) ? 0 : 1);
+process.exit(results.every((r) => r.pass) && promptStamped ? 0 : 1);

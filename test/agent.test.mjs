@@ -957,6 +957,27 @@ section('parallel tool calls have a ceiling');
   check('an empty list is not a deadlock', (await mapWithLimit([], 4, async () => 1)).length === 0);
 }
 
+section('the app\'s own prompt has a version');
+{
+  /*
+   * Nothing identified which version of the system prompt a turn ran under, so
+   * a prompt edit could never be put beside the behaviour or cost that followed
+   * (GAP-003). The eval stamps the value; these check the value is worth stamping.
+   */
+  const { promptVersion, buildSystemPrompt } = await import('../server/agent.js');
+  const v = promptVersion();
+  check('the version is a short fingerprint', /^[0-9a-f]{12}$/.test(v), v);
+  check('  and the same on every call', promptVersion() === v);
+
+  // The raw prompt carries today's date. If the fingerprint included it, the
+  // version would change every midnight and a stamp would mean nothing.
+  const raw = buildSystemPrompt({ workerOnline: false, policy: 'guarded' });
+  check('  the prompt itself does carry a date', /Current date: \d{4}-\d{2}-\d{2}/.test(raw));
+  const shifted = raw.replace(/^Current date: .*$/m, 'Current date: 1999-01-01.');
+  const strip = (s) => s.replace(/^Current date: .*$/m, '');
+  check('  and removing it is what makes two days\' prompts identical', strip(raw) === strip(shifted));
+}
+
 section('read-only and plan mode hold even for a tool nobody offered');
 {
   /*
