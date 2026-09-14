@@ -774,6 +774,63 @@ try {
   is(restored === baseline, 'and removing them puts the fingerprint back', `${baseline} -> ${restored}`);
 
   /**
+   * The stamp is judged on what the source *is*, not where it sits (CFG-020).
+   *
+   * Edit, run the gate, commit: the gate fingerprinted the files while dirty,
+   * the commit moved the identical bytes into HEAD, and both `head` and `dirty`
+   * then reported a change. The stamp was thrown away straight after the only
+   * run that covered the code, five times in one audit. `contentHash` hashes
+   * each source file's blob on disk with its path, so a commit changes nothing
+   * and an edit changes everything.
+   *
+   * The decisive assertion is the one with a fake `head` and a stale `dirty`: if
+   * position still mattered, that stamp would read as out of date.
+   */
+  const content = gate.contentHash();
+  is(/^[0-9a-f]{16}$/.test(content), 'the content fingerprint can be taken', content);
+  is(gate.contentHash() === content, '  and is stable for an unchanged tree');
+
+  const docAgain = path.join(root, 'audit', `hooks-test-content-${process.pid}.md`);
+  fs.writeFileSync(docAgain, '# scratch\n');
+  const withDoc = gate.contentHash();
+  fs.rmSync(docAgain, { force: true });
+  is(withDoc === content, '  documentation does not move it');
+
+  const srcAgain = path.join(root, `hooks-test-content-${process.pid}.js`);
+  fs.writeFileSync(srcAgain, '// scratch\n');
+  const withSrc = gate.contentHash();
+  fs.rmSync(srcAgain, { force: true });
+  is(withSrc !== content, '  a new source file does');
+  is(gate.contentHash() === content, '  and removing it restores it');
+
+  const savedState = process.env.CLAUDE_GATE_STATE;
+  process.env.CLAUDE_GATE_STATE = sandbox;
+  // The sandbox is cleaned up by an earlier section; recreated here rather than
+  // relying on section order, which is how this test first failed.
+  fs.mkdirSync(sandbox, { recursive: true });
+  try {
+    writeLedger({
+      pending: [],
+      lastGreen: { at: '2026-09-01T00:00:00Z', head: 'f'.repeat(40), dirty: 'stale', content, scope: 'full' },
+    });
+    const moved = gate.status();
+    is(moved.current === true, 'a stamp over identical content stands whatever head and dirty say', JSON.stringify({ current: moved.current }));
+    is(moved.verified === true, '  so work that was tested and then committed is still verified');
+
+    writeLedger({
+      pending: [],
+      lastGreen: { at: '2026-09-01T00:00:00Z', head: gate.head(), dirty: gate.dirtyHash(), content: '0'.repeat(16), scope: 'full' },
+    });
+    is(gate.status().current === false, 'while different content fails even with head and dirty matching');
+  } finally {
+    if (savedState === undefined) delete process.env.CLAUDE_GATE_STATE;
+    else process.env.CLAUDE_GATE_STATE = savedState;
+    // Recreated above, so removed again here — otherwise every run of the suite
+    // leaves a directory behind in the temp folder.
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+
+  /**
    * The exemption has to survive being committed.
    *
    * `dirtyHash` above filters through `isSource`, so editing a README does not

@@ -252,12 +252,69 @@ export function note(file) {
  * compares the two and reports "no longer matches this tree", which is exactly
  * right: the run was real, it just does not describe the tree any more.
  */
-export function stamp(scope, tested = dirtyHash()) {
+export function stamp(scope, tested = dirtyHash(), content = contentHash()) {
   const ledger = readLedger();
-  ledger.lastGreen = { at: new Date().toISOString(), head: head(), dirty: tested, scope };
+  ledger.lastGreen = { at: new Date().toISOString(), head: head(), dirty: tested, content, scope };
   ledger.pending = [];
   writeLedger(ledger);
   return ledger.lastGreen;
+}
+
+/**
+ * A fingerprint of what the source *is*, wherever it happens to live.
+ *
+ * `head` + `dirtyHash` describe where content sits — committed, or modified in
+ * the working tree — and that is the wrong question. The normal workflow here is
+ * edit, run the gate, commit. The gate fingerprints the files while they are
+ * dirty; the commit moves the identical bytes into HEAD; and both halves of the
+ * old `current` then report a change. The stamp was discarded immediately after
+ * the only run that ever covered the code, and every piece of work paid for a
+ * second full run over byte-identical content. That happened five times in one
+ * audit before it was measured (CFG-020); CFG-018 had closed only the half where
+ * the commit touched documentation.
+ *
+ * So this hashes content, not location: every source file git tracks or would
+ * add, as its blob hash on disk, paired with its path. Committing changes
+ * nothing here. Editing, adding, deleting or renaming a source file changes it.
+ * `.gitignore`d files are out, which is right — nothing the suites run is
+ * ignored — and documentation is out through `isSource`, the same exemption
+ * `dirtyHash` honours.
+ *
+ * '' means git could not answer, and `status()` treats '' as "cannot prove".
+ * Unknown is never allowed to read as unchanged.
+ */
+export function contentHash() {
+  const listing = git(['ls-files', '--cached', '--others', '--exclude-standard']);
+  if (!listing) return '';
+
+  const files = [...new Set(listing.split('\n').map((line) => line.trim()).filter(Boolean))]
+    .filter(isSource)
+    // A file deleted from disk but still in the index would make hash-object
+    // fail the whole batch. Its absence is itself a change, and dropping it from
+    // the list is how that change shows up in the fingerprint.
+    .filter((rel) => fs.existsSync(path.join(ROOT, rel)))
+    .sort();
+  if (!files.length) return '';
+
+  let run;
+  try {
+    run = spawnSync('git', ['hash-object', '--stdin-paths'], {
+      cwd: ROOT,
+      input: files.join('\n'),
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+  } catch {
+    return '';
+  }
+  if (!run || run.status !== 0) return '';
+
+  const blobs = String(run.stdout || '').trim().split('\n');
+  if (blobs.length !== files.length) return '';
+
+  const hash = crypto.createHash('sha256');
+  files.forEach((rel, i) => hash.update(`${rel}\0${blobs[i]}\n`));
+  return hash.digest('hex').slice(0, 16);
 }
 
 /**
@@ -280,8 +337,16 @@ export function status() {
    * second half compared commit hashes and a documentation commit was
    * indistinguishable from a rewrite of the agent loop.
    */
-  const current =
-    Boolean(g) && g.dirty === dirtyHash() && (g.head === head() || !sourceChangedSince(g.head));
+  const current = !g
+    ? false
+    : g.content
+      // A stamp that recorded content is judged on content. Commits, branch
+      // switches that land on identical files, and documentation all leave it
+      // standing; any change to source does not.
+      ? g.content === contentHash()
+      // Stamps written before `content` existed keep the older rule rather than
+      // being silently upgraded to a guarantee they never recorded.
+      : g.dirty === dirtyHash() && (g.head === head() || !sourceChangedSince(g.head));
   const clean = ledger.pending.length === 0;
 
   return {
@@ -341,6 +406,7 @@ function runGate(fast) {
   // `stamp`: recording this at the end instead would certify whatever happened
   // to be on disk when the run finished, edits included.
   const tested = dirtyHash();
+  const testedContent = contentHash();
 
   for (const args of STEPS[scope]) {
     process.stdout.write(`\n[1m› npm ${args.join(' ')}[0m\n`);
@@ -361,7 +427,7 @@ function runGate(fast) {
     }
   }
 
-  const green = stamp(scope, tested);
+  const green = stamp(scope, tested, testedContent);
   process.stdout.write(
     `\n[32mGate green (${scope}).[0m Stamped at ${green.at} on ${green.head.slice(0, 7) || 'no commit'}.\n` +
       (fast
