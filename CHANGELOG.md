@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-09-15 — Auto is OpenRouter's free router; a Languages tab; full translation
+
+Branch `feat/auto-openrouter-free-languages`.
+
+### Changed
+
+- **Auto is `openrouter/free`.** It used to rank the library by a hand-kept family order and
+  had a separate "prefer a model that reads images" setting. OpenRouter's router now picks a free
+  model per message, including one that reads images, so the setting is gone. Auto needs an
+  OpenRouter key; an OrcaRouter key alone no longer runs it.
+- **Settings → Models is replaced by Settings → Languages.** The language choice moves out of
+  Behaviour into its own tab. Adding a model by id and checking the built-ins lose their buttons;
+  `POST /api/models` and `POST /api/models/audit` still work.
+
+### Added
+
+- **Complete Vietnamese.** Every label, hint, placeholder and tooltip in the page, every string the
+  modules build (menus, cards, badges, statuses, the model picker), and the server's own sentences —
+  HTTP errors, stream status and retry lines, approval reasons, connector help, MCP suggestions,
+  stored workflow step errors.
+- `server/i18n` translates at the response boundary from the `X-Language` header;
+  `scripts/server-messages.js` lists every server sentence from the source.
+- `test/server-i18n.test.mjs`, and a markup-coverage check in `test/i18n.test.mjs`.
+
+### Upgrade notes
+
+- The `autoVision` preference is ignored and no longer saved.
+- `espree` is now a direct dev dependency (it was already installed through ESLint).
+
 ## 2026-09-14 — server and worker audit
 
 Branch `audit/server-worker-2026-09-09`, from `main` at `3e8273e`. Every entry has a
