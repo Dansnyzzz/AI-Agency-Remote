@@ -273,6 +273,7 @@ function dateLine(language, now) {
  * @param {string} [options.preheader]  the preview line an inbox shows beside the subject
  * @param {string} [options.footerHtml] already escaped
  * @param {string} [options.language]   'vi' or 'en', for the date and the lang attribute
+ * @param {Date} [options.now]          the date shown above the title
  */
 export function layoutEmail({ brand, title, contentHtml, preheader = '', footerHtml = '', language = 'en', now = new Date() }) {
   const words = WORDS[language] || WORDS.en;
