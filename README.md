@@ -167,16 +167,24 @@ assistant's `send_email` tool. Pick one backend, or none:
 | **SMTP** | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Any other provider. Wins over the Gmail variables when both are set. |
 | **Console** | nothing | Mail is printed to the server log. Fine locally for a reset code — and `send_email` refuses, saying the email was **not** sent, rather than pretending. |
 
-**`send_email` writes for the person asking, from the deployment's mailbox.** Every account shares the
-one sending mailbox — a provider will not send as an address it has not verified. The From line carries
-only the deployment's own name ("Synapse"); the person's registered address is the Reply-To, and a line
-at the foot says who sent it, so an answer goes back to them. Putting the person's name on the From line
+**`send_email` writes as the business, from the deployment's mailbox.** Every account shares the one
+sending mailbox — a provider will not send as an address it has not verified. The From line carries the
+name in `EMAIL_FROM` (for example `Elite Business <you@gmail.com>`), replies come back to that mailbox
+(or to `EMAIL_REPLY_TO` when set), and the footer names the person who sent it — **never their own email
+address**, which appears nowhere in the message or its headers. Putting the person's name on the From line
 was tried and sent mail to spam: a display name that belongs to someone other than the address is what
 impersonation looks like to a filter.
 
-**What it looks like.** The body is written in Markdown and laid out by `server/mailTemplate.js` as a
-finished email: the deployment's name at the top, the date and subject as the title, section headings,
-lists, tables and callouts, and a footer naming the sender — beside a plain-text part. It is built from
+**What it looks like.** The body is written in Markdown and laid out by `server/mailTemplate.js` for
+what the email *is*. There are sixteen kinds: a letter, thank-you, apology, follow-up or job application
+looks like a person's email; a newsletter, report, announcement, alert, invitation, reminder, quotation,
+invoice, confirmation, meeting notes or welcome is a card that opens with a galaxy-gradient header (the
+logo, the kind's label and the title in white). The logo is the web app's own, scaled to 96px
+(`scripts/email-logo.js`) and embedded in the message as an inline attachment, so it shows without an
+"images are hidden" prompt. Every gradient has a solid colour first, for clients that drop them. The assistant
+names the kind from the request, or it is inferred from the subject, the opening words and the structure.
+Details (`Label: value`) become a card, totals are highlighted, `- [ ]` items a checklist, a lone link a
+button. The footer names the sender in the language the message is written in, beside a plain-text part. It is built from
 tables and inline styles, at most 600px wide, with no images, web fonts or scripts, because that is what
 renders identically in Gmail, Outlook and phone mail apps and loads nothing a spam filter scores.
 
@@ -1414,7 +1422,8 @@ sets `DATABASE_URL` for you. The schema is created automatically on first reques
 | `ENCRYPTION_KEY` | **yes** | Encrypts stored provider keys. Changing it makes existing ones unreadable. |
 | `CRON_SECRET` | **yes** | Authenticates the cron endpoints — the scheduler and the model-library refresh. Any long random string. Without it both refuse every call, so scheduled tasks never run. |
 | `GMAIL_USER` + `GMAIL_APP_PASSWORD`, **or** `RESEND_API_KEY`, **or** `SMTP_*` | optional | Sends password-reset codes and the assistant's emails. Without one, reset links go to the server log and `send_email` says it cannot send. |
-| `EMAIL_FROM` | optional | The From name and address, e.g. `Synapse <you@gmail.com>`. Defaults to the Gmail/SMTP login. |
+| `EMAIL_FROM` | optional | The From name and address, e.g. `Elite Business <you@gmail.com>`. The name also heads every email. Defaults to the Gmail/SMTP login. |
+| `EMAIL_REPLY_TO` | optional | Where replies to the assistant's emails go, e.g. `support@yourcompany.com`. Unset, they come back to the sending mailbox. |
 | `ALLOW_SIGNUP` | optional | Open by default. `false` closes registration; the first account is always allowed. |
 | `DESKTOP_ACCESS` | optional, worker | `true` lets the assistant drive real applications on that machine. Off by default; see the platform table under "Desktop control". |
 | `DEFAULT_MONTHLY_TOKEN_LIMIT` | optional | Monthly cap for accounts using a shared key. Ignored for accounts with their own. |

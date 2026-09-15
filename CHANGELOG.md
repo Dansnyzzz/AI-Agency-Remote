@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-09-15 (overnight) — galaxy look, the web logo, and no personal addresses
+
+Branch `feat/email-galaxy-private`.
+
+### Changed
+
+- **Galaxy gradient replaces the green**: cards open with an indigo → violet → fuchsia header holding
+  the logo, the kind's label and the title in white; buttons, section bars and a letter's top line use
+  the same gradients, each with a solid fallback colour. Kind accents move into the same family; rise
+  and fall figures keep green and red.
+- **The web logo is in every email**, scaled to 96px and embedded as an inline (`cid:`) attachment by
+  both the SMTP and Resend paths; without the file the image is left out rather than shown broken.
+- **No personal email address in a message.** The footer names the sender only; Reply-To is no longer
+  the person's address — replies come back to the business mailbox, or to the new `EMAIL_REPLY_TO`.
+  The product tagline under the footer is gone: the brand is whatever `EMAIL_FROM` names.
+
+## 2026-09-15 (late night) — every kind of email, laid out for what it is
+
+Branch `feat/email-adaptive`.
+
+### Changed
+
+- **Sixteen kinds of email**, each with its own shape, colour and label: letter, thank-you, apology,
+  follow-up and job application are written like a person's email; newsletter, report, announcement,
+  alert, invitation, reminder, quotation, invoice, confirmation, meeting notes and welcome are
+  labelled cards. `send_email` takes a `kind`; without one it is inferred from the subject and
+  opening (whole words, longer phrases weigh more, one passing mention does not decide), then from
+  structure.
+- **Shapes documents are made of**: `Label: value` lines become a details card, a "Total/Tổng" row is
+  highlighted, `- [ ]` becomes a checklist, a lone link becomes a button, `+x%`/`-x%` in a table are
+  coloured.
+- **Adaptive**: the footer and date follow the language the message is written in; dated kinds use
+  the account's time zone; a first line repeating the subject is dropped; the inbox preview skips
+  headings. Dark mode and phone spacing for Apple Mail and Outlook apps, with the inline light design
+  standing on its own in Gmail.
+
 ## 2026-09-15 (night) — emails that look finished
 
 Branch `feat/email-design`.

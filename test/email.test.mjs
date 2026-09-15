@@ -81,12 +81,24 @@ section('"email it to me" goes to the address the account registered');
   check('to the account address', sent[0]?.to?.join() === 'lan@example.com', JSON.stringify(sent[0]?.to));
   check('from the deployment mailbox', (sent[0]?.from || '').endsWith('<deployment.mailbox@gmail.com>'), sent[0]?.from);
   check("with the deployment's own name on the From line, not the person's", sent[0]?.from === '"Synapse" <deployment.mailbox@gmail.com>', sent[0]?.from);
-  check('a footer in the text says who sent it, in the language of the message', /Gửi bởi Lan Nguyen \(lan@example\.com\) qua Synapse/.test(sent[0]?.text || ''), sent[0]?.text);
+  check('a footer in the text names who sent it, in the language of the message', /Người gửi Lan Nguyen · Synapse/.test(sent[0]?.text || ''), sent[0]?.text);
+  // Sent to the person themself here, so the To line is theirs; everything else must not be.
+  const shown = JSON.stringify({ from: sent[0]?.from, replyTo: sent[0]?.replyTo, html: sent[0]?.html, text: sent[0]?.text });
+  check("the person's own address appears nowhere in what the recipient reads", !shown.includes('lan@example.com'));
   check('there is an HTML part too', /^<!doctype html>/.test(sent[0]?.html || ''), (sent[0]?.html || '').slice(0, 40));
   check('laid out with the subject as its title and the body inside', /<h1[^>]*>Bản tin sáng<\/h1>/.test(sent[0]?.html || '') && /Nội dung/.test(sent[0]?.html || ''));
-  check('and the sender in the footer', /Gửi bởi <strong[^>]*>Lan Nguyen<\/strong>/.test(sent[0]?.html || ''));
-  check('and replies going back to them', sent[0]?.replyTo === 'lan@example.com', sent[0]?.replyTo);
-  check('the result says where it went and where replies go', /lan@example\.com/.test(r.result) && /replies go to lan@example\.com/.test(r.result), r.result);
+  check('and the sender named in the footer', /Người gửi <strong[^>]*>Lan Nguyen<\/strong>/.test(sent[0]?.html || ''));
+  check('replies come back to the business, with no Reply-To of their own', sent[0]?.replyTo === undefined, sent[0]?.replyTo);
+  check('the result says where it went and where replies go', /lan@example\.com/.test(r.result) && /replies come back to the Synapse mailbox/.test(r.result), r.result);
+  const logo = sent[0]?.attachments?.[0];
+  check('the web logo is embedded, not linked', logo?.cid === 'brand-logo@mail' && logo?.contentType === 'image/png' && logo?.content?.length > 1000, JSON.stringify({ cid: logo?.cid, bytes: logo?.content?.length }));
+  check('and the HTML points at it', (sent[0]?.html || '').includes('src="cid:brand-logo@mail"'));
+
+  process.env.EMAIL_REPLY_TO = 'support@example.org';
+  sent.length = 0;
+  await attempt({ subject: 'S', body: 'B' });
+  check('EMAIL_REPLY_TO names a mailbox for replies', sent[0]?.replyTo === 'support@example.org', sent[0]?.replyTo);
+  delete process.env.EMAIL_REPLY_TO;
 }
 
 section('any address the user names, or several');

@@ -13,7 +13,7 @@ import { normaliseSteps } from '../workflows.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
 import { sendEmail, emailBackend, senderName } from '../email.js';
-import { composeMessage } from '../mailTemplate.js';
+import { composeMessage, KIND_NAMES } from '../mailTemplate.js';
 import { safeFetch } from '../util/safeFetch.js';
 import { searchDocs, listSources, forgetSource } from '../rag.js';
 import { createDocument, extensionOf } from '../office/index.js';
@@ -956,14 +956,13 @@ async function githubWriteTool({ path, method, body }, { userId }) {
  * reported as the failure it is.
  */
 /**
- * The language of a message's date and footer: the account's interface
- * language when it has chosen one, otherwise the language the body is written
- * in — Vietnamese diacritics are unmistakable.
+ * The account's language and zone. The message's own language wins — the
+ * recipient reads the footer, not the sender (see detectLanguage) — and the
+ * account's is the fallback for a body too short to tell.
  */
-async function messageLanguage(user, body) {
-  const chosen = user?.id ? await getPrefs(user.id).then((p) => p?.language).catch(() => null) : null;
-  if (chosen === 'vi' || chosen === 'en') return chosen;
-  return /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(body) ? 'vi' : 'en';
+async function accountMailPrefs(user) {
+  const prefs = user?.id ? await getPrefs(user.id).catch(() => null) : null;
+  return { language: prefs?.language || 'en', timeZone: prefs?.timezone || '' };
 }
 
 /** How many people one call may write to. More than this is a mailing list. */
@@ -996,10 +995,10 @@ function recipientsFor(to, user) {
 }
 
 /**
- * @param {{ to?: string | string[], subject?: string, body?: string, html?: string }} input
+ * @param {{ to?: string | string[], subject?: string, body?: string, html?: string, kind?: string }} input
  * @param {{ user?: { email?: string, name?: string } }} context
  */
-async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
+async function sendEmailTool({ to, subject, body, html, kind }, { user } = {}) {
   const recipients = recipientsFor(to, user);
   const line = String(subject || '').trim();
   if (!line) throw new Error('An email with no subject line reads as spam. Give it one.');
@@ -1015,23 +1014,27 @@ async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
   }
 
   /*
-   * Sent from the deployment's mailbox under the deployment's own name, for this
-   * person: their address as Reply-To, so an answer reaches them rather than a
-   * shared inbox, and a line at the foot saying who sent it. Not their name on
-   * the From line — see fromHeader for why that went to spam.
+   * Sent as the business: its name and mailbox on the From line, replies to it,
+   * and the person named — never their own address — at the foot. Not their
+   * name on the From line — see fromHeader for why that went to spam.
    *
    * The body is Markdown, laid out by mailTemplate.js as a finished email —
    * header, title, sections, lists, tables, footer — with a plain-text twin,
    * because a message with both parts is what an ordinary mail client sends.
    * An `html` body the model wrote itself is sent as given.
    */
+  const account = await accountMailPrefs(user);
   const composed = text
     ? composeMessage({
         brand: senderName(),
         subject: line,
         markdown: text,
-        sender: user?.email ? { name: user.name || '', email: user.email } : null,
-        language: await messageLanguage(user, text),
+        // A name only: the person's own address is never printed in the message.
+        sender: user?.name ? { name: user.name } : null,
+        // A kind the model named is used as given; anything else is inferred.
+        kind: KIND_NAMES.includes(String(kind)) ? String(kind) : 'auto',
+        language: account.language,
+        timeZone: account.timeZone,
       })
     : null;
   const result = await sendEmail({
@@ -1039,7 +1042,10 @@ async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
     subject: line,
     text: composed?.text,
     html: html || composed?.html,
-    replyTo: user?.email || undefined,
+    // Replies come back to the business. EMAIL_REPLY_TO names a different
+    // mailbox for them (support@…); the person's own address is not used, so it
+    // never appears in a header either.
+    replyTo: process.env.EMAIL_REPLY_TO || undefined,
   });
   // `sendEmail` never throws — a failed password-reset mail must not break the
   // request — so a refusal from the provider arrives here as `ok: false`, and
@@ -1056,8 +1062,8 @@ async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
     .filter(Boolean)
     .join('; ');
   return (
-    `The mail server accepted an email to ${accepted.join(', ')} with the subject "${line}"` +
-    `${user?.email ? `; replies go to ${user.email}` : ''}.` +
+    `The mail server accepted an email${composed ? ` (laid out as: ${composed.kind.replace('_', ' ')})` : ''} to ${accepted.join(', ')} with the subject "${line}"` +
+    `; replies come back to ${process.env.EMAIL_REPLY_TO || `the ${senderName()} mailbox`}.` +
     `${refused.length ? ` It REFUSED ${refused.join(', ')} — say that those did not get it.` : ''}` +
     `${evidence ? ` (${evidence})` : ''} ` +
     'Accepted is not the same as delivered: if it does not arrive, it is in Spam, Promotions or All Mail, or a bounce ' +
