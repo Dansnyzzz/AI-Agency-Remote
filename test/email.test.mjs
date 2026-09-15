@@ -126,6 +126,33 @@ section('a refusal from the provider is reported as a refusal');
   refuse = null;
 }
 
+section('what the mail server said is kept, and a refused recipient is not "sent"');
+{
+  // nodemailer resolves even when the server refused recipients; it lists them.
+  const saying = (info) => ({
+    async sendMail(message) {
+      sent.push(message);
+      return info;
+    },
+  });
+
+  email.__testing.useTransport(saying({ messageId: '<abc@gmail.com>', accepted: ['a@example.com'], rejected: [], response: '250 2.0.0 OK 1726 - gsmtp' }));
+  const ok = await attempt({ to: 'a@example.com', subject: 'S', body: 'B' });
+  check('the Message-ID is in the result, to find it in Sent', /<abc@gmail\.com>/.test(ok.result || ''), ok.result);
+  check("and the server's own reply", /250 2\.0\.0 OK/.test(ok.result || ''));
+  check('and it says accepted, not delivered', /accepted/.test(ok.result || '') && /Spam/.test(ok.result || ''));
+
+  email.__testing.useTransport(saying({ messageId: '<m@x>', accepted: ['a@example.com'], rejected: ['typo@exmaple.con'], response: '250 OK' }));
+  const partial = await attempt({ to: 'a@example.com, typo@exmaple.con', subject: 'S', body: 'B' });
+  check('a partly refused send names who did not get it', partial.ok && /REFUSED typo@exmaple\.con/.test(partial.result), partial.result);
+
+  email.__testing.useTransport(saying({ messageId: '<m@x>', accepted: [], rejected: ['nobody@exmaple.con'], response: '550 5.1.1 no such user' }));
+  const none = await attempt({ to: 'nobody@exmaple.con', subject: 'S', body: 'B' });
+  check('every recipient refused is NOT sent', !none.ok && /NOT sent/.test(none.error) && /550/.test(none.error), none.error);
+
+  email.__testing.useTransport(fakeTransport);
+}
+
 section('the approval prompt says who it goes to');
 {
   check('a named recipient is named', riskReason('send_email', { to: 'a@example.com' }) === 'Sends an email to a@example.com. It cannot be unsent.');

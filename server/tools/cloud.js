@@ -1021,10 +1021,21 @@ async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
   if (!result?.ok) {
     throw new Error(`The email was NOT sent: the mail provider refused it (${result?.error || 'no reason given'}). Say so plainly.`);
   }
-  const who = recipients.join(', ');
+  const accepted = result.accepted?.length ? result.accepted : recipients;
+  const refused = result.rejected || [];
+  const evidence = [
+    result.messageId ? `Message-ID ${result.messageId}` : '',
+    result.response ? `server reply: ${String(result.response).slice(0, 160)}` : '',
+  ]
+    .filter(Boolean)
+    .join('; ');
   return (
-    `Sent an email to ${who} with the subject "${line}"${user?.email ? `; replies go to ${user.email}` : ''}. ` +
-    'It has left the building and cannot be recalled — say so, and say what you sent.'
+    `The mail server accepted an email to ${accepted.join(', ')} with the subject "${line}"` +
+    `${user?.email ? `; replies go to ${user.email}` : ''}.` +
+    `${refused.length ? ` It REFUSED ${refused.join(', ')} — say that those did not get it.` : ''}` +
+    `${evidence ? ` (${evidence})` : ''} ` +
+    'Accepted is not the same as delivered: if it does not arrive, it is in Spam, Promotions or All Mail, or a bounce ' +
+    "is waiting in the sending mailbox. Say that it was accepted by the mail server, and that it cannot be recalled."
   );
 }
 

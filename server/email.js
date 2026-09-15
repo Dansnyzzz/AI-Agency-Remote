@@ -133,6 +133,8 @@ async function sendViaResend({ to, subject, html, text, replyTo, from }) {
   if (!res.ok) {
     throw new Error(`Resend returned ${res.status}: ${await res.text().catch(() => '')}`);
   }
+  const body = await res.json().catch(() => ({}));
+  return { messageId: body?.id || null, accepted: asList(to), rejected: [], response: `Resend accepted (id ${body?.id || 'unknown'})` };
 }
 
 /**
@@ -151,9 +153,26 @@ export async function sendEmail({ to, subject, html, text, replyTo, onBehalfOf }
   const backend = emailBackend();
   const from = fromHeader(onBehalfOf);
   try {
-    if (backend === 'resend') await sendViaResend({ to, subject, html, text, replyTo, from });
+    /*
+     * What the provider actually said, kept and returned.
+     *
+     * An SMTP server can accept the connection and still refuse some of the
+     * recipients — nodemailer resolves anyway and lists them in `rejected`. And
+     * "accepted" only means the provider took the message: where it lands
+     * (inbox, spam, a bounce minutes later) is decided after. The Message-ID and
+     * the server's own reply line are what let somebody find the message in the
+     * sending mailbox's Sent folder, or match it to a bounce.
+     */
+    let receipt = null;
+    if (backend === 'resend') receipt = await sendViaResend({ to, subject, html, text, replyTo, from });
     else if (backend === 'smtp') {
-      await smtpTransport().sendMail({ from, to: asList(to), subject, html, text, ...(replyTo ? { replyTo } : {}) });
+      const info = await smtpTransport().sendMail({ from, to: asList(to), subject, html, text, ...(replyTo ? { replyTo } : {}) });
+      receipt = {
+        messageId: info?.messageId || null,
+        accepted: (info?.accepted || []).map(String),
+        rejected: (info?.rejected || []).map(String),
+        response: info?.response || '',
+      };
     } else {
       console.log(`\n──────── email (no provider configured) ────────`);
       console.log(`  to:      ${asList(to).join(', ')}`);
@@ -161,7 +180,19 @@ export async function sendEmail({ to, subject, html, text, replyTo, onBehalfOf }
       console.log(text);
       console.log(`───────────────────────────────────────────────\n`);
     }
-    return { ok: true, backend };
+    if (receipt && receipt.rejected.length && !receipt.accepted.length) {
+      throw new Error(`every recipient was refused (${receipt.rejected.join(', ')}): ${receipt.response}`);
+    }
+    // The id and the counts, not the addresses: a log is not the place for them.
+    if (receipt) {
+      log.info(`email via ${backend} accepted`, {
+        backend,
+        messageId: receipt.messageId,
+        accepted: receipt.accepted.length,
+        rejected: receipt.rejected.length,
+      });
+    }
+    return { ok: true, backend, ...(receipt || {}) };
   } catch (err) {
     // Never let a mail failure break the request that triggered it — the user
     // can always ask for another link.
