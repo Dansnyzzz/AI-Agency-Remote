@@ -22,3 +22,8 @@
 # Everything else follows whatever the checkout is configured for; git still
 # stores LF. Declared explicitly so `text` is not guessed per file.
 * text=auto
+
+# Third-party builds are served byte for byte as their authors published them.
+# Fonts are binary; the script and stylesheet must not have their line endings
+# rewritten on a Windows checkout either.
+public/vendor/** -text

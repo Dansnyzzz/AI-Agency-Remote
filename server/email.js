@@ -5,7 +5,8 @@ import { log } from './util/trace.js';
  * Email delivery with three backends, chosen by whichever is configured:
  *
  *   1. Resend  — RESEND_API_KEY. Plain HTTPS, works on Vercel with no SMTP port.
- *   2. SMTP    — SMTP_HOST/PORT/USER/PASS. Any provider, including Gmail.
+ *   2. SMTP    — SMTP_HOST/PORT/USER/PASS. Any provider. Gmail has a shortcut:
+ *                GMAIL_USER + GMAIL_APP_PASSWORD fill in the rest.
  *   3. Console — neither configured: the link is printed to the server log.
  *
  * The console fallback exists so local development and first-run setup are not
@@ -14,39 +15,119 @@ import { log } from './util/trace.js';
  */
 export function emailBackend() {
   if (process.env.RESEND_API_KEY) return 'resend';
-  if (process.env.SMTP_HOST) return 'smtp';
+  if (smtpSettings()) return 'smtp';
   return 'console';
 }
 
-function fromAddress() {
-  return process.env.EMAIL_FROM || 'AI Remote <onboarding@resend.dev>';
+/**
+ * The SMTP server to use, or null.
+ *
+ * Gmail is the common case for a deployment's own mailbox, and its settings are
+ * fixed — so two variables (the address and an App Password, which Google issues
+ * under Security → 2-Step Verification → App passwords) are enough. Explicit
+ * SMTP_* values win when both are present.
+ */
+function smtpSettings() {
+  if (process.env.SMTP_HOST) {
+    return {
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 587,
+      user: process.env.SMTP_USER || '',
+      pass: process.env.SMTP_PASS || '',
+    };
+  }
+  if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+    return {
+      host: 'smtp.gmail.com',
+      port: 465,
+      user: process.env.GMAIL_USER.trim(),
+      // Google shows the App Password in groups of four with spaces.
+      pass: process.env.GMAIL_APP_PASSWORD.replace(/\s+/g, ''),
+    };
+  }
+  return null;
+}
+
+/** The mailbox mail is sent from: EMAIL_FROM, else the SMTP login, else Resend's test sender. */
+function senderMailbox() {
+  const configured = process.env.EMAIL_FROM || '';
+  const inAngles = configured.match(/<([^>]+)>/);
+  if (inAngles) return { name: configured.slice(0, configured.indexOf('<')).trim().replace(/^"|"$/g, ''), address: inAngles[1].trim() };
+  if (configured.includes('@')) return { name: 'AI Remote', address: configured.trim() };
+  const login = smtpSettings()?.user;
+  if (login && login.includes('@')) return { name: 'AI Remote', address: login };
+  return { name: 'AI Remote', address: 'onboarding@resend.dev' };
+}
+
+/**
+ * A display name safe to put in a header: no quotes, angle brackets or line
+ * breaks, which are what would let a name write a second header or a second
+ * address. Capped, because a From line is not the place for a paragraph.
+ */
+const cleanName = (name) =>
+  String(name || '')
+    .replace(/[\r\n"<>\\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+
+/**
+ * The From header. The mailbox is always the deployment's — a provider refuses
+ * to send as an address it has not verified — but the name can say on whose
+ * behalf, so a recipient sees "Lan Nguyen via AI Remote" rather than a stranger.
+ */
+function fromHeader(onBehalfOf) {
+  const { name, address } = senderMailbox();
+  const shown = cleanName(onBehalfOf) ? `${cleanName(onBehalfOf)} via ${cleanName(name) || 'AI Remote'}` : cleanName(name);
+  return shown ? `"${shown}" <${address}>` : address;
 }
 
 let transport = null;
+let transportKey = '';
 function smtpTransport() {
-  if (!transport) {
-    const port = Number(process.env.SMTP_PORT) || 587;
+  const settings = smtpSettings();
+  const key = JSON.stringify(settings);
+  // Rebuilt if the settings change, which in practice means between tests.
+  if (!transport || key !== transportKey) {
+    transportKey = key;
     transport = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port,
+      host: settings.host,
+      port: settings.port,
       // 465 is implicit TLS; 587 upgrades with STARTTLS.
-      secure: port === 465,
-      auth: process.env.SMTP_USER
-        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-        : undefined,
+      secure: settings.port === 465,
+      auth: settings.user ? { user: settings.user, pass: settings.pass } : undefined,
     });
   }
   return transport;
 }
 
-async function sendViaResend({ to, subject, html, text }) {
+/** Test seam: replace the SMTP transport. */
+export const __testing = {
+  useTransport(fake) {
+    transport = fake;
+    transportKey = JSON.stringify(smtpSettings());
+  },
+  fromHeader,
+  smtpSettings,
+};
+
+const asList = (value) => (Array.isArray(value) ? value : value ? [value] : []);
+
+async function sendViaResend({ to, subject, html, text, replyTo, from }) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ from: fromAddress(), to: [to], subject, html, text }),
+    body: JSON.stringify({
+      from,
+      to: asList(to),
+      subject,
+      html,
+      text,
+      ...(replyTo ? { reply_to: asList(replyTo) } : {}),
+    }),
     signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
@@ -54,14 +135,28 @@ async function sendViaResend({ to, subject, html, text }) {
   }
 }
 
-export async function sendEmail({ to, subject, html, text }) {
+/**
+ * Send one message.
+ *
+ * @param {object} mail
+ * @param {string|string[]} mail.to       one address or several
+ * @param {string} mail.subject
+ * @param {string} [mail.text]
+ * @param {string} [mail.html]
+ * @param {string} [mail.replyTo]         where a reply should go — the person the
+ *                                        mail was sent for, not the shared mailbox
+ * @param {string} [mail.onBehalfOf]      a name for the From line
+ */
+export async function sendEmail({ to, subject, html, text, replyTo, onBehalfOf }) {
   const backend = emailBackend();
+  const from = fromHeader(onBehalfOf);
   try {
-    if (backend === 'resend') await sendViaResend({ to, subject, html, text });
-    else if (backend === 'smtp') await smtpTransport().sendMail({ from: fromAddress(), to, subject, html, text });
-    else {
+    if (backend === 'resend') await sendViaResend({ to, subject, html, text, replyTo, from });
+    else if (backend === 'smtp') {
+      await smtpTransport().sendMail({ from, to: asList(to), subject, html, text, ...(replyTo ? { replyTo } : {}) });
+    } else {
       console.log(`\n──────── email (no provider configured) ────────`);
-      console.log(`  to:      ${to}`);
+      console.log(`  to:      ${asList(to).join(', ')}`);
       console.log(`  subject: ${subject}\n`);
       console.log(text);
       console.log(`───────────────────────────────────────────────\n`);

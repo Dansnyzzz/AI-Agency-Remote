@@ -3283,6 +3283,51 @@ section('a run of browser steps reads as one piece of work');
   check('and leaves nothing spinning', run.noSpinnersLeft === true);
 }
 
+/**
+ * Formulas are typeset, under the page's own Content-Security-Policy.
+ *
+ * The renderer's side is covered in markdown-math.test.mjs; what only a browser
+ * can prove is that KaTeX loads from public/vendor, is allowed by the CSP, finds
+ * its fonts, and replaces the placeholders written before it arrived.
+ */
+section('mathematics in a reply is drawn as mathematics');
+{
+  const failed = [];
+  const onFail = (request) => {
+    if (request.url().includes('/vendor/katex/')) failed.push(request.url());
+  };
+  page.on('requestfailed', onFail);
+  const math = await page.evaluate(async () => {
+    const { renderMarkdown } = await import('/js/markdown.js');
+    const { loadMath } = await import('/js/math.js');
+    const host = document.createElement('div');
+    host.className = 'prose';
+    document.body.append(host);
+    const source = 'Công thức $\\frac{\\text{CF}_t}{(1+r)^t}$ và\n\n$$\\text{NPV} = \\sum_{t=1}^{5} PV_t - I_0$$';
+    host.innerHTML = renderMarkdown(source);
+    const pendingBefore = host.querySelectorAll('.math.is-pending').length;
+    const loaded = await loadMath();
+    await document.fonts.ready;
+    const out = {
+      pendingBefore,
+      loaded,
+      pendingAfter: host.querySelectorAll('.math.is-pending').length,
+      typeset: host.querySelectorAll('.katex').length,
+      display: host.querySelectorAll('.katex-display').length,
+      fonts: [...document.fonts].some((f) => f.family.includes('KaTeX') && f.status === 'loaded'),
+    };
+    host.remove();
+    return out;
+  });
+  page.off('requestfailed', onFail);
+  check('a formula waits as a placeholder until KaTeX arrives', math.pendingBefore === 2, `${math.pendingBefore}`);
+  check('KaTeX loads under the CSP', math.loaded === true);
+  check('and every placeholder is typeset', math.pendingAfter === 0 && math.typeset === 2, `${math.pendingAfter} pending, ${math.typeset} typeset`);
+  check('the $$ formula is a display formula', math.display === 1, `${math.display}`);
+  check('its fonts load', math.fonts === true);
+  check('nothing under /vendor/katex failed to load', failed.length === 0, failed.join(' '));
+}
+
 await browser.close();
 server.close();
 removeTemp(process.env.DATA_DIR);

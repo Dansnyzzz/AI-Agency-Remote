@@ -3,9 +3,11 @@
  *
  * Everything is escaped before any markup is generated, so model output can
  * never inject HTML. Supports headings, lists, code fences, inline formatting,
- * blockquotes, tables, links and rules — the subset chat models actually emit.
+ * blockquotes, tables, links, rules and TeX mathematics — the subset chat models
+ * actually emit.
  */
 import { t } from './i18n.js';
+import { mathHtml } from './math.js';
 
 export function escapeHtml(text) {
   return String(text ?? '')
@@ -28,16 +30,52 @@ export function escapeHtml(text) {
  */
 const marker = () => `\u0000${Math.random().toString(36).slice(2, 10)}\u0000`;
 
-function inline(text) {
-  let out = escapeHtml(text);
+/**
+ * A language name a model puts after inline triple backticks — ```excel =SUM(A1:A3)```
+ * — which is a fence's info string written on one line, not part of the code.
+ */
+const INLINE_LANGUAGE =
+  /^(?:excel|formula|sheets|js|javascript|ts|typescript|python|py|sql|bash|sh|shell|powershell|ps1|cmd|json|yaml|yml|html|css|xml|text|txt|plaintext|markdown|md|latex|tex|math|c|cpp|csharp|cs|java|go|rust|php|ruby|r)\s+/i;
 
-  // Inline code first, so its contents are not re-processed as emphasis.
-  const codes = [];
+/**
+ * Pieces of a line that must not be read as Markdown, lifted out first.
+ *
+ * Code spans follow CommonMark: a run of N backticks is closed by a run of
+ * exactly N, so `` ``a ` b`` `` keeps its inner backtick. Mathematics follows
+ * Pandoc's rules for `$`, which is what keeps prices from turning into formulas:
+ * an opening `$` must be followed by a non-space, a closing one preceded by a
+ * non-space and not followed by a digit — so "$5 and $10" stays text while
+ * `$x^2$` and `$10 - 2 = 8$` are typeset. `\$` is a literal dollar sign.
+ */
+function protect(text, hold) {
+  return String(text)
+    .replace(/(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g, (whole, ticks, body) => {
+      let code = body;
+      if (code.length > 2 && code.startsWith(' ') && code.endsWith(' ') && code.trim()) code = code.slice(1, -1);
+      if (ticks.length >= 3) code = code.replace(INLINE_LANGUAGE, '');
+      return hold(`<code>${escapeHtml(code)}</code>`);
+    })
+    .replace(/\\\$/g, () => hold('$'))
+    .replace(/\$\$([\s\S]+?)\$\$/g, (whole, tex) => hold(mathHtml(tex, true)))
+    .replace(/\\\[([\s\S]+?)\\\]/g, (whole, tex) => hold(mathHtml(tex, true)))
+    .replace(/\\\(([\s\S]+?)\\\)/g, (whole, tex) => hold(mathHtml(tex, false)))
+    .replace(/(?<![\\$\w])\$(?=\S)([^$\n]*?[^\s\\$])\$(?![\d$])/g, (whole, tex) =>
+      // A bare number between dollars is money written oddly, not a formula.
+      /^[\d.,\s]+$/.test(tex) ? whole : hold(mathHtml(tex, false)),
+    );
+}
+
+function inline(text) {
+  const slots = [];
   const token = marker();
-  out = out.replace(/`([^`]+)`/g, (_, code) => {
-    codes.push(code);
-    return `${token}${codes.length - 1}${token}`;
-  });
+  const hold = (html) => {
+    slots.push(html);
+    return `${token}${slots.length - 1}${token}`;
+  };
+
+  // Code and mathematics first, so their contents are not re-processed as
+  // emphasis — an underscore in `CF_t` is a subscript, not italics.
+  let out = escapeHtml(protect(text, hold));
 
   out = out
     // The one tag let back through after escaping. A model writes `<br>` to
@@ -54,11 +92,14 @@ function inline(text) {
     // Only http(s) and relative links — no javascript: URLs.
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g,
       '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)/g,
+    // A bare URL stops at a slot marker (NUL), so a formula or code span written
+    // straight after a link is not pulled into its href.
+    // eslint-disable-next-line no-control-regex
+    .replace(/(^|[\s(])((?:https?:\/\/)[^\s<)\u0000]+)/g,
       '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
 
   const restore = new RegExp(`${token}(\\d+)${token}`, 'g');
-  return out.replace(restore, (_, i) => `<code>${codes[Number(i)] ?? ''}</code>`);
+  return out.replace(restore, (_, i) => slots[Number(i)] ?? '');
 }
 
 function codeBlock(language, body) {
@@ -116,6 +157,59 @@ function tableAt(lines, i) {
   return !!aligns && aligns.length === tableRow(head).length;
 }
 
+/** An opening code fence, indented or not: ``````lang``. */
+const FENCE_OPEN = /^(\s*)```(\S*)\s*$/;
+const FENCE_CLOSE = /^\s*```\s*$/;
+/** A display-maths block starting on its own line: `$$` or `\[`. */
+const MATH_OPEN = /^\s*(\$\$|\\\[)/;
+
+/**
+ * A fenced code block from `lines[i]`, which must be an opening fence.
+ *
+ * Indentation is allowed and removed: a model writes a fence indented under a
+ * bullet, and requiring column 0 is how that code used to be swallowed into the
+ * bullet's text as a string of backticks.
+ */
+function readFence(lines, i) {
+  const [, indent, language] = lines[i].match(FENCE_OPEN);
+  const body = [];
+  let j = i + 1;
+  while (j < lines.length && !FENCE_CLOSE.test(lines[j])) {
+    body.push(lines[j].startsWith(indent) ? lines[j].slice(indent.length) : lines[j].trimStart());
+    j += 1;
+  }
+  return { html: codeBlock(language, body.join('\n')), next: j + 1 };
+}
+
+/**
+ * A display formula from `lines[i]`: everything up to the closing `$$` or `\]`,
+ * which may be on the same line. Returns null when the line only starts with the
+ * delimiter mid-sentence and never closes, so it stays ordinary text.
+ */
+function readMathBlock(lines, i) {
+  const opener = lines[i].match(MATH_OPEN)[1];
+  const closer = opener === '$$' ? '$$' : '\\]';
+  const first = lines[i].trimStart().slice(opener.length);
+  const sameLine = first.indexOf(closer);
+  if (sameLine !== -1) {
+    // Only a block when nothing follows the formula; otherwise it is inline.
+    if (first.slice(sameLine + closer.length).trim()) return null;
+    return { html: mathHtml(first.slice(0, sameLine), true), next: i + 1 };
+  }
+  const body = [first];
+  for (let j = i + 1; j < lines.length; j += 1) {
+    const at = lines[j].indexOf(closer);
+    if (at !== -1) {
+      if (lines[j].slice(at + closer.length).trim()) return null;
+      body.push(lines[j].slice(0, at));
+      return { html: `<div class="math-block">${mathHtml(body.join('\n'), true)}</div>`, next: j + 1 };
+    }
+    if (!lines[j].trim()) return null;
+    body.push(lines[j]);
+  }
+  return null;
+}
+
 export function renderMarkdown(source) {
   const lines = String(source ?? '').replace(/\r\n/g, '\n').split('\n');
   const html = [];
@@ -125,14 +219,21 @@ export function renderMarkdown(source) {
     const line = lines[i];
 
     // Fenced code
-    const fence = line.match(/^```(\S*)\s*$/);
-    if (fence) {
-      const body = [];
-      i += 1;
-      while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]);
-      i += 1;
-      html.push(codeBlock(fence[1], body.join('\n')));
+    if (FENCE_OPEN.test(line)) {
+      const block = readFence(lines, i);
+      html.push(block.html);
+      i = block.next;
       continue;
+    }
+
+    // A formula on lines of its own
+    if (MATH_OPEN.test(line)) {
+      const block = readMathBlock(lines, i);
+      if (block) {
+        html.push(block.html.startsWith('<div') ? block.html : `<div class="math-block">${block.html}</div>`);
+        i = block.next;
+        continue;
+      }
     }
 
     if (!line.trim()) {
@@ -194,22 +295,39 @@ export function renderMarkdown(source) {
       const re = ordered ? numbered : bullet;
       const items = [];
       while (i < lines.length && re.test(lines[i])) {
-        let item = lines[i].replace(re, '');
+        // A bullet's text, with any code block or formula written under it kept
+        // inside the same bullet, in order.
+        const parts = [];
+        let text = lines[i].replace(re, '');
+        const flush = () => {
+          if (text.trim()) parts.push(inline(text));
+          text = '';
+        };
         i += 1;
         // Absorb wrapped continuation lines into the same bullet — but not a
         // table starting under it, which is a block of its own.
-        while (
-          i < lines.length &&
-          lines[i].trim() &&
-          !bullet.test(lines[i]) &&
-          !numbered.test(lines[i]) &&
-          !/^```/.test(lines[i]) &&
-          !tableAt(lines, i)
-        ) {
-          item += ` ${lines[i].trim()}`;
+        while (i < lines.length && lines[i].trim() && !bullet.test(lines[i]) && !numbered.test(lines[i]) && !tableAt(lines, i)) {
+          if (FENCE_OPEN.test(lines[i])) {
+            // An unindented fence ends the list; an indented one belongs to it.
+            if (!/^\s/.test(lines[i])) break;
+            flush();
+            const block = readFence(lines, i);
+            parts.push(block.html);
+            i = block.next;
+            continue;
+          }
+          const block = MATH_OPEN.test(lines[i]) ? readMathBlock(lines, i) : null;
+          if (block) {
+            flush();
+            parts.push(block.html);
+            i = block.next;
+            continue;
+          }
+          text += `${text ? ' ' : ''}${lines[i].trim()}`;
           i += 1;
         }
-        items.push(`<li>${inline(item)}</li>`);
+        flush();
+        items.push(`<li>${parts.join('')}</li>`);
       }
       html.push(ordered ? `<ol>${items.join('')}</ol>` : `<ul>${items.join('')}</ul>`);
       continue;
@@ -220,7 +338,8 @@ export function renderMarkdown(source) {
     while (
       i < lines.length &&
       lines[i].trim() &&
-      !/^```/.test(lines[i]) &&
+      !FENCE_OPEN.test(lines[i]) &&
+      !(MATH_OPEN.test(lines[i]) && para.length && readMathBlock(lines, i)) &&
       !/^#{1,4}\s/.test(lines[i]) &&
       !/^>\s?/.test(lines[i]) &&
       !/^([-*_])\1{2,}\s*$/.test(lines[i].trim()) &&

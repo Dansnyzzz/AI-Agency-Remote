@@ -93,7 +93,8 @@ const BROWSER_GLOBALS = {
 };
 
 export default [
-  { ignores: ['node_modules/**', 'data/**', '.vercel/**'] },
+  // public/vendor holds third-party builds copied in by scripts/vendor-*.js.
+  { ignores: ['node_modules/**', 'data/**', '.vercel/**', 'public/vendor/**'] },
 
   js.configs.recommended,
 
