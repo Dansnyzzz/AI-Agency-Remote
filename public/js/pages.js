@@ -85,7 +85,7 @@ function armed(button, warning, run) {
  * @param openChat     open a conversation, which closes the shelf
  * @param onLeave      restore the conversation view
  */
-export function createPages({ openProject, openViewer, openChat, onLeave, onNewProject }) {
+export function createPages({ openProject, openViewer, openChat, onLeave, onNewProject, onRunStarted = () => {} }) {
   const page = $('page');
   const title = $('page-title');
   const lede = $('page-lede');
@@ -634,6 +634,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
     onLeave,
     openForm: (id) => wfForm.open(id),
     reload: () => load(),
+    onRunStarted,
   });
 
   /* ── the create-a-task form ───────────────────────────────────── */

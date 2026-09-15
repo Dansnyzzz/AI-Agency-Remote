@@ -1018,4 +1018,7 @@ export const vi = {
   'ws.reading': 'Đang đọc…',
   'ws.created': 'Đã tạo {path}.',
   'ws.root': 'thư mục làm việc',
+
+  /* ── cuộc trò chuyện đang có việc chạy ── */
+  'chat.running': 'Đang chạy',
 };

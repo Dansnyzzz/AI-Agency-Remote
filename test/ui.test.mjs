@@ -3290,6 +3290,47 @@ section('a run of browser steps reads as one piece of work');
  * can prove is that KaTeX loads from public/vendor, is allowed by the CSP, finds
  * its fonts, and replaces the placeholders written before it arrived.
  */
+/**
+ * A run in the background appears in the sidebar without anyone reloading.
+ *
+ * A workflow was halfway through its steps while the list said "no
+ * conversations yet": the conversation existed, the page never asked again.
+ * Here the run is started behind the page's back, straight in the store, the
+ * way a cron-driven run would be.
+ */
+section('work running in the background shows up in the conversation list');
+{
+  const store = await initStore();
+  // Whoever the page is signed in as by now — an earlier section switches
+  // accounts, and a run for anyone else would rightly never appear here.
+  const signedIn = await page.evaluate(async () => (await (await fetch('/api/session')).json()).user);
+  const user = await store.getUserByEmail(signedIn.email);
+  await store.createWorkflow(user.id, { id: 'wf-live', title: 'Chuỗi việc nền', steps: [{ instruction: 'a' }] });
+  await store.createChat(user.id, { id: 'c-live', title: 'Chuỗi việc nền', model: 'm' });
+  await store.createWorkflowRun(user.id, { id: 'r-live', workflowId: 'wf-live', chatId: 'c-live', status: 'running', steps: [] });
+
+  // Coming back to the tab is one of the moments the list refreshes.
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.waitForTimeout(2000);
+  const shown = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('#chat-list .chat-row')].find((r) => r.textContent.includes('Chuỗi việc nền'));
+    return { listed: !!row, live: !!row?.querySelector('.chat-row__live'), label: row?.querySelector('.chat-row__live')?.getAttribute('aria-label') };
+  });
+  check('the conversation a run just opened is listed', shown.listed);
+  check('marked as running', shown.live, shown.label);
+  check('with a name a screen reader can say', !!shown.label && !/^chat\./.test(shown.label), shown.label);
+
+  // While something runs, the list checks again within seconds on its own.
+  await store.saveWorkflowRun('r-live', { status: 'done', finished: true });
+  await store.appendMessage(user.id, 'c-live', { id: 'm-live', role: 'user', text: 'a' });
+  await page.waitForTimeout(7000);
+  const after = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('#chat-list .chat-row')].find((r) => r.textContent.includes('Chuỗi việc nền'));
+    return { listed: !!row, live: !!row?.querySelector('.chat-row__live') };
+  });
+  check('when the run finishes the mark goes, by itself', after.listed && !after.live, JSON.stringify(after));
+}
+
 section('mathematics in a reply is drawn as mathematics');
 {
   const failed = [];
