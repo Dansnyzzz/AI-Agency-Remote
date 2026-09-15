@@ -1,11 +1,13 @@
 /** Thin wrapper over the JSON API, plus the SSE reader for the agent stream. */
 import { narrate } from './mirror.js';
-import { t } from './i18n.js';
+import { t, currentLanguage } from './i18n.js';
 
 async function request(method, path, body) {
   const res = await fetch(path, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    // The language rides on every call, so a message the server writes — an
+    // error, a status line — comes back in it. See server/i18n.
+    headers: { 'X-Language': currentLanguage(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
 
@@ -255,7 +257,7 @@ export async function runAgent({ chatId, model, decision, decisionFor, runId, si
 
   const res = await fetch(`/api/chats/${chatId}/run`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Language': currentLanguage() },
     // `runId` stays the same across every reconnect of one run, so resuming a
     // turn the host cut short re-enters its own lock instead of being refused by
     // it. A different tab generates a different id and is still kept out.

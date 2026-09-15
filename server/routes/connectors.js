@@ -1,5 +1,6 @@
 import { connectedServices, connect, disconnect } from '../connectors.js';
 import { limit as rateLimit } from '../ratelimit.js';
+import { languageOf, translateMessage } from '../i18n/index.js';
 
 /**
  * Connecting a third-party account — GitHub, Notion, Slack and the rest.
@@ -16,7 +17,13 @@ export function mountConnectorRoutes(api, { wrap }) {
     api.get(
       '/connectors',
       wrap(async (req, res) => {
-        res.json({ connectors: await connectedServices(req.user.id) });
+        const language = languageOf(req);
+        const connectors = (await connectedServices(req.user.id)).map((c) => ({
+          ...c,
+          help: translateMessage(c.help, language),
+          placeholder: translateMessage(c.placeholder, language),
+        }));
+        res.json({ connectors });
       }),
     );
 
