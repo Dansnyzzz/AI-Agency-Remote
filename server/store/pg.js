@@ -767,15 +767,30 @@ export function createPgStore(connectionString) {
          * result, which is the same filter for one scan instead of two. Both
          * are supported by messages_chat_seq_idx either way.
          */
-        `SELECT c.id, c.title, c.model, c.pinned, c.created_at, c.updated_at, m.message_count
+        /*
+         * `running` — something is working in this conversation right now: a
+         * turn holding the chat's run lease, a workflow run, or a scheduled
+         * task. The sidebar marks it and keeps refreshing while any is. A
+         * conversation that work has just opened is listed before its first
+         * message lands, so it appears the moment the run starts.
+         */
+        `WITH live AS (
+                SELECT chat_id FROM workflow_runs WHERE user_id = $1 AND status = 'running' AND chat_id IS NOT NULL
+                UNION
+                SELECT last_chat FROM scheduled_tasks WHERE user_id = $1 AND run_state = 'running' AND last_chat IS NOT NULL
+         )
+         SELECT c.id, c.title, c.model, c.pinned, c.created_at, c.updated_at, m.message_count,
+                (l.chat_id IS NOT NULL
+                  OR (c.run_lock_at IS NOT NULL AND c.run_lock_at > NOW() - make_interval(secs => $2))) AS running
            FROM chats c
            JOIN LATERAL (
                 SELECT COUNT(*)::int AS message_count FROM messages m WHERE m.chat_id = c.id
-           ) m ON m.message_count > 0
-          WHERE c.user_id = $1
+           ) m ON TRUE
+           LEFT JOIN live l ON l.chat_id = c.id
+          WHERE c.user_id = $1 AND (m.message_count > 0 OR l.chat_id IS NOT NULL)
           ORDER BY c.pinned DESC, c.updated_at DESC
           LIMIT 200`,
-        [userId],
+        [userId, RUN_LEASE_STALE_MS / 1000],
       );
     },
     async createChat(userId, chat) {
@@ -2226,6 +2241,15 @@ export function createPgStore(connectionString) {
       return rows;
     },
     /** Record the outcome and set the real next run, or retire a one-shot. */
+    /**
+     * The conversation a task run is writing into, recorded as it starts rather
+     * than only when it ends — so the sidebar can show that run while it runs,
+     * and "open the result" reaches it before it has finished.
+     */
+    async markTaskChat(id, chatId) {
+      await q('UPDATE scheduled_tasks SET last_chat = $2 WHERE id = $1', [id, chatId]);
+    },
+
     async finishTask(id, { status, chatId, nextRunAt }) {
       // The lease is given up here and nowhere else. A task left marked
       // `running` is precisely the signal `reapStalledTasks` reads, so clearing

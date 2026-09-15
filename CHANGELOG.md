@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-16 — background runs appear in the conversation list at once
+
+Branch `feat/live-run-conversations`.
+
+### Fixed
+
+- **A workflow run halfway through its steps was missing from the sidebar**, which said "no
+  conversations yet". The conversation existed from the start; the list only loaded on page load and
+  after sending a message.
+
+### Changed
+
+- The chat list returns `running` for a conversation a workflow run, a scheduled task or a turn is
+  working in, and lists such a conversation before its first message lands. Scheduled tasks record
+  their conversation when they start (`markTaskChat`), not only when they finish.
+- The sidebar marks running conversations with a pulsing dot (still under reduced motion, named for
+  screen readers) and refreshes itself: every 5 seconds while anything runs, every 30 otherwise, never
+  in a hidden tab, and at once on return. An unchanged list does not re-render, and no refresh happens
+  while a conversation is being renamed or its menu is open. "Run now" on a workflow shows the
+  conversation within a moment rather than when the request returns.
+
 ## 2026-09-15 — a NUL character no longer fails a step
 
 Branch `fix/nul-in-stored-text`.

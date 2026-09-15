@@ -232,6 +232,8 @@ async function runTask(task) {
       role: 'user',
       text: task.prompt,
     });
+    // Known from the start, so the conversation shows as running in the sidebar.
+    await store.markTaskChat(task.id, chatId);
 
     // No `emit` consumer here — nobody is watching. The transcript in the
     // database is the output, which is the point: it is waiting when you look.

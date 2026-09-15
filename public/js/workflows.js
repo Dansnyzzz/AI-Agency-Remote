@@ -59,7 +59,7 @@ const clip = (text, max = 140) => {
  * @param openForm   the create/edit sheet, owned by the page shell
  * @param reload     re-run the shelf's own load
  */
-export function workflowsView({ blank, body, toast, openChat, onLeave, openForm, reload }) {
+export function workflowsView({ blank, body, toast, openChat, onLeave, openForm, reload, onRunStarted = () => {} }) {
   /**
    * A run continues after the request that started it returns.
    *
@@ -190,7 +190,10 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
         poll = setTimeout(() => {
           poll = null;
           // Only if the shelf is still the thing on screen.
-          if (body.isConnected && !body.closest('#page')?.hidden) reload();
+          if (body.isConnected && !body.closest('#page')?.hidden) {
+            reload();
+            onRunStarted();
+          }
         }, 5000);
       }
 
@@ -209,6 +212,9 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
           const was = button.textContent;
           button.disabled = true;
           button.textContent = t('wf.running');
+          // The request is held open for minutes, but the conversation exists
+          // within a moment of pressing — show it in the list now, not at the end.
+          const early = setTimeout(onRunStarted, 1500);
           try {
             const { run } = await api.runWorkflow(button.dataset.run);
             toast(
@@ -221,9 +227,11 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
           } catch (err) {
             toast(err.message);
           } finally {
+            clearTimeout(early);
             button.disabled = false;
             button.textContent = was;
             reload();
+            onRunStarted();
           }
         });
       }

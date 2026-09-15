@@ -1028,4 +1028,7 @@ export const en = {
   'ws.reading': 'Reading…',
   'ws.created': 'Created {path}.',
   'ws.root': 'workspace',
+
+  /* ── a conversation work is running in ── */
+  'chat.running': 'Running now',
 };

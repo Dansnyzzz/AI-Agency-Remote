@@ -575,9 +575,50 @@ async function start() {
 
 /* ── chats ─────────────────────────────────────────────────────── */
 
-async function refreshChats() {
+/**
+ * The conversation list, kept current while work runs in the background.
+ *
+ * A workflow or a scheduled task writes into a conversation nobody opened, from
+ * a request this tab did not make, so nothing here would otherwise hear of it:
+ * a run was halfway through its second step while the sidebar still said
+ * "no conversations yet". So the list refreshes itself — every few seconds
+ * while anything in it is running, every half-minute otherwise, never while
+ * the tab is hidden, and at once when it comes back.
+ *
+ * A refresh that changes nothing does not touch the DOM, and none happens while
+ * a conversation is being renamed or its menu is open: rebuilding the list
+ * under somebody's cursor would throw away what they were typing.
+ */
+const CHAT_POLL_RUNNING_MS = 5_000;
+const CHAT_POLL_IDLE_MS = 30_000;
+let chatPoll = null;
+let chatSignature = '';
+
+function scheduleChatRefresh() {
+  clearTimeout(chatPoll);
+  const running = (state.chats || []).some((chat) => chat.running);
+  chatPoll = setTimeout(() => {
+    if (document.hidden) return scheduleChatRefresh();
+    refreshChats({ background: true }).catch(() => scheduleChatRefresh());
+  }, running ? CHAT_POLL_RUNNING_MS : CHAT_POLL_IDLE_MS);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.boot) refreshChats({ background: true }).catch(() => {});
+});
+
+const busyWithList = () => !!document.querySelector('#chat-list .chat-item--editing') || !$('row-menu').hidden;
+
+async function refreshChats({ background = false } = {}) {
+  if (background && busyWithList()) return scheduleChatRefresh();
   const { chats } = await api.chats();
   state.chats = chats;
+  scheduleChatRefresh();
+
+  const signature = JSON.stringify([state.chatId, currentLanguage(), chats.map((c) => [c.id, c.title, c.pinned, c.running])]);
+  if (background && signature === chatSignature) return;
+  chatSignature = signature;
+
   const list = $('chat-list');
   list.innerHTML = '';
 
@@ -610,6 +651,17 @@ async function refreshChats() {
       pin.textContent = '📌';
       pin.title = t('chat.pinned');
       row.append(pin);
+    }
+
+    // Work is happening in here right now — a workflow, a scheduled task, a turn.
+    if (chat.running) {
+      row.classList.add('is-running');
+      const live = document.createElement('span');
+      live.className = 'chat-row__live';
+      live.setAttribute('role', 'img');
+      live.setAttribute('aria-label', t('chat.running'));
+      live.title = t('chat.running');
+      row.append(live);
     }
 
     const menu = document.createElement('button');
@@ -1226,6 +1278,8 @@ $('files-chip').addEventListener('click', () => {
  * the place of the conversation until you leave them.
  */
 const pages = createPages({
+  // A run started from a shelf opens its conversation at once; say so in the list.
+  onRunStarted: () => refreshChats({ background: true }).catch(() => {}),
   openProject: (id) => projectPage.open(id),
   openViewer: (id) => viewer.open({ id }),
   openChat: (id) => openChat(id),

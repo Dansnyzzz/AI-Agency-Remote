@@ -1156,6 +1156,26 @@ textarea {
   font-size: 11px;
 }
 
+/* Something is running in this conversation — a workflow, a task, a turn. */
+.chat-row__live {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: 0 4px 0 2px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent-glow);
+  animation: chat-live 1.6s ease-out infinite;
+}
+@keyframes chat-live {
+  0% { box-shadow: 0 0 0 0 var(--accent-glow); opacity: 1; }
+  70% { box-shadow: 0 0 0 7px transparent; opacity: 0.75; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-row__live { animation: none; }
+}
+
 .chats__label {
   padding: 12px 11px 5px;
   color: var(--text-faint);
