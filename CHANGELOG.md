@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 — a NUL character no longer fails a step
+
+Branch `fix/nul-in-stored-text`.
+
+### Fixed
+
+- **"unsupported Unicode escape sequence"** failed a workflow step whose web search read a page
+  containing U+0000: Postgres refuses it in jsonb (as the `\u0000` escape) and in text columns. The store
+  now removes it from every string before JSON encoding and from every text parameter, at the one
+  query function all writes pass through. Text containing a literal backslash-u-0000 is untouched.
+
 ## 2026-09-15 (overnight) — galaxy look, the web logo, and no personal addresses
 
 Branch `feat/email-galaxy-private`.

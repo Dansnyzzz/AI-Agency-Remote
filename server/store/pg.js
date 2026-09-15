@@ -224,6 +224,27 @@ const KEEP_VERSIONS = 20;
  */
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
+/**
+ * U+0000, which Postgres will not store.
+ *
+ * A raw NUL byte in a text parameter fails with "invalid byte sequence", and a
+ * NUL inside JSON — which `JSON.stringify` writes as the escape `\u0000` — fails
+ * jsonb with "unsupported Unicode escape sequence". It arrives from outside: a web
+ * page, a PDF, a command's output. It carries no meaning in anything stored here,
+ * and a whole workflow step was lost to one, so it is removed on the way in.
+ */
+// The character itself is the point of this pattern.
+// eslint-disable-next-line no-control-regex
+const NUL = /\u0000/g;
+const withoutNul = (value) => (typeof value === 'string' && value.includes('\u0000') ? value.replace(NUL, '') : value);
+
+/**
+ * JSON for a jsonb column. NUL is removed from every string before encoding,
+ * not from the encoded text afterwards: text somebody wrote containing a literal
+ * backslash-u-0000 is encoded with an escaped backslash and must survive intact.
+ */
+const toJson = (value) => JSON.stringify(value, (key, item) => withoutNul(item));
+
 export function createPgStore(connectionString) {
   // Accepts a driver object instead of a URL so the tenancy-isolation tests can
   // run the real SQL against an in-process Postgres.
@@ -314,7 +335,7 @@ export function createPgStore(connectionString) {
           `INSERT INTO settings (key, value) VALUES ('schema_version', $1::jsonb)
            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
             WHERE (settings.value #>> '{}')::int < (EXCLUDED.value #>> '{}')::int`,
-          [JSON.stringify(SCHEMA_VERSION)],
+          [toJson(SCHEMA_VERSION)],
         );
       })();
     }
@@ -333,7 +354,8 @@ export function createPgStore(connectionString) {
 
   const q = async (text, params = []) => {
     await ready();
-    return sql.query(text, params);
+    // Every query passes here, so no text column can be handed a NUL byte.
+    return sql.query(text, params.map(withoutNul));
   };
 
   return {
@@ -469,7 +491,7 @@ export function createPgStore(connectionString) {
     async enableTotp(id, codeHashes) {
       await q(
         'UPDATE users SET totp_enabled_at = NOW(), recovery_codes = $2 WHERE id = $1',
-        [id, JSON.stringify(codeHashes)],
+        [id, toJson(codeHashes)],
       );
     },
     async disableTotp(id) {
@@ -635,7 +657,7 @@ export function createPgStore(connectionString) {
       await q(
         `INSERT INTO user_settings (user_id, key, value) VALUES ($1, $2, $3)
          ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value`,
-        [userId, key, JSON.stringify(value)],
+        [userId, key, toJson(value)],
       );
       return value;
     },
@@ -658,7 +680,7 @@ export function createPgStore(connectionString) {
          ON CONFLICT (user_id, key)
          DO UPDATE SET value = COALESCE(user_settings.value, '{}'::jsonb) || EXCLUDED.value
       RETURNING value`,
-        [userId, key, JSON.stringify(patch)],
+        [userId, key, toJson(patch)],
       );
       return rows[0]?.value ?? patch;
     },
@@ -685,7 +707,7 @@ export function createPgStore(connectionString) {
                 COALESCE(user_settings.value -> $3::text, '{}'::jsonb) || $4::jsonb,
                 true)
       RETURNING value`,
-        [userId, key, String(entry), JSON.stringify(patch ?? {})],
+        [userId, key, String(entry), toJson(patch ?? {})],
       );
       return rows[0]?.value ?? null;
     },
@@ -715,7 +737,7 @@ export function createPgStore(connectionString) {
       await q(
         `INSERT INTO settings (key, value) VALUES ($1, $2)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-        [key, JSON.stringify(value)],
+        [key, toJson(value)],
       );
       return value;
     },
@@ -1060,7 +1082,7 @@ export function createPgStore(connectionString) {
          INSERT INTO messages (id, chat_id, seq, role, content)
          SELECT $1, $2, bump.seq, $3, $4 FROM bump
       RETURNING id, seq`,
-        [id, chatId, role, JSON.stringify(rest), userId],
+        [id, chatId, role, toJson(rest), userId],
       );
       if (!rows.length) throw new Error('Chat not found.');
       await this.touchChat(userId, chatId);
@@ -1116,7 +1138,7 @@ export function createPgStore(connectionString) {
                   true)
            FROM chats c
           WHERE m.id = $3 AND m.chat_id = $2 AND c.id = m.chat_id AND c.user_id = $1`,
-        [userId, chatId, messageId, JSON.stringify(callIds.map(String))],
+        [userId, chatId, messageId, toJson(callIds.map(String))],
       );
     },
 
@@ -1155,7 +1177,7 @@ export function createPgStore(connectionString) {
         `UPDATE messages SET content = $1
           WHERE id = $2 AND chat_id = $3
             AND EXISTS (SELECT 1 FROM chats c WHERE c.id = $3 AND c.user_id = $4)`,
-        [JSON.stringify(content), messageId, chatId, userId],
+        [toJson(content), messageId, chatId, userId],
       );
       await q(
         `DELETE FROM messages
@@ -1426,7 +1448,7 @@ export function createPgStore(connectionString) {
           userId,
           job.chatId ?? null,
           job.tool,
-          JSON.stringify(job.input ?? {}),
+          toJson(job.input ?? {}),
           job.deviceId ?? null,
         ],
       );
@@ -1490,7 +1512,7 @@ export function createPgStore(connectionString) {
         `UPDATE tool_jobs SET status = $3, result = $4, done_at = NOW()
           WHERE id = $1 AND user_id = $2
             AND ($5::boolean IS NOT TRUE OR status IN ('pending', 'running'))`,
-        [id, userId, status, JSON.stringify(result ?? null), onlyIfOpen],
+        [id, userId, status, toJson(result ?? null), onlyIfOpen],
       );
     },
     /**
@@ -1615,7 +1637,7 @@ export function createPgStore(connectionString) {
         `INSERT INTO workers (id, user_id, last_seen, info) VALUES ($1, $2, NOW(), $3)
          ON CONFLICT (id) DO UPDATE SET last_seen = NOW(), info = EXCLUDED.info
          WHERE workers.user_id = $2`,
-        [workerId, userId, JSON.stringify(info ?? {})],
+        [workerId, userId, toJson(info ?? {})],
       );
     },
     async activeWorker(userId, withinMs = 45_000) {
@@ -2273,7 +2295,7 @@ export function createPgStore(connectionString) {
           wf.id,
           userId,
           wf.title,
-          JSON.stringify(wf.steps),
+          toJson(wf.steps),
           wf.model ?? null,
           wf.cron ?? null,
           wf.tz ?? null,
@@ -2295,7 +2317,7 @@ export function createPgStore(connectionString) {
       };
 
       if (patch.title !== undefined) put('title', patch.title);
-      if (patch.steps !== undefined) put('steps', JSON.stringify(patch.steps));
+      if (patch.steps !== undefined) put('steps', toJson(patch.steps));
       if (patch.model !== undefined) put('model', patch.model);
       if (patch.cron !== undefined) put('cron', patch.cron);
       if (patch.tz !== undefined) put('tz', patch.tz);
@@ -2350,7 +2372,7 @@ export function createPgStore(connectionString) {
           userId,
           run.chatId ?? null,
           run.status ?? 'running',
-          JSON.stringify(run.steps),
+          toJson(run.steps),
           run.cursor ?? 0,
           run.leaseUntil ?? null,
         ],
@@ -2423,7 +2445,7 @@ export function createPgStore(connectionString) {
         [
           id,
           status ?? null,
-          steps ? JSON.stringify(steps) : null,
+          steps ? toJson(steps) : null,
           cursor ?? null,
           chatId ?? null,
           leaseUntil ?? null,
@@ -2602,8 +2624,8 @@ export function createPgStore(connectionString) {
           run.chatId ?? null,
           run.question,
           run.status,
-          JSON.stringify(run.transcript ?? []),
-          JSON.stringify(run.sources ?? []),
+          toJson(run.transcript ?? []),
+          toJson(run.sources ?? []),
           run.report ?? null,
           run.tokensIn ?? 0,
           run.tokensOut ?? 0,
@@ -2644,7 +2666,7 @@ export function createPgStore(connectionString) {
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name, config = EXCLUDED.config, enabled = EXCLUDED.enabled
          WHERE mcp_servers.user_id = $2`,
-        [server.id, userId, server.name, JSON.stringify(server.config ?? {}), server.enabled !== false],
+        [server.id, userId, server.name, toJson(server.config ?? {}), server.enabled !== false],
       );
       const saved = await this.getMcpServer(userId, server.id);
       if (!saved) throw new Error('That server id belongs to another account.');
@@ -2695,7 +2717,7 @@ export function createPgStore(connectionString) {
       await q(
         `INSERT INTO screens (user_id, frame, meta, updated_at) VALUES ($1, $2, $3, NOW())
          ON CONFLICT (user_id) DO UPDATE SET frame = EXCLUDED.frame, meta = EXCLUDED.meta, updated_at = NOW()`,
-        [userId, frame, JSON.stringify(meta ?? {})],
+        [userId, frame, toJson(meta ?? {})],
       );
     },
     async getScreen(userId) {
@@ -2799,7 +2821,7 @@ export function createPgStore(connectionString) {
       const rows = await q(
         `INSERT INTO devices (id, user_id, token_hash, name, info)
          VALUES ($1, $2, $3, $4, $5) RETURNING id, name, created_at`,
-        [id, userId, tokenHash, name, JSON.stringify(info ?? {})],
+        [id, userId, tokenHash, name, toJson(info ?? {})],
       );
       return rows[0];
     },
@@ -2841,7 +2863,7 @@ export function createPgStore(connectionString) {
       if (!deviceId) return;
       await q(
         'UPDATE devices SET last_seen = NOW(), info = $3 WHERE id = $1 AND user_id = $2',
-        [deviceId, userId, JSON.stringify(info ?? {})],
+        [deviceId, userId, toJson(info ?? {})],
       );
     },
     /** Revoking is scoped by user, so nobody can unplug somebody else's machine. */
@@ -2860,7 +2882,7 @@ export function createPgStore(connectionString) {
       await q(
         `INSERT INTO pairings (id, code_hash, device_name, info, expires_at)
          VALUES ($1, $2, $3, $4, $5)`,
-        [id, codeHash, deviceName, JSON.stringify(info ?? {}), expiresAt],
+        [id, codeHash, deviceName, toJson(info ?? {}), expiresAt],
       );
       return { id };
     },
