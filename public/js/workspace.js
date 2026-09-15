@@ -79,7 +79,7 @@ export function createWorkspace() {
 
   function renderCrumbs(listing) {
     const parts = at === '.' ? [] : at.split('/').filter(Boolean);
-    const trail = [{ label: 'workspace', path: '.' }];
+    const trail = [{ label: t('ws.root'), path: '.' }];
     parts.forEach((part, i) => trail.push({ label: part, path: parts.slice(0, i + 1).join('/') }));
 
     crumbs.hidden = false;

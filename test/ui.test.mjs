@@ -1844,7 +1844,18 @@ section('the interface speaks Vietnamese');
     languagesTab: document.querySelector('.tab[data-tab="languages"]').textContent.trim(),
     placeholder: document.getElementById('input').placeholder,
     lang: document.documentElement.lang,
+    // The screens the user reported in English: the model picker and the rest
+    // of Settings. Read from markup that is not on screen, which is fine —
+    // applyI18n fills every node whether its dialog is open or not.
+    pickerTitle: document.querySelector('#models .sheet__head h2').textContent.trim(),
+    pickerSearch: document.getElementById('model-search').placeholder,
+    freeFilter: document.querySelector('#tier-filter [data-tier="free"]').textContent.trim(),
+    behaviourHint: document.querySelector('#behaviour-elsewhere strong').textContent.trim(),
   }));
+  check('the model picker title is Vietnamese', after.pickerTitle === 'Chọn model', after.pickerTitle);
+  check('and its search box', /^Tìm/.test(after.pickerSearch), after.pickerSearch.slice(0, 30));
+  check('and its price filter', after.freeFilter === 'Miễn phí', after.freeFilter);
+  check('and a hint with markup inside keeps its markup', after.behaviourHint === 'Chế độ và mức suy luận', after.behaviourHint);
   check('the sidebar changes language', after.newChat !== before.newChat, `${before.newChat} → ${after.newChat}`);
   check('and it is actually Vietnamese', /Cuộc trò chuyện/.test(after.newChat), after.newChat);
   check('settings label too', /Cài đặt/.test(after.settings), after.settings);

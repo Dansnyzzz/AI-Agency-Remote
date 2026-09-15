@@ -1027,4 +1027,5 @@ export const en = {
   'ws.unsaved': 'unsaved',
   'ws.reading': 'Reading…',
   'ws.created': 'Created {path}.',
+  'ws.root': 'workspace',
 };

@@ -30,6 +30,9 @@ import { createTwoFactor } from './two-factor.js';
 // at module load, so the first paint is already right rather than a page of
 // English that corrects itself a moment later.
 applyI18n();
+// The header title belongs to the script (it becomes the conversation's name),
+// so it is not a data-i18n node — but before any chat opens it says "New chat".
+document.getElementById('chat-title').textContent = t('nav.newChat');
 
 /**
  * Opens a document, a spreadsheet, a deck or a running page without leaving the
