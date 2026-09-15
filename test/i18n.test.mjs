@@ -58,13 +58,18 @@ section('every string the markup asks for exists');
 {
   const html = fs.readFileSync(path.join(import.meta.dirname, '..', 'public', 'index.html'), 'utf8');
   const asked = [
-    ...html.matchAll(/data-i18n(?:-html|-placeholder|-title)?="([^"]+)"/g),
+    ...html.matchAll(/data-i18n(?:-html|-placeholder|-title|-aria-label|-alt)?="([^"]+)"/g),
   ].map((m) => m[1]);
 
   check('the page asks for some strings at all', asked.length > 0, `${asked.length} attributes`);
 
   const unknown = [...new Set(asked)].filter((key) => !(key in vi) || !(key in en));
   check('and every one of them is defined', unknown.length === 0, unknown.join(', '));
+
+  // The failure the key-set checks cannot see: a label that never got a key.
+  const { untranslatedMarkup } = await import('./lib/untranslated.mjs');
+  const bare = untranslatedMarkup(html);
+  check('no visible text in the page is left without a translation', bare.length === 0, bare.slice(0, 20).join(' | '));
 }
 
 section('the strings the script builds are defined too');
@@ -74,7 +79,11 @@ section('the strings the script builds are defined too');
   // Every module that imports `t`, not just the two big ones. `render.js` was
   // missing here, so a key used only by the transcript renderer could go
   // undefined and this suite would still pass.
-  const roots = ['app.js', 'onboarding.js', 'render.js'];
+  // Every module, not a hand-kept list: a key used only by the model browser
+  // or the viewer could go undefined while a list of three still passed.
+  const roots = fs
+    .readdirSync(path.join(import.meta.dirname, '..', 'public', 'js'))
+    .filter((name) => name.endsWith('.js'));
   const asked = new Set();
   for (const name of roots) {
     const source = fs.readFileSync(path.join(import.meta.dirname, '..', 'public', 'js', name), 'utf8');

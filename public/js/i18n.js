@@ -128,6 +128,10 @@ export function applyI18n(root = document) {
   for (const node of root.querySelectorAll('[data-i18n-aria-label]')) {
     node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
   }
+  // An image that means something is described in the reader's language too.
+  for (const node of /** @type {NodeListOf<HTMLImageElement>} */ (root.querySelectorAll('[data-i18n-alt]'))) {
+    node.alt = t(node.dataset.i18nAlt);
+  }
   document.documentElement.lang = current;
 }
 
