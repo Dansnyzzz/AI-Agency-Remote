@@ -1,4 +1,4 @@
-# AI Remote — add this computer.
+# Synapse — add this computer.
 #
 # Run the line the app gave you. The token arrives in $env:AIR_TOKEN, never in
 # this file: a script assembled by joining a parameter into its own text and
@@ -55,7 +55,7 @@ function Run($what, $exe, [string[]]$argv) {
 }
 
 Write-Host ""
-Write-Host "  AI Remote" -ForegroundColor Green
+Write-Host "  Synapse" -ForegroundColor Green
 Write-Host ""
 
 # Everything variable arrives in the environment, and this file is byte-for-byte

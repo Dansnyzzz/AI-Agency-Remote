@@ -1,4 +1,4 @@
-﻿# AI Remote - Windows desktop host.
+﻿# Synapse - Windows desktop host.
 #
 # A long-lived PowerShell process that the worker talks to over stdin/stdout in
 # JSON lines. It exists because the alternative - spawning powershell.exe per

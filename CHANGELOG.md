@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-15 (evening) — the app is Synapse; mail written to reach the inbox
+
+Branch `feat/synapse-brand-and-inbox`.
+
+### Changed
+
+- **Renamed from AI Remote to Synapse** everywhere a person reads the name: the page, sign-in,
+  onboarding, emails, server messages, the worker and launcher banners, the authenticator label for
+  newly enrolled two-factor, and the author metadata of generated Word, Excel and PowerPoint files.
+  `test/i18n.test.mjs` fails if the old name comes back.
+- **Email From line is the deployment's name only.** "Lan Nguyen via …" <mailbox@gmail.com> looked
+  like impersonation to spam filters. The person is now in Reply-To and a footer line.
+- **Every text email has an HTML part** beside it, plain and escaped.
+
+### Not renamed, on purpose
+
+- The worker's autostart task (`AI Remote worker`) and the folder downloaded files live in
+  (`AI Remote\files`): existing installs depend on those names.
+- Browser storage keys, the `ai-remote` package name, install folders and the Vercel URL.
+- Authenticator apps keep the label an account was enrolled with until two-factor is set up again.
+
 ## 2026-09-15 (later) — email for each person, and formulas that render
 
 Branch `feat/email-per-user-and-math-render`.
