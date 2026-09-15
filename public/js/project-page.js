@@ -209,7 +209,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
 
     crumb.textContent = project.name;
     nameEl.textContent = project.name;
-    document.title = `${project.name} · AI Remote`;
+    document.title = `${project.name} · Synapse`;
 
     pinButton.classList.toggle('is-on', !!project.pinned);
     pinButton.setAttribute('aria-pressed', String(!!project.pinned));
@@ -602,7 +602,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
 
     hide() {
       page.hidden = true;
-      document.title = 'AI Remote';
+      document.title = 'Synapse';
     },
 
     /** The id on screen, or null. Used to decide whether a refresh applies. */

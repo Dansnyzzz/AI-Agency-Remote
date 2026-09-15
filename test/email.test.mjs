@@ -5,8 +5,10 @@
  *   - "email it to me" goes to the address they registered with, without the
  *     model having to know it;
  *   - any address, or several, they name instead;
- *   - their name on the From line and their address as Reply-To, so an answer
- *     comes back to them rather than to a shared inbox;
+ *   - the deployment's own name on the From line — a person's name there is
+ *     what impersonation looks like, and it sent real mail to spam — with their
+ *     address as Reply-To and a footer saying who sent it;
+ *   - an HTML part beside the text, as an ordinary mail client sends;
  *   - Gmail configured with two variables;
  *   - and never "sent" when it was not — the provider refusing used to be
  *     reported as success, because `sendEmail` swallows errors by design.
@@ -78,7 +80,10 @@ section('"email it to me" goes to the address the account registered');
   check('it was sent', r.ok, r.error);
   check('to the account address', sent[0]?.to?.join() === 'lan@example.com', JSON.stringify(sent[0]?.to));
   check('from the deployment mailbox', (sent[0]?.from || '').endsWith('<deployment.mailbox@gmail.com>'), sent[0]?.from);
-  check('with the person named on the From line', /^"Lan Nguyen via AI Remote"/.test(sent[0]?.from || ''), sent[0]?.from);
+  check("with the deployment's own name on the From line, not the person's", sent[0]?.from === '"Synapse" <deployment.mailbox@gmail.com>', sent[0]?.from);
+  check('a footer in the text says who sent it and how to reach them', /Sent by Lan Nguyen \(lan@example\.com\) using Synapse/.test(sent[0]?.text || ''), sent[0]?.text);
+  check('there is an HTML part too', /^<!doctype html>/.test(sent[0]?.html || ''), (sent[0]?.html || '').slice(0, 40));
+  check('carrying the body and the same footer', /Nội dung/.test(sent[0]?.html || '') && /Sent by Lan Nguyen/.test(sent[0]?.html || ''));
   check('and replies going back to them', sent[0]?.replyTo === 'lan@example.com', sent[0]?.replyTo);
   check('the result says where it went and where replies go', /lan@example\.com/.test(r.result) && /replies go to lan@example\.com/.test(r.result), r.result);
 }
@@ -110,11 +115,17 @@ section('any address the user names, or several');
 
 section('a name cannot write its own headers');
 {
-  const from = email.__testing.fromHeader('Eve"\r\nBcc: victim@example.com <x>');
-  check('quotes, line breaks and angle brackets are stripped', !/[\r\n]/.test(from) && (from.match(/"/g) || []).length === 2 && (from.match(/</g) || []).length === 1, from);
+  process.env.EMAIL_FROM = 'Eve"\r\nBcc: victim@example.com <deployment.mailbox@gmail.com>';
+  const from = email.__testing.fromHeader();
+  check('quotes and line breaks in a configured name are stripped', !/[\r\n]/.test(from) && (from.match(/"/g) || []).length === 2, from);
   process.env.EMAIL_FROM = 'Công ty ABC <deployment.mailbox@gmail.com>';
-  check('EMAIL_FROM names the sender', email.__testing.fromHeader('Lan') === '"Lan via Công ty ABC" <deployment.mailbox@gmail.com>', email.__testing.fromHeader('Lan'));
+  check('EMAIL_FROM names the sender', email.__testing.fromHeader() === '"Công ty ABC" <deployment.mailbox@gmail.com>', email.__testing.fromHeader());
   delete process.env.EMAIL_FROM;
+
+  const html = email.htmlFromText('Hi <b>there</b>\n\nSee https://example.com/a?b=1\nthanks', 'Sent by X');
+  check('a text body is escaped in its HTML part', html.includes('Hi &lt;b&gt;there&lt;/b&gt;') && !html.includes('<b>'), html);
+  check('with paragraphs and line breaks kept', (html.match(/<p /g) || []).length === 3 && html.includes('<br>'));
+  check('and a bare link made a link', html.includes('<a href="https://example.com/a?b=1">'));
 }
 
 section('a refusal from the provider is reported as a refusal');

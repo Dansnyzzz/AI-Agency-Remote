@@ -76,7 +76,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 }
 
 createApp().listen(port, '0.0.0.0', () => {
-  console.log('\n  AI Remote is running.\n');
+  console.log('\n  Synapse is running.\n');
   for (const url of [`http://localhost:${port}`, ...lanAddresses(port)]) console.log(`    ${url}`);
 
   console.log(`\n  Storage: ${store.kind}`);

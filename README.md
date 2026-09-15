@@ -1,4 +1,4 @@
-# AI Remote
+# Synapse
 
 A self-hosted, multi-user, multi-provider agentic AI workspace you drive from any device — including
 your phone.
@@ -168,9 +168,17 @@ assistant's `send_email` tool. Pick one backend, or none:
 | **Console** | nothing | Mail is printed to the server log. Fine locally for a reset code — and `send_email` refuses, saying the email was **not** sent, rather than pretending. |
 
 **`send_email` writes for the person asking, from the deployment's mailbox.** Every account shares the
-one sending mailbox — a provider will not send as an address it has not verified — but each message
-carries that person's name on the From line ("Lan Nguyen via AI Remote") and their registered address
-as Reply-To, so an answer goes back to them. Asked to "email it to me", it sends to the address the
+one sending mailbox — a provider will not send as an address it has not verified. The From line carries
+only the deployment's own name ("Synapse"); the person's registered address is the Reply-To, and a line
+at the foot says who sent it, so an answer goes back to them. Putting the person's name on the From line
+was tried and sent mail to spam: a display name that belongs to someone other than the address is what
+impersonation looks like to a filter. Each message has an HTML part beside its text.
+
+**Landing in the inbox rather than spam** is mostly decided by the sending domain, not the code. A
+consumer Gmail address sending automated mail to people who have never written to it will sometimes be
+filtered, whatever the message says. Recipients can fix it for themselves (mark as not spam, add the
+address to contacts). The lasting fix is a domain of your own sent through Resend with SPF, DKIM and
+DMARC set up, and `EMAIL_FROM` on that domain. Asked to "email it to me", it sends to the address the
 account signed up with; otherwise to exactly the address, or up to ten addresses, the person gave. A
 refusal from the mail provider is reported as a refusal.
 
@@ -337,7 +345,7 @@ Three constraints on that endpoint, each closing a hole:
 - **It cannot be told to do anything.** One route, GET only, returning an identifier. There is no
   verb there to abuse.
 - **CORS names exactly one origin**: the deployment that worker answers to, matched in full rather
-  than by prefix. With `*`, every site you visit could quietly learn that you run AI Remote and what
+  than by prefix. With `*`, every site you visit could quietly learn that you run Synapse and what
   your machine is called.
 
 Order of precedence when choosing a machine:
@@ -1366,7 +1374,7 @@ and search the web; only your own machine can touch your files.
 ```bash
 git init
 git add .
-git commit -m "AI Remote"
+git commit -m "Synapse"
 git branch -M main
 git remote add origin https://github.com/<you>/ai-remote.git
 git push -u origin main
@@ -1400,7 +1408,7 @@ sets `DATABASE_URL` for you. The schema is created automatically on first reques
 | `ENCRYPTION_KEY` | **yes** | Encrypts stored provider keys. Changing it makes existing ones unreadable. |
 | `CRON_SECRET` | **yes** | Authenticates the cron endpoints — the scheduler and the model-library refresh. Any long random string. Without it both refuse every call, so scheduled tasks never run. |
 | `GMAIL_USER` + `GMAIL_APP_PASSWORD`, **or** `RESEND_API_KEY`, **or** `SMTP_*` | optional | Sends password-reset codes and the assistant's emails. Without one, reset links go to the server log and `send_email` says it cannot send. |
-| `EMAIL_FROM` | optional | The From name and address, e.g. `AI Remote <you@gmail.com>`. Defaults to the Gmail/SMTP login. |
+| `EMAIL_FROM` | optional | The From name and address, e.g. `Synapse <you@gmail.com>`. Defaults to the Gmail/SMTP login. |
 | `ALLOW_SIGNUP` | optional | Open by default. `false` closes registration; the first account is always allowed. |
 | `DESKTOP_ACCESS` | optional, worker | `true` lets the assistant drive real applications on that machine. Off by default; see the platform table under "Desktop control". |
 | `DEFAULT_MONTHLY_TOKEN_LIMIT` | optional | Monthly cap for accounts using a shared key. Ignored for accounts with their own. |
@@ -1607,7 +1615,7 @@ people want.
 
 > **A Windows VM costs money, per hour, whether or not anything is happening.** A small always-on
 > instance is roughly the price of a streaming subscription; the smallest ones will run the worker
-> and struggle with a browser. This is the one part of AI Remote with an unavoidable bill attached,
+> and struggle with a browser. This is the one part of Synapse with an unavoidable bill attached,
 > which is why it is opt-in and last in this document rather than assumed.
 
 ---
@@ -1861,7 +1869,7 @@ Being explicit, so you do not assume protection that is not there:
 
 ## Cost
 
-You pay your providers directly; AI Remote adds nothing. Verified per-million-token pricing is shown
+You pay your providers directly; Synapse adds nothing. Verified per-million-token pricing is shown
 for Claude models and for anything loaded from the OpenRouter catalogue. Where a price is not
 verified the app shows token counts rather than inventing a number — check your provider's pricing
 page.

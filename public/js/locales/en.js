@@ -7,7 +7,7 @@
  */
 export const en = {
   /* ── shared ────────────────────────────────────────────────────── */
-  'app.name': 'AI Remote',
+  'app.name': 'Synapse',
   'action.next': 'Continue',
   'action.back': 'Back',
   'action.skip': 'Skip',
@@ -460,11 +460,11 @@ export const en = {
   'model.switched': 'Now using {model}.',
 
   /* ── onboarding ────────────────────────────────────────────────── */
-  'onb.title': 'Getting started with AI Remote',
+  'onb.title': 'Getting started with Synapse',
   'onb.step': 'Step {n} of {total}',
   'onb.reopen': 'Show the getting-started guide again',
 
-  'onb.1.title': 'What AI Remote does for you',
+  'onb.1.title': 'What Synapse does for you',
   'onb.1.body': 'This is not a chatbot that only answers. It does real work on your computer.',
   'onb.1.a': 'Reads and edits files, runs commands, drives a browser — on your machine, while you watch.',
   'onb.1.b': 'Writes real quotations, reports, spreadsheets and decks you can download from the chat.',
@@ -699,7 +699,7 @@ export const en = {
   'devices.copied': 'Copied',
   'devices.copy': 'Copy',
   'devices.pressCtrlC': 'Press Ctrl+C',
-  'devices.noneYet': 'No computers paired yet. Run AI Remote on the machine you want to use and type its code above.',
+  'devices.noneYet': 'No computers paired yet. Run Synapse on the machine you want to use and type its code above.',
   'devices.desktopOn': 'desktop control on',
   'devices.wholeDisk': 'can reach the whole disk',
   'devices.confined': 'confined to the workspace',
@@ -846,10 +846,10 @@ export const en = {
   'viewer.moreActions': 'More actions',
   'pair.offer': 'This computer is waiting to be added. Enter this code from any device:',
   'pair.copyCode': 'Copy the code',
-  'pair.oneLine': 'One line to paste on the machine you want to use. It downloads AI Remote, connects it to this account, and sets it to start when you log in.',
+  'pair.oneLine': 'One line to paste on the machine you want to use. It downloads Synapse, connects it to this account, and sets it to start when you log in.',
   'pair.setUp': 'Set up a computer',
   'pair.orType': 'Or type a pairing code',
-  'pair.codeHint': 'If that computer is already running AI Remote, it shows an eight-character code. It does not have to be your own account, and this works from a phone.',
+  'pair.codeHint': 'If that computer is already running Synapse, it shows an eight-character code. It does not have to be your own account, and this works from a phone.',
   'pair.submit': 'Pair',
   'pair.yours': 'Your computers',
   'news.badge': 'New model',
@@ -932,7 +932,7 @@ export const en = {
   'tasks.schedule': 'Schedule',
   'connectors.lede': "Tokens are encrypted on the server and never sent back to the browser. Each is verified with the service before it is stored, so a bad paste fails here rather than mid-task. Revoke from the service's own settings whenever you like.",
   'connectors.noGoogle': 'Gmail, Drive and Calendar are not here: Google requires a full OAuth flow with a registered application, which a token box cannot do. Absent rather than half-working.',
-  'worker.lede': 'Run AI Remote on the machine you want the assistant to work on. It shows an eight-character code — enter it and that computer is yours from any device you sign in on, for good. Nothing on the internet connects inward: the computer polls outward.',
+  'worker.lede': 'Run Synapse on the machine you want the assistant to work on. It shows an eight-character code — enter it and that computer is yours from any device you sign in on, for good. Nothing on the internet connects inward: the computer polls outward.',
   'worker.byHand': 'Or do it by hand',
   'worker.enterCode': 'Enter a pairing code',
   'account.displayName': 'Display name',

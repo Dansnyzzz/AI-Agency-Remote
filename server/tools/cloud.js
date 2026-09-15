@@ -12,7 +12,7 @@ import { parseSchedule } from '../scheduler.js';
 import { normaliseSteps } from '../workflows.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
-import { sendEmail, emailBackend } from '../email.js';
+import { sendEmail, emailBackend, htmlFromText, senderName } from '../email.js';
 import { safeFetch } from '../util/safeFetch.js';
 import { searchDocs, listSources, forgetSource } from '../rag.js';
 import { createDocument, extensionOf } from '../office/index.js';
@@ -1003,17 +1003,24 @@ async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
   }
 
   /*
-   * Sent from the deployment's mailbox, but for this person: their name on the
-   * From line and their address as Reply-To, so an answer reaches them rather
-   * than a shared inbox nobody reads.
+   * Sent from the deployment's mailbox under the deployment's own name, for this
+   * person: their address as Reply-To, so an answer reaches them rather than a
+   * shared inbox, and a line at the foot saying who sent it. Not their name on
+   * the From line — see fromHeader for why that went to spam.
+   *
+   * A text body gets an HTML part beside it, and an HTML body keeps its text
+   * part, because a message with both is what an ordinary mail client sends.
    */
+  const footer = user?.email
+    ? `Sent by ${user.name ? `${user.name} (${user.email})` : user.email} using ${senderName()}. Reply to this email to reach them.`
+    : '';
+  const plain = text ? `${text}${footer ? `\n\n—\n${footer}` : ''}` : undefined;
   const result = await sendEmail({
     to: recipients,
     subject: line,
-    text: text || undefined,
-    html: html || undefined,
+    text: plain,
+    html: html || (text ? htmlFromText(text, footer) : undefined),
     replyTo: user?.email || undefined,
-    onBehalfOf: user?.name || user?.email || '',
   });
   // `sendEmail` never throws — a failed password-reset mail must not break the
   // request — so a refusal from the provider arrives here as `ok: false`, and

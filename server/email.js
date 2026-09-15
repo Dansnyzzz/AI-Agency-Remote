@@ -53,10 +53,10 @@ function senderMailbox() {
   const configured = process.env.EMAIL_FROM || '';
   const inAngles = configured.match(/<([^>]+)>/);
   if (inAngles) return { name: configured.slice(0, configured.indexOf('<')).trim().replace(/^"|"$/g, ''), address: inAngles[1].trim() };
-  if (configured.includes('@')) return { name: 'AI Remote', address: configured.trim() };
+  if (configured.includes('@')) return { name: 'Synapse', address: configured.trim() };
   const login = smtpSettings()?.user;
-  if (login && login.includes('@')) return { name: 'AI Remote', address: login };
-  return { name: 'AI Remote', address: 'onboarding@resend.dev' };
+  if (login && login.includes('@')) return { name: 'Synapse', address: login };
+  return { name: 'Synapse', address: 'onboarding@resend.dev' };
 }
 
 /**
@@ -72,14 +72,51 @@ const cleanName = (name) =>
     .slice(0, 80);
 
 /**
- * The From header. The mailbox is always the deployment's — a provider refuses
- * to send as an address it has not verified — but the name can say on whose
- * behalf, so a recipient sees "Lan Nguyen via AI Remote" rather than a stranger.
+ * The From header: the deployment's own name and mailbox, and nothing else.
+ *
+ * It used to read "Lan Nguyen via Synapse" <mailbox@gmail.com>. A display name
+ * that names a person the address does not belong to is the pattern spam
+ * filters are built to catch — it is what impersonation looks like — and it
+ * sent real messages to the spam folder. Who the message is for now lives
+ * where filters expect it: Reply-To, and a line at the foot of the message.
  */
-function fromHeader(onBehalfOf) {
+function fromHeader() {
   const { name, address } = senderMailbox();
-  const shown = cleanName(onBehalfOf) ? `${cleanName(onBehalfOf)} via ${cleanName(name) || 'AI Remote'}` : cleanName(name);
+  const shown = cleanName(name);
   return shown ? `"${shown}" <${address}>` : address;
+}
+
+/** The deployment's display name, for the footer of a message. */
+export function senderName() {
+  return cleanName(senderMailbox().name) || 'Synapse';
+}
+
+const escapeHtml = (text) =>
+  String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/**
+ * A plain message as a simple HTML page.
+ *
+ * A text-only message from a new sender scores worse with filters than one with
+ * a well-formed HTML part beside the text. This is deliberately plain — escaped
+ * text, paragraphs, line breaks and bare links — because heavy markup, images
+ * and colours are the other thing filters score against.
+ */
+export function htmlFromText(text, footer = '') {
+  const paragraphs = String(text ?? '')
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => {
+      const withLinks = escapeHtml(block).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>');
+      return `<p style="margin:0 0 14px">${withLinks.replace(/\n/g, '<br>')}</p>`;
+    })
+    .join('');
+  const foot = footer
+    ? `<p style="margin:24px 0 0;padding-top:12px;border-top:1px solid #ddd;color:#666;font-size:12px">${escapeHtml(footer)}</p>`
+    : '';
+  return `<!doctype html><html><body style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;color:#222;max-width:640px">${paragraphs}${foot}</body></html>`;
 }
 
 let transport = null;
@@ -147,11 +184,10 @@ async function sendViaResend({ to, subject, html, text, replyTo, from }) {
  * @param {string} [mail.html]
  * @param {string} [mail.replyTo]         where a reply should go — the person the
  *                                        mail was sent for, not the shared mailbox
- * @param {string} [mail.onBehalfOf]      a name for the From line
  */
-export async function sendEmail({ to, subject, html, text, replyTo, onBehalfOf }) {
+export async function sendEmail({ to, subject, html, text, replyTo }) {
   const backend = emailBackend();
-  const from = fromHeader(onBehalfOf);
+  const from = fromHeader();
   try {
     /*
      * What the provider actually said, kept and returned.
@@ -223,7 +259,7 @@ export function publicUrl(req) {
 const shell = (heading, body, code, button) => `
 <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0e11;padding:32px">
   <div style="max-width:480px;margin:0 auto;background:#11161b;border:1px solid #232d36;border-radius:16px;padding:32px;color:#e8eef4">
-    <div style="color:#5ee6a8;font-weight:700;font-size:18px;margin-bottom:20px">AI Remote</div>
+    <div style="color:#5ee6a8;font-weight:700;font-size:18px;margin-bottom:20px">Synapse</div>
     <h1 style="font-size:20px;margin:0 0 12px">${heading}</h1>
     <p style="color:#9aa8b5;line-height:1.6;margin:0 0 20px">${body}</p>
     <div style="background:#0d1216;border:1px solid #2f7f5f;border-radius:12px;padding:18px;text-align:center;margin:0 0 22px">
@@ -242,7 +278,7 @@ const shell = (heading, body, code, button) => `
 
 export function resetEmail(link, code) {
   return {
-    subject: `${code} is your AI Remote password reset code`,
+    subject: `${code} is your Synapse password reset code`,
     html: shell(
       'Reset your password',
       'Type this code into the app to choose a new password. It is good for one hour and works once.',
@@ -250,7 +286,7 @@ export function resetEmail(link, code) {
       { href: link, label: 'Choose a new password' },
     ),
     text:
-      `Your AI Remote password reset code is ${code}\n\n` +
+      `Your Synapse password reset code is ${code}\n\n` +
       `It expires in one hour and can only be used once. You can also open this link:\n${link}\n\n` +
       'If you did not ask for this, ignore this message — your password has not changed.',
   };

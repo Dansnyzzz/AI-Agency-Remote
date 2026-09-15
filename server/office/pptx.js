@@ -227,9 +227,9 @@ function themeXml() {
     '<a:prstDash val="solid"/></a:ln>';
 
   return (
-    `${XML_DECLARATION}<a:theme xmlns:a="${DRAWING_NS}" name="AI Remote">` +
+    `${XML_DECLARATION}<a:theme xmlns:a="${DRAWING_NS}" name="Synapse">` +
     '<a:themeElements>' +
-    '<a:clrScheme name="AI Remote">' +
+    '<a:clrScheme name="Synapse">' +
     colour('dk1', 'windowText') +
     colour('lt1', 'window') +
     colour('dk2', '1F2933') +
@@ -243,11 +243,11 @@ function themeXml() {
     colour('hlink', '0563C1') +
     colour('folHlink', '954F72') +
     '</a:clrScheme>' +
-    '<a:fontScheme name="AI Remote">' +
+    '<a:fontScheme name="Synapse">' +
     '<a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>' +
     '<a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>' +
     '</a:fontScheme>' +
-    '<a:fmtScheme name="AI Remote">' +
+    '<a:fmtScheme name="Synapse">' +
     `<a:fillStyleLst>${fill}</a:fillStyleLst>` +
     `<a:lnStyleLst>${line(6350)}${line(12700)}${line(19050)}</a:lnStyleLst>` +
     '<a:effectStyleLst>' +
@@ -522,7 +522,7 @@ function notesSlideXml(notes) {
  * @param slides `[{ title, bullets: [{ level, text }] | [string], notes }]`
  * @returns a Buffer holding the whole package
  */
-export function writePptx({ slides, title = 'Presentation', author = 'AI Remote', created = new Date() } = {}) {
+export function writePptx({ slides, title = 'Presentation', author = 'Synapse', created = new Date() } = {}) {
   const list = (Array.isArray(slides) ? slides : []).filter(Boolean);
   const deck = list.length ? list : [{ title, bullets: [] }];
   const withNotes = deck.some((slide) => String(slide.notes || '').trim());

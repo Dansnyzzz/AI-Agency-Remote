@@ -72,6 +72,33 @@ section('every string the markup asks for exists');
   check('no visible text in the page is left without a translation', bare.length === 0, bare.slice(0, 20).join(' | '));
 }
 
+section('the product is called Synapse everywhere a person reads its name');
+{
+  /*
+   * The app was renamed from "AI Remote". A rename that misses one screen, one
+   * email or one error message leaves two products in front of the same person.
+   *
+   * Only these may still say it, because an existing install depends on the
+   * old spelling: the scheduled-task name the worker autostart registered (an
+   * uninstall has to find it), and the folder downloaded files already live in.
+   */
+  const ALLOWED = new Set(['scripts/autostart.js', 'worker/tools.js', 'test/attachments.test.mjs', 'test/i18n.test.mjs']);
+  const root = path.join(import.meta.dirname, '..');
+  const walk = (dir) =>
+    fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((entry) => {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return entry.name === 'vendor' ? [] : walk(rel);
+      return /\.(js|mjs|html|css|sql|ps1|sh|json)$/.test(entry.name) ? [rel] : [];
+    });
+  const offenders = ['public', 'server', 'worker', 'scripts', 'api', 'test']
+    .flatMap(walk)
+    .filter((rel) => !ALLOWED.has(rel))
+    .filter((rel) => fs.readFileSync(path.join(root, rel), 'utf8').includes('AI Remote'));
+  check('no user-facing file still says "AI Remote"', offenders.length === 0, offenders.join(', '));
+  const { en: english } = await import('../public/js/locales/en.js');
+  check('the app name is Synapse', english['app.name'] === 'Synapse' && vi['app.name'] === 'Synapse');
+}
+
 section('the strings the script builds are defined too');
 {
   // `t('key')` calls in the modules. A literal argument can be checked; anything
