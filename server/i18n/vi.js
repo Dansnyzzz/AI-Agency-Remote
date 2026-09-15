@@ -182,6 +182,7 @@ export const vi = {
   'The email was NOT sent: the mail provider refused it ({0}). Say so plainly.':
     'Email CHƯA được gửi: dịch vụ gửi thư đã từ chối ({0}).',
   'your own account address': 'địa chỉ email tài khoản của bạn',
+  'every recipient was refused ({0}): {1}': 'mọi người nhận đều bị từ chối ({0}): {1}',
 
   /* ── MCP ───────────────────────────────────────────────────────── */
   'The server did not answer within {0}s.': 'Máy chủ không trả lời trong vòng {0} giây.',
