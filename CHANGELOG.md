@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-15 (night) — emails that look finished
+
+Branch `feat/email-design`.
+
+### Changed
+
+- **`send_email` sends a designed email.** The body is Markdown, laid out by `server/mailTemplate.js`:
+  a branded header, the date and subject as a title, section headings with an accent bar (a line
+  written in capitals becomes one, capitals kept), lists, tables, callouts, quiet "Nguồn:/Sources:"
+  lines, and a footer naming the sender with a reply hint — in Vietnamese or English. Tables and inline
+  styles only, 600px wide, no images, fonts or scripts, so it renders the same in Gmail, Outlook and on
+  a phone and carries nothing a filter scores as remote content. A plain-text part is sent beside it.
+- **The password-reset email uses the same layout.**
+- The tool tells the model to write Markdown, not HTML.
+
 ## 2026-09-15 (evening) — the app is Synapse; mail written to reach the inbox
 
 Branch `feat/synapse-brand-and-inbox`.

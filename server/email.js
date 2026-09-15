@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { log } from './util/trace.js';
+import { resetMessage } from './mailTemplate.js';
 
 /**
  * Email delivery with three backends, chosen by whichever is configured:
@@ -89,34 +90,6 @@ function fromHeader() {
 /** The deployment's display name, for the footer of a message. */
 export function senderName() {
   return cleanName(senderMailbox().name) || 'Synapse';
-}
-
-const escapeHtml = (text) =>
-  String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-/**
- * A plain message as a simple HTML page.
- *
- * A text-only message from a new sender scores worse with filters than one with
- * a well-formed HTML part beside the text. This is deliberately plain — escaped
- * text, paragraphs, line breaks and bare links — because heavy markup, images
- * and colours are the other thing filters score against.
- */
-export function htmlFromText(text, footer = '') {
-  const paragraphs = String(text ?? '')
-    .replace(/\r\n/g, '\n')
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean)
-    .map((block) => {
-      const withLinks = escapeHtml(block).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>');
-      return `<p style="margin:0 0 14px">${withLinks.replace(/\n/g, '<br>')}</p>`;
-    })
-    .join('');
-  const foot = footer
-    ? `<p style="margin:24px 0 0;padding-top:12px;border-top:1px solid #ddd;color:#666;font-size:12px">${escapeHtml(footer)}</p>`
-    : '';
-  return `<!doctype html><html><body style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;color:#222;max-width:640px">${paragraphs}${foot}</body></html>`;
 }
 
 let transport = null;
@@ -254,39 +227,14 @@ export function publicUrl(req) {
 /**
  * The code comes first and the link second, deliberately: on a phone, typing
  * six digits back into the tab you already have open beats bouncing out to the
- * mail app and back.
+ * mail app and back. The look is the shared one in mailTemplate.js.
  */
-const shell = (heading, body, code, button) => `
-<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0e11;padding:32px">
-  <div style="max-width:480px;margin:0 auto;background:#11161b;border:1px solid #232d36;border-radius:16px;padding:32px;color:#e8eef4">
-    <div style="color:#5ee6a8;font-weight:700;font-size:18px;margin-bottom:20px">Synapse</div>
-    <h1 style="font-size:20px;margin:0 0 12px">${heading}</h1>
-    <p style="color:#9aa8b5;line-height:1.6;margin:0 0 20px">${body}</p>
-    <div style="background:#0d1216;border:1px solid #2f7f5f;border-radius:12px;padding:18px;text-align:center;margin:0 0 22px">
-      <div style="color:#64727f;font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">Your code</div>
-      <div style="color:#5ee6a8;font-size:32px;font-weight:700;letter-spacing:.28em;font-family:ui-monospace,Consolas,monospace">${code}</div>
-    </div>
-    <p style="color:#64727f;font-size:13px;line-height:1.6;margin:0 0 14px">Or click here instead:</p>
-    <a href="${button.href}" style="display:inline-block;background:#5ee6a8;color:#06231a;font-weight:600;padding:12px 22px;border-radius:9px;text-decoration:none">${button.label}</a>
-    <p style="color:#64727f;font-size:12px;line-height:1.6;margin:24px 0 0">
-      If the button does not work, paste this into your browser:<br />
-      <span style="color:#9aa8b5;word-break:break-all">${button.href}</span>
-    </p>
-  </div>
-</div>`;
-
-
 export function resetEmail(link, code) {
   return {
-    subject: `${code} is your Synapse password reset code`,
-    html: shell(
-      'Reset your password',
-      'Type this code into the app to choose a new password. It is good for one hour and works once.',
-      code,
-      { href: link, label: 'Choose a new password' },
-    ),
+    subject: `${code} is your ${senderName()} password reset code`,
+    html: resetMessage({ brand: senderName(), code, link }),
     text:
-      `Your Synapse password reset code is ${code}\n\n` +
+      `Your ${senderName()} password reset code is ${code}\n\n` +
       `It expires in one hour and can only be used once. You can also open this link:\n${link}\n\n` +
       'If you did not ask for this, ignore this message — your password has not changed.',
   };

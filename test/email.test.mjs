@@ -81,9 +81,10 @@ section('"email it to me" goes to the address the account registered');
   check('to the account address', sent[0]?.to?.join() === 'lan@example.com', JSON.stringify(sent[0]?.to));
   check('from the deployment mailbox', (sent[0]?.from || '').endsWith('<deployment.mailbox@gmail.com>'), sent[0]?.from);
   check("with the deployment's own name on the From line, not the person's", sent[0]?.from === '"Synapse" <deployment.mailbox@gmail.com>', sent[0]?.from);
-  check('a footer in the text says who sent it and how to reach them', /Sent by Lan Nguyen \(lan@example\.com\) using Synapse/.test(sent[0]?.text || ''), sent[0]?.text);
+  check('a footer in the text says who sent it, in the language of the message', /Gửi bởi Lan Nguyen \(lan@example\.com\) qua Synapse/.test(sent[0]?.text || ''), sent[0]?.text);
   check('there is an HTML part too', /^<!doctype html>/.test(sent[0]?.html || ''), (sent[0]?.html || '').slice(0, 40));
-  check('carrying the body and the same footer', /Nội dung/.test(sent[0]?.html || '') && /Sent by Lan Nguyen/.test(sent[0]?.html || ''));
+  check('laid out with the subject as its title and the body inside', /<h1[^>]*>Bản tin sáng<\/h1>/.test(sent[0]?.html || '') && /Nội dung/.test(sent[0]?.html || ''));
+  check('and the sender in the footer', /Gửi bởi <strong[^>]*>Lan Nguyen<\/strong>/.test(sent[0]?.html || ''));
   check('and replies going back to them', sent[0]?.replyTo === 'lan@example.com', sent[0]?.replyTo);
   check('the result says where it went and where replies go', /lan@example\.com/.test(r.result) && /replies go to lan@example\.com/.test(r.result), r.result);
 }
@@ -122,10 +123,9 @@ section('a name cannot write its own headers');
   check('EMAIL_FROM names the sender', email.__testing.fromHeader() === '"Công ty ABC" <deployment.mailbox@gmail.com>', email.__testing.fromHeader());
   delete process.env.EMAIL_FROM;
 
-  const html = email.htmlFromText('Hi <b>there</b>\n\nSee https://example.com/a?b=1\nthanks', 'Sent by X');
-  check('a text body is escaped in its HTML part', html.includes('Hi &lt;b&gt;there&lt;/b&gt;') && !html.includes('<b>'), html);
-  check('with paragraphs and line breaks kept', (html.match(/<p /g) || []).length === 3 && html.includes('<br>'));
-  check('and a bare link made a link', html.includes('<a href="https://example.com/a?b=1">'));
+  const reset = email.resetEmail('https://app.example/reset?t=abc&x=1', '123456');
+  check('the reset mail uses the same layout, with the code', reset.html.startsWith('<!doctype html>') && reset.html.includes('>123456<'));
+  check('and its link escaped into the button', reset.html.includes('href="https://app.example/reset?t=abc&amp;x=1"'));
 }
 
 section('a refusal from the provider is reported as a refusal');

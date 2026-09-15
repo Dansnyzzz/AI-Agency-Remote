@@ -1599,8 +1599,13 @@ export const TOOLS = [
             "Recipient address, or several separated by commas. Leave empty to send to the user's own account address.",
         },
         subject: { type: 'string', description: 'The subject line.' },
-        body: { type: 'string', description: 'The message as plain text.' },
-        html: { type: 'string', description: 'An HTML version. Optional; send `body` as well for mail clients that refuse HTML.' },
+        body: {
+          type: 'string',
+          description:
+            'The message in Markdown: ## section headings, - bullet lists, **bold**, [links](https://…), tables. ' +
+            'It is laid out as a finished, branded email automatically — do not write HTML, a greeting banner or a signature.',
+        },
+        html: { type: 'string', description: 'Only when the user supplies exact HTML to send. Normally leave empty.' },
       },
       required: ['subject', 'body'],
     },

@@ -12,7 +12,8 @@ import { parseSchedule } from '../scheduler.js';
 import { normaliseSteps } from '../workflows.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
-import { sendEmail, emailBackend, htmlFromText, senderName } from '../email.js';
+import { sendEmail, emailBackend, senderName } from '../email.js';
+import { composeMessage } from '../mailTemplate.js';
 import { safeFetch } from '../util/safeFetch.js';
 import { searchDocs, listSources, forgetSource } from '../rag.js';
 import { createDocument, extensionOf } from '../office/index.js';
@@ -954,6 +955,17 @@ async function githubWriteTool({ path, method, body }, { userId }) {
  * building is worse than one that cannot send email at all. So that case is
  * reported as the failure it is.
  */
+/**
+ * The language of a message's date and footer: the account's interface
+ * language when it has chosen one, otherwise the language the body is written
+ * in — Vietnamese diacritics are unmistakable.
+ */
+async function messageLanguage(user, body) {
+  const chosen = user?.id ? await getPrefs(user.id).then((p) => p?.language).catch(() => null) : null;
+  if (chosen === 'vi' || chosen === 'en') return chosen;
+  return /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(body) ? 'vi' : 'en';
+}
+
 /** How many people one call may write to. More than this is a mailing list. */
 const MAX_RECIPIENTS = 10;
 
@@ -1008,18 +1020,25 @@ async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
    * shared inbox, and a line at the foot saying who sent it. Not their name on
    * the From line — see fromHeader for why that went to spam.
    *
-   * A text body gets an HTML part beside it, and an HTML body keeps its text
-   * part, because a message with both is what an ordinary mail client sends.
+   * The body is Markdown, laid out by mailTemplate.js as a finished email —
+   * header, title, sections, lists, tables, footer — with a plain-text twin,
+   * because a message with both parts is what an ordinary mail client sends.
+   * An `html` body the model wrote itself is sent as given.
    */
-  const footer = user?.email
-    ? `Sent by ${user.name ? `${user.name} (${user.email})` : user.email} using ${senderName()}. Reply to this email to reach them.`
-    : '';
-  const plain = text ? `${text}${footer ? `\n\n—\n${footer}` : ''}` : undefined;
+  const composed = text
+    ? composeMessage({
+        brand: senderName(),
+        subject: line,
+        markdown: text,
+        sender: user?.email ? { name: user.name || '', email: user.email } : null,
+        language: await messageLanguage(user, text),
+      })
+    : null;
   const result = await sendEmail({
     to: recipients,
     subject: line,
-    text: plain,
-    html: html || (text ? htmlFromText(text, footer) : undefined),
+    text: composed?.text,
+    html: html || composed?.html,
     replyTo: user?.email || undefined,
   });
   // `sendEmail` never throws — a failed password-reset mail must not break the
