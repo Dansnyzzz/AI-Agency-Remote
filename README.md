@@ -157,14 +157,22 @@ key — someone using their own is never limited, because it is not your money.
 problem for whoever typed it, not something to hold a working account hostage over — and a
 deployment with no mail provider could never have released the hostage anyway.
 
-That leaves exactly one thing needing email: letting somebody who forgot their password get back in.
-Pick one backend, or none:
+Email is used for two things: letting somebody who forgot their password get back in, and the
+assistant's `send_email` tool. Pick one backend, or none:
 
 | Backend | Set | Notes |
 |---|---|---|
-| **Resend** | `RESEND_API_KEY` | Plain HTTPS, so it works on Vercel where SMTP ports are awkward. Free tier is generous. |
-| **SMTP** | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Any provider, including Gmail with an app password. |
-| **Console** | nothing | The reset link is printed to the server log. Fine locally — `npm run reset-password` is easier still. |
+| **Gmail** | `GMAIL_USER`, `GMAIL_APP_PASSWORD` | The deployment's own Gmail mailbox. The password is an **App Password** (Google Account → Security → 2-Step Verification → App passwords), not the account password; spaces in it are ignored. Uses `smtp.gmail.com:465`. |
+| **Resend** | `RESEND_API_KEY` | Plain HTTPS. Sends only from a domain you have verified with Resend, so not from a gmail.com address. |
+| **SMTP** | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Any other provider. Wins over the Gmail variables when both are set. |
+| **Console** | nothing | Mail is printed to the server log. Fine locally for a reset code — and `send_email` refuses, saying the email was **not** sent, rather than pretending. |
+
+**`send_email` writes for the person asking, from the deployment's mailbox.** Every account shares the
+one sending mailbox — a provider will not send as an address it has not verified — but each message
+carries that person's name on the From line ("Lan Nguyen via AI Remote") and their registered address
+as Reply-To, so an answer goes back to them. Asked to "email it to me", it sends to the address the
+account signed up with; otherwise to exactly the address, or up to ten addresses, the person gave. A
+refusal from the mail provider is reported as a refusal.
 
 The reset email carries **both a six-digit code and a link** — type the code back into the tab you
 already have open, or click through, whichever suits. On a phone the code is usually faster.
@@ -1391,8 +1399,8 @@ sets `DATABASE_URL` for you. The schema is created automatically on first reques
 | `SESSION_SECRET` | **yes** | Signs session cookies. Long and random. Changing it signs everyone out. |
 | `ENCRYPTION_KEY` | **yes** | Encrypts stored provider keys. Changing it makes existing ones unreadable. |
 | `CRON_SECRET` | **yes** | Authenticates the cron endpoints — the scheduler and the model-library refresh. Any long random string. Without it both refuse every call, so scheduled tasks never run. |
-| `RESEND_API_KEY` **or** `SMTP_*` | optional | Sends password-reset links — the only mail this app sends. Without it, links go to the server log and `npm run reset-password` is the way back in. |
-| `EMAIL_FROM` | with email | The From address, e.g. `AI Remote <hello@yourdomain.com>`. |
+| `GMAIL_USER` + `GMAIL_APP_PASSWORD`, **or** `RESEND_API_KEY`, **or** `SMTP_*` | optional | Sends password-reset codes and the assistant's emails. Without one, reset links go to the server log and `send_email` says it cannot send. |
+| `EMAIL_FROM` | optional | The From name and address, e.g. `AI Remote <you@gmail.com>`. Defaults to the Gmail/SMTP login. |
 | `ALLOW_SIGNUP` | optional | Open by default. `false` closes registration; the first account is always allowed. |
 | `DESKTOP_ACCESS` | optional, worker | `true` lets the assistant drive real applications on that machine. Off by default; see the platform table under "Desktop control". |
 | `DEFAULT_MONTHLY_TOKEN_LIMIT` | optional | Monthly cap for accounts using a shared key. Ignored for accounts with their own. |

@@ -174,8 +174,14 @@ export const vi = {
   '"{0}" is not an email address.': '"{0}" không phải địa chỉ email.',
   'An email with no subject line reads as spam. Give it one.': 'Email không có tiêu đề trông như thư rác. Hãy thêm tiêu đề.',
   'There is nothing to send — give a body.': 'Không có gì để gửi — hãy viết nội dung.',
-  'No mail provider is configured on this deployment, so nothing can actually be sent — it would only be printed to the server log. Tell the user plainly that the email was NOT sent, and that RESEND_API_KEY or SMTP_HOST has to be set for this tool to work. Do not claim to have sent it.':
-    'Bản triển khai này chưa cấu hình dịch vụ gửi thư, nên không gửi được gì — nội dung chỉ được in ra log máy chủ. Email CHƯA được gửi; cần đặt RESEND_API_KEY hoặc SMTP_HOST để công cụ này hoạt động.',
+  'No mail provider is configured on this deployment, so nothing can actually be sent — it would only be printed to the server log. Tell the user plainly that the email was NOT sent, and that the deployment needs GMAIL_USER and GMAIL_APP_PASSWORD (or RESEND_API_KEY, or SMTP_HOST) set for this tool to work. Do not claim to have sent it.':
+    'Bản triển khai này chưa cấu hình dịch vụ gửi thư, nên không gửi được gì — nội dung chỉ được in ra log máy chủ. Email CHƯA được gửi; cần đặt GMAIL_USER và GMAIL_APP_PASSWORD (hoặc RESEND_API_KEY, hoặc SMTP_HOST) để công cụ này hoạt động.',
+  'Give the address to send to — this account has no email of its own on record.':
+    'Hãy cho biết địa chỉ cần gửi tới — tài khoản này không có email riêng được lưu.',
+  'That is {0} recipients; {1} is the limit for one email.': 'Đó là {0} người nhận; mỗi email tối đa {1} người.',
+  'The email was NOT sent: the mail provider refused it ({0}). Say so plainly.':
+    'Email CHƯA được gửi: dịch vụ gửi thư đã từ chối ({0}).',
+  'your own account address': 'địa chỉ email tài khoản của bạn',
 
   /* ── MCP ───────────────────────────────────────────────────────── */
   'The server did not answer within {0}s.': 'Máy chủ không trả lời trong vòng {0} giây.',

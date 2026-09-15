@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-09-15 (later) — email for each person, and formulas that render
+
+Branch `feat/email-per-user-and-math-render`.
+
+### Fixed
+
+- **`send_email` said "sent" when the provider refused.** `sendEmail` returns `{ ok: false }`
+  rather than throwing, and the tool ignored it. A refusal is now reported as the email NOT sent,
+  with the provider's reason.
+- **Formulas printed as raw TeX.** `$…$`, `$$…$$`, `\(…\)` and `\[…\]` are typeset with KaTeX
+  0.18.7, served from `public/vendor/katex` and loaded only when a reply contains one. Prices such
+  as "$5 and $10" stay text.
+- **Code under a bullet was mangled.** A fenced block indented under a list item renders inside that
+  item; ``````lang code`````` on one line is inline code.
+
+### Changed
+
+- **`send_email` writes on the user's behalf.** `to` is optional — empty sends to the account's
+  registered address — and accepts up to ten addresses. The From line names the person, and
+  Reply-To is their address.
+- **Gmail in two variables:** `GMAIL_USER` and `GMAIL_APP_PASSWORD`.
+
+### Upgrade notes
+
+- To send from the deployment's Gmail, set `GMAIL_USER` and `GMAIL_APP_PASSWORD` (an App
+  Password) in the hosting environment and redeploy.
+- `katex` is a dev dependency; after upgrading it run `npm run vendor:katex` — the test suite fails
+  until the vendored copy matches.
+
 ## 2026-09-15 — Auto is OpenRouter's free router; a Languages tab; full translation
 
 Branch `feat/auto-openrouter-free-languages`.

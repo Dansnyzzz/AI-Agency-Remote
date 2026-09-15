@@ -1,0 +1,136 @@
+/**
+ * Sending email for a person, from the deployment's mailbox.
+ *
+ * What a user asked for, and what this pins:
+ *   - "email it to me" goes to the address they registered with, without the
+ *     model having to know it;
+ *   - any address, or several, they name instead;
+ *   - their name on the From line and their address as Reply-To, so an answer
+ *     comes back to them rather than to a shared inbox;
+ *   - Gmail configured with two variables;
+ *   - and never "sent" when it was not — the provider refusing used to be
+ *     reported as success, because `sendEmail` swallows errors by design.
+ *
+ * No mail leaves this machine: the SMTP transport is replaced with a recorder.
+ *
+ *   node test/email.test.mjs
+ */
+let failures = 0;
+const section = (name) => console.log(`\n\x1b[1m${name}\x1b[0m`);
+const check = (label, pass, detail = '') => {
+  console.log(`  ${pass ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗ FAIL\x1b[0m'}  ${label}${detail ? ` — ${detail}` : ''}`);
+  if (!pass) failures += 1;
+};
+
+for (const key of ['RESEND_API_KEY', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'EMAIL_FROM', 'GMAIL_USER', 'GMAIL_APP_PASSWORD']) {
+  delete process.env[key];
+}
+process.env.ENCRYPTION_KEY ||= 'email-test-encryption-key';
+process.env.SESSION_SECRET ||= 'email-test-session-secret';
+
+const email = await import('../server/email.js');
+const { CLOUD_IMPLEMENTATIONS } = await import('../server/tools/cloud.js');
+const { riskReason } = await import('../server/tools/definitions.js');
+const send = CLOUD_IMPLEMENTATIONS.send_email;
+
+const user = { id: 'u1', email: 'lan@example.com', name: 'Lan Nguyen' };
+const sent = [];
+let refuse = null;
+const fakeTransport = {
+  async sendMail(message) {
+    if (refuse) throw new Error(refuse);
+    sent.push(message);
+    return { messageId: 'x' };
+  },
+};
+
+const attempt = async (input, context = { user }) => {
+  try {
+    return { ok: true, result: await send(input, context) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+};
+
+section('with no provider, nothing is claimed');
+{
+  const r = await attempt({ subject: 'Hi', body: 'Hello' });
+  check('the tool refuses rather than pretending', !r.ok && /NOT sent/.test(r.error), r.error);
+  check('and names the Gmail settings to add', /GMAIL_USER/.test(r.error) && /GMAIL_APP_PASSWORD/.test(r.error));
+}
+
+section('Gmail is two variables');
+{
+  process.env.GMAIL_USER = 'deployment.mailbox@gmail.com';
+  process.env.GMAIL_APP_PASSWORD = 'abcd efgh ijkl mnop';
+  check('the backend is SMTP', email.emailBackend() === 'smtp', email.emailBackend());
+  const settings = email.__testing.smtpSettings();
+  check('on smtp.gmail.com over implicit TLS', settings.host === 'smtp.gmail.com' && settings.port === 465, JSON.stringify(settings.host));
+  check('logged in as that mailbox', settings.user === 'deployment.mailbox@gmail.com');
+  check('with the spaces Google shows removed from the password', settings.pass === 'abcdefghijklmnop');
+  email.__testing.useTransport(fakeTransport);
+}
+
+section('"email it to me" goes to the address the account registered');
+{
+  sent.length = 0;
+  const r = await attempt({ subject: 'Bản tin sáng', body: 'Nội dung' });
+  check('it was sent', r.ok, r.error);
+  check('to the account address', sent[0]?.to?.join() === 'lan@example.com', JSON.stringify(sent[0]?.to));
+  check('from the deployment mailbox', (sent[0]?.from || '').endsWith('<deployment.mailbox@gmail.com>'), sent[0]?.from);
+  check('with the person named on the From line', /^"Lan Nguyen via AI Remote"/.test(sent[0]?.from || ''), sent[0]?.from);
+  check('and replies going back to them', sent[0]?.replyTo === 'lan@example.com', sent[0]?.replyTo);
+  check('the result says where it went and where replies go', /lan@example\.com/.test(r.result) && /replies go to lan@example\.com/.test(r.result), r.result);
+}
+
+section('any address the user names, or several');
+{
+  sent.length = 0;
+  await attempt({ to: 'someone@example.com', subject: 'S', body: 'B' });
+  check('one named address', sent[0]?.to?.join() === 'someone@example.com', JSON.stringify(sent[0]?.to));
+
+  sent.length = 0;
+  await attempt({ to: 'a@example.com, b@example.org; Chị Hoa <hoa@example.net>', subject: 'S', body: 'B' });
+  check('several, however they are separated', sent[0]?.to?.join() === 'a@example.com,b@example.org,hoa@example.net', JSON.stringify(sent[0]?.to));
+
+  sent.length = 0;
+  await attempt({ to: ['x@example.com', 'x@example.com'], subject: 'S', body: 'B' });
+  check('a list works, and a repeated address is sent once', sent[0]?.to?.join() === 'x@example.com', JSON.stringify(sent[0]?.to));
+
+  const notAnAddress = await attempt({ to: 'Lan', subject: 'S', body: 'B' });
+  check('a name is not an address', !notAnAddress.ok && /not an email address/.test(notAnAddress.error), notAnAddress.error);
+
+  const many = Array.from({ length: 11 }, (_, i) => `p${i}@example.com`).join(',');
+  const tooMany = await attempt({ to: many, subject: 'S', body: 'B' });
+  check('more than ten recipients is refused', !tooMany.ok && /11 recipients/.test(tooMany.error), tooMany.error);
+
+  const nobody = await attempt({ subject: 'S', body: 'B' }, { user: { id: 'u2' } });
+  check('an account with no address must be given one', !nobody.ok && /Give the address/.test(nobody.error), nobody.error);
+}
+
+section('a name cannot write its own headers');
+{
+  const from = email.__testing.fromHeader('Eve"\r\nBcc: victim@example.com <x>');
+  check('quotes, line breaks and angle brackets are stripped', !/[\r\n]/.test(from) && (from.match(/"/g) || []).length === 2 && (from.match(/</g) || []).length === 1, from);
+  process.env.EMAIL_FROM = 'Công ty ABC <deployment.mailbox@gmail.com>';
+  check('EMAIL_FROM names the sender', email.__testing.fromHeader('Lan') === '"Lan via Công ty ABC" <deployment.mailbox@gmail.com>', email.__testing.fromHeader('Lan'));
+  delete process.env.EMAIL_FROM;
+}
+
+section('a refusal from the provider is reported as a refusal');
+{
+  refuse = 'Invalid login: 535-5.7.8 Username and Password not accepted';
+  const r = await attempt({ subject: 'S', body: 'B' });
+  check('the tool fails', !r.ok, r.result);
+  check('saying it was NOT sent, with the reason', /NOT sent/.test(r.error || '') && /535/.test(r.error || ''), r.error);
+  refuse = null;
+}
+
+section('the approval prompt says who it goes to');
+{
+  check('a named recipient is named', riskReason('send_email', { to: 'a@example.com' }) === 'Sends an email to a@example.com. It cannot be unsent.');
+  check('and an empty one is the account itself', /your own account address/.test(riskReason('send_email', {}) || ''), riskReason('send_email', {}));
+}
+
+console.log(failures === 0 ? '\n\x1b[32mAll email checks passed.\x1b[0m\n' : `\n\x1b[31m${failures} check(s) failed.\x1b[0m\n`);
+process.exit(failures === 0 ? 0 : 1);

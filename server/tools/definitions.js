@@ -1583,20 +1583,26 @@ export const TOOLS = [
     scope: 'cloud',
     readOnly: false,
     description:
-      "Send an email from the deployment's own mail account. Use it when the user asks you to send something to " +
-      'somebody — a quotation, a summary, a reminder. ' +
+      "Send an email from the deployment's own mail account, on the user's behalf: their name is on the From line and " +
+      'replies go to their account address. Use it when the user asks you to send something — a quotation, a summary, ' +
+      'a reminder. Leave `to` empty to send it to the user themself (their registered address); otherwise use exactly ' +
+      'the address or addresses they gave. ' +
       'It leaves immediately and cannot be recalled, so read the recipient, the subject and the body back to the user ' +
       'and wait for a yes unless they asked for exactly this. ' +
       'If no mail provider is configured this fails and says so — never tell the user something was sent when it was not.',
     parameters: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'One recipient address.' },
+        to: {
+          type: 'string',
+          description:
+            "Recipient address, or several separated by commas. Leave empty to send to the user's own account address.",
+        },
         subject: { type: 'string', description: 'The subject line.' },
         body: { type: 'string', description: 'The message as plain text.' },
         html: { type: 'string', description: 'An HTML version. Optional; send `body` as well for mail clients that refuse HTML.' },
       },
-      required: ['to', 'subject', 'body'],
+      required: ['subject', 'body'],
     },
   },
   {
@@ -2037,7 +2043,7 @@ export function riskReason(name, input = {}) {
   }
   // The audience is not the person being asked, and none of it can be recalled.
   if (name === 'send_email') {
-    return `Sends an email to ${input?.to || 'somebody'}. It cannot be unsent.`;
+    return `Sends an email to ${input?.to || 'your own account address'}. It cannot be unsent.`;
   }
   if (name === 'slack_post') return `Posts to ${input?.channel || 'a Slack channel'}, where other people will read it.`;
   if (name === 'telegram_send') return `Sends a Telegram message to ${input?.chat_id || 'a chat'}.`;

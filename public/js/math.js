@@ -28,7 +28,8 @@ const cache = new Map();
 const CACHE_LIMIT = 500;
 let loading = null;
 
-const katex = () => (typeof window !== 'undefined' ? window.katex : undefined);
+// KaTeX's UMD build sets `window.katex`; nothing declares it for the checker.
+const katex = () => (typeof window !== 'undefined' ? /** @type {any} */ (window).katex : undefined);
 
 function render(tex, display) {
   const key = `${display ? 'D' : 'I'}${tex}`;

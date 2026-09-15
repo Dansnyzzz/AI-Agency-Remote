@@ -954,14 +954,41 @@ async function githubWriteTool({ path, method, body }, { userId }) {
  * building is worse than one that cannot send email at all. So that case is
  * reported as the failure it is.
  */
-async function sendEmailTool({ to, subject, body, html }) {
-  const address = String(to || '').trim();
+/** How many people one call may write to. More than this is a mailing list. */
+const MAX_RECIPIENTS = 10;
+
+/**
+ * Who a message goes to, as the account asked.
+ *
+ * `to` may be one address, several separated by commas or semicolons, or a
+ * list. Left empty, it is the account's own registered address — "email it to
+ * me" is the most common request, and the model should not have to know or
+ * guess the address to honour it.
+ */
+function recipientsFor(to, user) {
+  const raw = Array.isArray(to) ? to : String(to ?? '').split(/[,;\n]/);
+  const list = [...new Set(raw.map((a) => String(a).trim()).filter(Boolean).map((a) => a.replace(/^.*<([^>]+)>\s*$/, '$1').trim()))];
+  if (!list.length) {
+    if (!user?.email) throw new Error('Give the address to send to — this account has no email of its own on record.');
+    return [user.email];
+  }
   // Deliberately loose. A real address parser rejects valid addresses, and the
   // provider is the one that actually knows — this is only here to catch a model
   // passing a name or an empty string.
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
-    throw new Error(`"${to}" is not an email address.`);
+  const bad = list.find((a) => !/^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/.test(a));
+  if (bad) throw new Error(`"${bad}" is not an email address.`);
+  if (list.length > MAX_RECIPIENTS) {
+    throw new Error(`That is ${list.length} recipients; ${MAX_RECIPIENTS} is the limit for one email.`);
   }
+  return list;
+}
+
+/**
+ * @param {{ to?: string | string[], subject?: string, body?: string, html?: string }} input
+ * @param {{ user?: { email?: string, name?: string } }} context
+ */
+async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
+  const recipients = recipientsFor(to, user);
   const line = String(subject || '').trim();
   if (!line) throw new Error('An email with no subject line reads as spam. Give it one.');
   const text = String(body || '').trim();
@@ -970,14 +997,33 @@ async function sendEmailTool({ to, subject, body, html }) {
   if (emailBackend() === 'console') {
     throw new Error(
       'No mail provider is configured on this deployment, so nothing can actually be sent — it would only be ' +
-        'printed to the server log. Tell the user plainly that the email was NOT sent, and that RESEND_API_KEY or ' +
-        'SMTP_HOST has to be set for this tool to work. Do not claim to have sent it.',
+        'printed to the server log. Tell the user plainly that the email was NOT sent, and that the deployment needs ' +
+        'GMAIL_USER and GMAIL_APP_PASSWORD (or RESEND_API_KEY, or SMTP_HOST) set for this tool to work. Do not claim to have sent it.',
     );
   }
 
-  await sendEmail({ to: address, subject: line, text: text || undefined, html: html || undefined });
+  /*
+   * Sent from the deployment's mailbox, but for this person: their name on the
+   * From line and their address as Reply-To, so an answer reaches them rather
+   * than a shared inbox nobody reads.
+   */
+  const result = await sendEmail({
+    to: recipients,
+    subject: line,
+    text: text || undefined,
+    html: html || undefined,
+    replyTo: user?.email || undefined,
+    onBehalfOf: user?.name || user?.email || '',
+  });
+  // `sendEmail` never throws — a failed password-reset mail must not break the
+  // request — so a refusal from the provider arrives here as `ok: false`, and
+  // reporting it as sent would be exactly the lie this tool exists not to tell.
+  if (!result?.ok) {
+    throw new Error(`The email was NOT sent: the mail provider refused it (${result?.error || 'no reason given'}). Say so plainly.`);
+  }
+  const who = recipients.join(', ');
   return (
-    `Sent an email to ${address} with the subject "${line}". ` +
+    `Sent an email to ${who} with the subject "${line}"${user?.email ? `; replies go to ${user.email}` : ''}. ` +
     'It has left the building and cannot be recalled — say so, and say what you sent.'
   );
 }
