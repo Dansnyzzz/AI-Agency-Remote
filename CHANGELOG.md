@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-15 (late night) — every kind of email, laid out for what it is
+
+Branch `feat/email-adaptive`.
+
+### Changed
+
+- **Sixteen kinds of email**, each with its own shape, colour and label: letter, thank-you, apology,
+  follow-up and job application are written like a person's email; newsletter, report, announcement,
+  alert, invitation, reminder, quotation, invoice, confirmation, meeting notes and welcome are
+  labelled cards. `send_email` takes a `kind`; without one it is inferred from the subject and
+  opening (whole words, longer phrases weigh more, one passing mention does not decide), then from
+  structure.
+- **Shapes documents are made of**: `Label: value` lines become a details card, a "Total/Tổng" row is
+  highlighted, `- [ ]` becomes a checklist, a lone link becomes a button, `+x%`/`-x%` in a table are
+  coloured.
+- **Adaptive**: the footer and date follow the language the message is written in; dated kinds use
+  the account's time zone; a first line repeating the subject is dropped; the inbox preview skips
+  headings. Dark mode and phone spacing for Apple Mail and Outlook apps, with the inline light design
+  standing on its own in Gmail.
+
 ## 2026-09-15 (night) — emails that look finished
 
 Branch `feat/email-design`.

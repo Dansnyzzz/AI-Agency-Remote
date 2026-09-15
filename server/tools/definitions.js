@@ -1583,10 +1583,9 @@ export const TOOLS = [
     scope: 'cloud',
     readOnly: false,
     description:
-      "Send an email from the deployment's own mail account, on the user's behalf: their name is on the From line and " +
-      'replies go to their account address. Use it when the user asks you to send something — a quotation, a summary, ' +
-      'a reminder. Leave `to` empty to send it to the user themself (their registered address); otherwise use exactly ' +
-      'the address or addresses they gave. ' +
+      "Send an email from the deployment's own mail account, on the user's behalf; replies go to their account address. " +
+      'Use it when the user asks you to send something. Leave `to` empty to send it to the user themself (their registered ' +
+      'address); otherwise use exactly the address or addresses they gave. ' +
       'It leaves immediately and cannot be recalled, so read the recipient, the subject and the body back to the user ' +
       'and wait for a yes unless they asked for exactly this. ' +
       'If no mail provider is configured this fails and says so — never tell the user something was sent when it was not.',
@@ -1602,8 +1601,17 @@ export const TOOLS = [
         body: {
           type: 'string',
           description:
-            'The message in Markdown: ## section headings, - bullet lists, **bold**, [links](https://…), tables. ' +
-            'It is laid out as a finished, branded email automatically — do not write HTML, a greeting banner or a signature.',
+            'The message in Markdown, laid out as a finished email automatically — never HTML. ## headings, - lists, ' +
+            '**bold**, tables (a "Total"/"Tổng" row is highlighted), "Label: value" lines (become a details card), ' +
+            '"- [ ] task" checklists, a line that is only [label](https://…) (becomes a button). A letter keeps its greeting and sign-off.',
+        },
+        kind: {
+          type: 'string',
+          enum: [
+            'letter', 'thank_you', 'apology', 'follow_up', 'application', 'newsletter', 'report', 'announcement', 'alert',
+            'invitation', 'reminder', 'quotation', 'invoice', 'confirmation', 'meeting', 'welcome',
+          ],
+          description: 'What the email is, from what the user asked for; decides its layout and colour. Omit to infer it.',
         },
         html: { type: 'string', description: 'Only when the user supplies exact HTML to send. Normally leave empty.' },
       },

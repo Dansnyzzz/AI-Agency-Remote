@@ -174,9 +174,13 @@ at the foot says who sent it, so an answer goes back to them. Putting the person
 was tried and sent mail to spam: a display name that belongs to someone other than the address is what
 impersonation looks like to a filter.
 
-**What it looks like.** The body is written in Markdown and laid out by `server/mailTemplate.js` as a
-finished email: the deployment's name at the top, the date and subject as the title, section headings,
-lists, tables and callouts, and a footer naming the sender — beside a plain-text part. It is built from
+**What it looks like.** The body is written in Markdown and laid out by `server/mailTemplate.js` for
+what the email *is*. There are sixteen kinds: a letter, thank-you, apology, follow-up or job application
+looks like a person's email; a newsletter, report, announcement, alert, invitation, reminder, quotation,
+invoice, confirmation, meeting notes or welcome is a card with its own colour and label. The assistant
+names the kind from the request, or it is inferred from the subject, the opening words and the structure.
+Details (`Label: value`) become a card, totals are highlighted, `- [ ]` items a checklist, a lone link a
+button. The footer names the sender in the language the message is written in, beside a plain-text part. It is built from
 tables and inline styles, at most 600px wide, with no images, web fonts or scripts, because that is what
 renders identically in Gmail, Outlook and phone mail apps and loads nothing a spam filter scores.
 

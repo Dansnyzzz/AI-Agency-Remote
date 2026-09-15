@@ -13,7 +13,7 @@ import { normaliseSteps } from '../workflows.js';
 import { CONNECTOR_CALLS } from '../connectors.js';
 import { getPrefs, getApiKey } from '../settings.js';
 import { sendEmail, emailBackend, senderName } from '../email.js';
-import { composeMessage } from '../mailTemplate.js';
+import { composeMessage, KIND_NAMES } from '../mailTemplate.js';
 import { safeFetch } from '../util/safeFetch.js';
 import { searchDocs, listSources, forgetSource } from '../rag.js';
 import { createDocument, extensionOf } from '../office/index.js';
@@ -956,14 +956,13 @@ async function githubWriteTool({ path, method, body }, { userId }) {
  * reported as the failure it is.
  */
 /**
- * The language of a message's date and footer: the account's interface
- * language when it has chosen one, otherwise the language the body is written
- * in — Vietnamese diacritics are unmistakable.
+ * The account's language and zone. The message's own language wins — the
+ * recipient reads the footer, not the sender (see detectLanguage) — and the
+ * account's is the fallback for a body too short to tell.
  */
-async function messageLanguage(user, body) {
-  const chosen = user?.id ? await getPrefs(user.id).then((p) => p?.language).catch(() => null) : null;
-  if (chosen === 'vi' || chosen === 'en') return chosen;
-  return /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(body) ? 'vi' : 'en';
+async function accountMailPrefs(user) {
+  const prefs = user?.id ? await getPrefs(user.id).catch(() => null) : null;
+  return { language: prefs?.language || 'en', timeZone: prefs?.timezone || '' };
 }
 
 /** How many people one call may write to. More than this is a mailing list. */
@@ -996,10 +995,10 @@ function recipientsFor(to, user) {
 }
 
 /**
- * @param {{ to?: string | string[], subject?: string, body?: string, html?: string }} input
+ * @param {{ to?: string | string[], subject?: string, body?: string, html?: string, kind?: string }} input
  * @param {{ user?: { email?: string, name?: string } }} context
  */
-async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
+async function sendEmailTool({ to, subject, body, html, kind }, { user } = {}) {
   const recipients = recipientsFor(to, user);
   const line = String(subject || '').trim();
   if (!line) throw new Error('An email with no subject line reads as spam. Give it one.');
@@ -1025,13 +1024,17 @@ async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
    * because a message with both parts is what an ordinary mail client sends.
    * An `html` body the model wrote itself is sent as given.
    */
+  const account = await accountMailPrefs(user);
   const composed = text
     ? composeMessage({
         brand: senderName(),
         subject: line,
         markdown: text,
         sender: user?.email ? { name: user.name || '', email: user.email } : null,
-        language: await messageLanguage(user, text),
+        // A kind the model named is used as given; anything else is inferred.
+        kind: KIND_NAMES.includes(String(kind)) ? String(kind) : 'auto',
+        language: account.language,
+        timeZone: account.timeZone,
       })
     : null;
   const result = await sendEmail({
@@ -1056,7 +1059,7 @@ async function sendEmailTool({ to, subject, body, html }, { user } = {}) {
     .filter(Boolean)
     .join('; ');
   return (
-    `The mail server accepted an email to ${accepted.join(', ')} with the subject "${line}"` +
+    `The mail server accepted an email${composed ? ` (laid out as: ${composed.kind.replace('_', ' ')})` : ''} to ${accepted.join(', ')} with the subject "${line}"` +
     `${user?.email ? `; replies go to ${user.email}` : ''}.` +
     `${refused.length ? ` It REFUSED ${refused.join(', ')} — say that those did not get it.` : ''}` +
     `${evidence ? ` (${evidence})` : ''} ` +
