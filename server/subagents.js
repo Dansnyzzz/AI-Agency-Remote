@@ -221,7 +221,7 @@ export async function runParallel({
   // Through resolveForUser, so `auto` becomes a concrete free model rather than
   // an id that cannot resolve — a sub-agent run must not crash because the
   // account's model is set to Auto.
-  const entry = await resolveForUser(user.id, modelId || prefs.defaultModel, { vision: !!prefs.autoVision });
+  const entry = await resolveForUser(user.id, modelId || prefs.defaultModel);
   const [worker, connectors, providerKeys] = await Promise.all([
     workerStatus(user, prefs),
     connectorSummary(user.id),

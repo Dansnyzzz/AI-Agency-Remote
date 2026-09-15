@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { getStore } from '../store/index.js';
 import { normaliseSteps, runWorkflowNow } from '../workflows.js';
 import { getPrefs } from '../settings.js';
+import { languageOf, translateMessage } from '../i18n/index.js';
 
 /**
  * Lifted out of server/app.js — see the note on mountWorkspaceRoutes for why.
@@ -35,7 +36,13 @@ export function mountWorkflowRoutes(api, { wrap, body }) {
           ? {
               id: runId,
               status: run_status,
-              steps: run_steps,
+              // A step's stored error is the server's sentence; say it in the
+              // reader's language, the same as a live one.
+              steps: Array.isArray(run_steps)
+                ? run_steps.map((step) =>
+                    step?.error ? { ...step, error: translateMessage(step.error, languageOf(req)) } : step,
+                  )
+                : run_steps,
               chat_id: run_chat_id,
               cursor: run_cursor,
               started_at: run_started_at,

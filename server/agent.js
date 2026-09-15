@@ -4,7 +4,7 @@ import { getPrefs, usesSharedKey, providerStatus } from './settings.js';
 import { checkQuota, record as recordUsage, turnTokenLimit } from './usage.js';
 import { streamCompletion } from './providers/index.js';
 import { resolve as resolveModelId } from './models.js';
-import { isAuto, pickAutoModel } from './autoPick.js';
+import { isAuto, pickAutoModel, NO_AUTO_MESSAGE } from './autoPick.js';
 import { availableTools, assessRisk, riskReason, TOOLS_BY_NAME } from './tools/definitions.js';
 import { UNTRUSTED_RULE } from './tools/untrusted.js';
 import { executeTool } from './tools/execute.js';
@@ -759,38 +759,21 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
   let messages = await store.listMessages(userId, chatId);
 
   /**
-   * Resolve the model, expanding the special `auto` id to the best free model
-   * the account can actually run right now.
-   *
-   * `auto` is resolved per turn rather than once, because "best free" moves:
-   * the library refreshes, keys go into and come out of cooldown. The vision
-   * toggle is honoured, and a turn that carries an image lifts it for that turn
-   * regardless — a model that cannot see the image would be answering half the
-   * message. When nothing free is reachable, the turn stops with a plain message
-   * rather than quietly falling back to a paid model.
+   * Resolve the model, expanding the special `auto` id to OpenRouter's free
+   * router, which picks a free model per request — including one that reads
+   * images when the turn carries one. Checked per turn because keys go into and
+   * come out of cooldown. With no usable OpenRouter key the turn stops with a
+   * plain message rather than quietly falling back to a paid model.
    */
   const wantModel = modelId || prefs.defaultModel;
   let entry;
-  let autoNotice = null;
   if (isAuto(wantModel)) {
-    const hasImages = messages.some((m) => (m.attachments || []).some((a) => a.kind === 'image'));
-    const vision = !!prefs.autoVision || hasImages;
-    const picked = await pickAutoModel(userId, { vision });
-    if (!picked) {
-      emit('error', {
-        message:
-          'Auto needs an OpenRouter or OrcaRouter key with a free model available. ' +
-          'Add one in Settings → Providers, or pick a specific model.',
-        code: 'no_auto_model',
-      });
+    entry = await pickAutoModel(userId);
+    if (!entry) {
+      emit('error', { message: NO_AUTO_MESSAGE, code: 'no_auto_model' });
       emit('done', { stopReason: 'no_auto_model' });
       return;
     }
-    entry = await resolveModelId(picked.id);
-    autoNotice =
-      !prefs.autoVision && hasImages
-        ? `Auto used ${picked.label || picked.id} so it could read the image.`
-        : `Auto chose ${picked.label || picked.id}.`;
   } else {
     entry = await resolveModelId(wantModel);
   }
@@ -807,8 +790,6 @@ export async function runAgent({ userId, user, chatId, modelId, decision, decisi
     return;
   }
 
-  // Say which model auto landed on, so the choice is never invisible.
-  if (autoNotice) emit('status', { message: autoNotice });
   // A built-in the provider has shut down resolves to its replacement; say so,
   // rather than let the model — and the bill — change without a word. See
   // RETIREMENTS in providers/catalog.js.

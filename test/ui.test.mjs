@@ -1616,21 +1616,20 @@ section('the model is one setting, with one control');
   check('the chip shows what was picked', await page.evaluate(
     (m) => document.getElementById('model-chip').title.includes(m), viaChip), viaChip);
 
-  // The duplicate that used to live in Settings → Models is gone. Its own hint
-  // admitted it was the same act as pressing the chip, and two controls for one
-  // value is the arrangement every check above it existed to police.
+  // Settings has no Models tab any more: the chip is the one way to choose a
+  // model, and the tab's place is taken by Languages.
   await page.click('#open-settings');
   await page.waitForTimeout(500);
-  await page.click('.tab[data-tab="models"]');
-  await page.waitForTimeout(300);
   const settingsPanel = await page.evaluate(() => ({
     field: !!document.getElementById('default-model-display'),
     button: !!document.getElementById('pick-default-model'),
-    stillUseful: !!document.getElementById('add-model'),
+    modelsTab: !!document.querySelector('.tab[data-tab="models"]'),
+    languagesTab: !!document.querySelector('.tab[data-tab="languages"]'),
   }));
   check('Settings no longer carries a second copy of the model', !settingsPanel.field);
   check('nor a second way to change it', !settingsPanel.button);
-  check('while the rest of the Models tab remains', settingsPanel.stillUseful);
+  check('the Models tab is gone', !settingsPanel.modelsTab);
+  check('and Languages has taken its place', settingsPanel.languagesTab);
 
   // The reload is what used to expose the disagreement.
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -1825,10 +1824,10 @@ section('the interface speaks Vietnamese');
 {
   await page.click('#open-settings');
   await page.waitForTimeout(400);
-  await page.click('.tab[data-tab="behaviour"]');
+  await page.click('.tab[data-tab="languages"]');
   await page.waitForTimeout(300);
 
-  const offered = await page.$$eval('#language option', (els) => els.map((e) => e.value));
+  const offered = await page.$$eval('#language input[name="language"]', (els) => els.map((e) => e.value));
   check('both languages are offered', offered.join() === 'vi,en', offered.join(' '));
 
   const before = await page.evaluate(() => ({
@@ -1836,20 +1835,31 @@ section('the interface speaks Vietnamese');
     lang: document.documentElement.lang,
   }));
 
-  await page.selectOption('#language', 'vi');
+  await page.check('#language input[value="vi"]');
   await page.waitForTimeout(700);
 
   const after = await page.evaluate(() => ({
     newChat: document.querySelector('#new-chat .rail__label').textContent.trim(),
     settings: document.querySelector('#open-settings .rail__label').textContent.trim(),
-    modelsTab: document.querySelector('.tab[data-tab="models"]').textContent.trim(),
+    languagesTab: document.querySelector('.tab[data-tab="languages"]').textContent.trim(),
     placeholder: document.getElementById('input').placeholder,
     lang: document.documentElement.lang,
+    // The screens the user reported in English: the model picker and the rest
+    // of Settings. Read from markup that is not on screen, which is fine —
+    // applyI18n fills every node whether its dialog is open or not.
+    pickerTitle: document.querySelector('#models .sheet__head h2').textContent.trim(),
+    pickerSearch: document.getElementById('model-search').placeholder,
+    freeFilter: document.querySelector('#tier-filter [data-tier="free"]').textContent.trim(),
+    behaviourHint: document.querySelector('#behaviour-elsewhere strong').textContent.trim(),
   }));
+  check('the model picker title is Vietnamese', after.pickerTitle === 'Chọn model', after.pickerTitle);
+  check('and its search box', /^Tìm/.test(after.pickerSearch), after.pickerSearch.slice(0, 30));
+  check('and its price filter', after.freeFilter === 'Miễn phí', after.freeFilter);
+  check('and a hint with markup inside keeps its markup', after.behaviourHint === 'Chế độ và mức suy luận', after.behaviourHint);
   check('the sidebar changes language', after.newChat !== before.newChat, `${before.newChat} → ${after.newChat}`);
   check('and it is actually Vietnamese', /Cuộc trò chuyện/.test(after.newChat), after.newChat);
   check('settings label too', /Cài đặt/.test(after.settings), after.settings);
-  check('the settings tabs too', /Model/.test(after.modelsTab), after.modelsTab);
+  check('the settings tabs too', /Ngôn ngữ/.test(after.languagesTab), after.languagesTab);
   check('and the composer placeholder', /Hỏi bất cứ điều gì/.test(after.placeholder), after.placeholder.slice(0, 40));
   check('the document language is stamped', after.lang === 'vi', after.lang);
   check('no untranslated key leaked through', !/^[a-z]+\.[a-z]+/i.test(after.newChat), after.newChat);
@@ -1867,9 +1877,9 @@ section('the interface speaks Vietnamese');
   // Back to English so later sections read the labels they expect.
   await page.click('#open-settings');
   await page.waitForTimeout(500);
-  await page.click('.tab[data-tab="behaviour"]');
+  await page.click('.tab[data-tab="languages"]');
   await page.waitForTimeout(300);
-  await page.selectOption('#language', 'en');
+  await page.check('#language input[value="en"]');
   await page.waitForTimeout(700);
   const restored = await page.evaluate(() => document.querySelector('#new-chat .rail__label').textContent.trim());
   check('and switching back to English works', restored === 'New chat', restored);

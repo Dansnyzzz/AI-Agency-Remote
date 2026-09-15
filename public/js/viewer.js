@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { t } from './i18n.js';
+import { t, currentLanguage } from './i18n.js';
 import { escapeHtml, renderMarkdown, wireCopyButtons } from './markdown.js';
 import { openMenu } from './menu.js';
 import { toast } from './render.js';
@@ -101,8 +101,8 @@ const ago = (value) => {
   const seconds = Math.round((Date.now() - then) / 1000);
   if (seconds < 60) return t('time.justNow');
   if (seconds < 3600) return t('time.minShort', { n: Math.round(seconds / 60) });
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
-  return new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (seconds < 86400) return t('time.hoursShort', { n: Math.round(seconds / 3600) });
+  return new Date(then).toLocaleDateString(currentLanguage(), { month: 'short', day: 'numeric' });
 };
 
 /** 0 → A, 26 → AA. The column headers of a spreadsheet. */
@@ -237,7 +237,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
           (bullets ? `<ul>${bullets}</ul>` : '') +
           tables +
           (slide.notes
-            ? `<div class="slide__notes"><span>Notes</span>${escapeHtml(slide.notes).replace(/\n/g, '<br>')}</div>`
+            ? `<div class="slide__notes"><span>${escapeHtml(t('viewer.notes'))}</span>${escapeHtml(slide.notes).replace(/\n/g, '<br>')}</div>`
             : '') +
           '</article>'
         );
@@ -397,7 +397,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     // preview and the source is the Code tab.
     else tabs.push(['preview', eyeMark, labelFor(preview.kind)]);
     // A PDF that has text worth reading, for a browser that will not frame one.
-    if (preview.kind === 'pdf' && preview.text) tabs.push(['text', textMark, 'Text']);
+    if (preview.kind === 'pdf' && preview.text) tabs.push(['text', textMark, t('viewer.tab.text')]);
     if (file.source != null && file.origin === 'generated') {
       tabs.push(['source', codeMark, runnable() ? t('viewer.tab.code') : t('viewer.tab.source')]);
     }
@@ -900,7 +900,7 @@ export function createViewer({ onChange, onOpen, onClose } = {}) {
     } catch (err) {
       toast(err.message, 'error');
       button.disabled = false;
-      button.textContent = 'Save';
+      button.textContent = t('action.save');
     }
   });
 

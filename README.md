@@ -198,14 +198,15 @@ is a catalogue entry with an expiry date nobody is told about. Two things follow
 
 - The built-in Google entries are the **`-latest` aliases**, which Google rotates as models change,
   rather than version numbers that quietly stop working.
-- **Settings → Models → Check models** calls every built-in with your own key — one token in, one
-  token out — and says which run, which are gone, and which were refused for a reason that is about
-  the key rather than the model. Listing cannot answer that question; only calling can.
+- `POST /api/models/audit` calls every built-in with your own key — one token in, one token out —
+  and says which run, which are gone, and which were refused for a reason that is about the key
+  rather than the model. Listing cannot answer that question; only calling can. (It no longer has a
+  button: Settings lost its Models tab to Languages, and the header chip is the one place to choose.)
 
 And when one does fail mid-turn, the provider's nested JSON is unwrapped to the sentence inside it
 and the model is named, instead of a wall of escaped braces arriving halfway through an answer.
-Paste `inclusionai/ling-3.0-flash:free` — or the model's OpenRouter URL — and it is verified against
-OpenRouter's live catalogue, then **saved for everyone**. One person finding a good free model makes
+Send `inclusionai/ling-3.0-flash:free` — or the model's OpenRouter URL — to `POST /api/models` and it
+is verified against OpenRouter's live catalogue, then **saved for everyone**. One person finding a good free model makes
 it selectable for the whole deployment, with no link to paste again.
 
 Two filters are applied on import, both for the same reason — a model in the picker should actually
@@ -252,6 +253,35 @@ first by release date. The search box reads intent out of what you type:
 
 Only the leftover words become a text search, so the filters and the words cooperate instead of
 fighting each other.
+
+### Auto
+
+**Auto** at the top of the picker is OpenRouter's own free router,
+[`openrouter/free`](https://openrouter.ai/openrouter/free). OpenRouter chooses a free model for each
+message from the ones that are up right now and that support what the message needs — tool calling,
+and reading images when one is attached — so there is nothing to toggle. It needs an OpenRouter key;
+with none usable (or every one rate limited) the turn stops and says so rather than falling back to a
+paid model.
+
+---
+
+## Languages
+
+**Settings → Languages** switches the whole interface, and the choice follows your account onto every
+device. English and Vietnamese are complete — every label, hint, placeholder, tooltip, notification,
+and the sentences the server itself writes (errors, status lines while a turn runs, why an action
+needs approval, connector help).
+
+Two tests keep it that way. `test/i18n.test.mjs` walks `index.html` and fails on any visible text,
+placeholder, title, aria-label or alt that no `data-i18n*` attribute covers, and on a key used by any
+module but missing from either dictionary. `test/server-i18n.test.mjs` reads every sentence out of
+the server's source (`scripts/server-messages.js`) and fails on one with no entry in
+`server/i18n/vi.js`, or a translation that drops a value.
+
+The server translates at the points a sentence leaves it — the `error` of every JSON response, the
+events of the agent stream, a few help-text payloads — using the `X-Language` header the browser
+sends. Text the server did not write, such as a provider's own error or a file name, is passed through
+unchanged.
 
 ---
 
@@ -690,8 +720,8 @@ page's own header, so the two never drift apart.
 | **Archive** | Off this shelf and onto the archived one, with everything still in it. Choose **Archived** from the sort pill to see it; **Restore** brings it back. Archived projects are never mixed into the main list — that is the entire point of archiving one. |
 | **Delete** | Permanent, set apart from the rest, and it asks. The sources go; the conversations stay. |
 
-> This slot used to be the model library. The model picker is one press away on the header chip and
-> in **Settings → Models**, so the sidebar goes to the thing you come back to across days.
+> This slot used to be the model library. The model picker is one press away on the header chip, so
+> the sidebar goes to the thing you come back to across days.
 
 ---
 
@@ -1606,7 +1636,8 @@ server/
   skills/             procedures that ship with the app
   roleModel.js        which calls deserve the conversation's model, and which
                       go to a cheaper one
-  autoPick.js         the `auto` model id, resolved per account
+  autoPick.js         the `auto` model id → OpenRouter's free router
+  i18n/               the server's own sentences, in the reader's language
   util/trace.js       the request id every log line carries
 worker/               the process that runs on someone's machine
   browser.js          the browser sandbox, driven over CDP
@@ -1619,6 +1650,7 @@ scripts/
   launch.js           one command: web app + worker + optional tunnel
   whoami.js           which accounts exist in this database
   reset-password.js   the way back in when email is not configured
+  server-messages.js  every sentence the server writes, read from the source
 test/                 the tenancy isolation suite, and one per area besides
 ```
 

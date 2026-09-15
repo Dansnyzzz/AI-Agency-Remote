@@ -231,11 +231,8 @@ export function createProjectPage({ openChat, startChat, onBack }) {
       chatList.innerHTML = `
         <div class="project__empty">
           <div class="blank__ring">${chatMark}</div>
-          <div class="blank__say">No conversations in this project yet.</div>
-          <p class="hint" style="max-width:44ch">
-            Anything you ask above starts here and stays here, with the project's instructions
-            and sources already in front of it.
-          </p>
+          <div class="blank__say">${escapeHtml(t('proj.noChats'))}</div>
+          <p class="hint" style="max-width:44ch">${escapeHtml(t('proj.noChatsHint'))}</p>
         </div>`;
       return;
     }
@@ -263,7 +260,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
     side.innerHTML = `
       <section class="panel-card">
         <div class="panel-card__head">
-          <span class="panel-card__name">Instructions</span>
+          <span class="panel-card__name">${escapeHtml(t('proj.instructions'))}</span>
           <button class="panel-card__add" id="pp-edit-instructions" type="button"
                   aria-label="${escapeHtml(editingInstructions ? t('action.cancel') : t('proj.editInstructions'))}">${
                     editingInstructions ? '✕' : '✎'
@@ -285,15 +282,12 @@ export function createProjectPage({ openChat, startChat, onBack }) {
 
       <section class="panel-card">
         <div class="panel-card__head">
-          <span class="panel-card__name">Memory</span>
+          <span class="panel-card__name">${escapeHtml(t('proj.memory'))}</span>
           <span class="panel-card__tag" title="${escapeHtml(t('proj.memoryScope'))}">${escapeHtml(t('proj.accountWide'))}</span>
         </div>
         ${
           memory.length
-            ? `<p class="panel-card__say" style="margin-bottom:8px">
-                 What the assistant has remembered about you. It is the <strong>same set of notes in every
-                 project</strong> and in ordinary chats — not a memory belonging to this one.
-               </p>` +
+            ? `<p class="panel-card__say" style="margin-bottom:8px">${t('proj.memoryLede')}</p>` +
               memory
                 .map(
                   (note) => `
@@ -305,17 +299,13 @@ export function createProjectPage({ openChat, startChat, onBack }) {
               </div>`,
                 )
                 .join('')
-            : `<p class="panel-card__say">
-                 Nothing remembered yet. Tell the assistant something worth keeping — how you like things
-                 written, what you are working on — and it saves a note. Those notes are shared across
-                 every project on this account, not held by this one.
-               </p>`
+            : `<p class="panel-card__say">${escapeHtml(t('proj.memoryEmpty'))}</p>`
         }
       </section>
 
       <section class="panel-card">
         <div class="panel-card__head">
-          <span class="panel-card__name">Context</span>
+          <span class="panel-card__name">${escapeHtml(t('proj.context'))}</span>
           <button class="panel-card__add" id="pp-add-source" type="button"
                   aria-haspopup="menu" aria-label="${escapeHtml(t('proj.addContext'))}">+</button>
         </div>
@@ -339,12 +329,10 @@ export function createProjectPage({ openChat, startChat, onBack }) {
         }
         <div class="dropzone" id="pp-dropzone" tabindex="0" role="button">
           <span>${uploadMark}</span>
-          <span>Drop a file here, or press to choose one</span>
-          <span style="font-size:11.5px">PDF, Word, Excel, PowerPoint, text and code</span>
+          <span>${escapeHtml(t('proj.dropHere'))}</span>
+          <span style="font-size:11.5px">${escapeHtml(t('proj.dropKinds'))}</span>
         </div>
-        <p class="panel-card__say" style="margin-top:10px">
-          Sources are stored as the text read out of them, which is what the assistant quotes.
-        </p>
+        <p class="panel-card__say" style="margin-top:10px">${escapeHtml(t('proj.sourcesAsText'))}</p>
       </section>`;
 
     wireSide();
@@ -443,7 +431,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
     let added = 0;
 
     for (const [i, file] of files.entries()) {
-      if (zone) zone.lastElementChild.textContent = `Reading ${file.name}… (${i + 1} of ${files.length})`;
+      if (zone) zone.lastElementChild.textContent = t('proj.reading', { name: file.name, n: i + 1, total: files.length });
       try {
         await api.addProjectFile(data.project.id, {
           name: file.name,
@@ -599,7 +587,7 @@ export function createProjectPage({ openChat, startChat, onBack }) {
       ask.value = '';
       send.disabled = true;
 
-      side.innerHTML = '<div class="viewer__loading"><span class="spinner"></span> Loading…</div>';
+      side.innerHTML = `<div class="viewer__loading"><span class="spinner"></span> ${escapeHtml(t('common.loading'))}</div>`;
       chatList.innerHTML = '';
       try {
         const fresh = await api.project(id);

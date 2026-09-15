@@ -1,13 +1,12 @@
 /**
- * Auto model picking — "choose the best free model" without a quality column.
+ * Auto model — OpenRouter's free router.
  *
- * There is no objective "strength" in a model's metadata, so best is decided by
- * a curated family order (deepseek first, as the strongest free families tend to
- * lead) and, within a family, the newest and roomiest. What the tests pin is the
- * judgement around that: a model is only dropped when EVERY key for its provider
- * is resting — because someone stacking keys for fallback should have all of
- * them spent before a model disappears — and the vision filter, and that nothing
- * paid is ever chosen.
+ * Auto no longer ranks our library; it expands to `openrouter/free`, which
+ * OpenRouter routes per request to a free model that supports what the request
+ * needs. What the tests pin: the expansion is exactly that router, it is free
+ * and never blocks an image, a concrete id is untouched, and Auto is refused
+ * (not quietly swapped for something paid) when no OpenRouter key is usable —
+ * dropped only when EVERY key is resting.
  *
  *   node test/autopick.test.mjs
  */
@@ -32,8 +31,8 @@ const check = (label, pass, detail = '') => {
 const { initStore } = await import('../server/store/index.js');
 const store = await initStore();
 const { hashPassword } = await import('../server/crypto.js');
-const { pickAutoModel } = await import('../server/autoPick.js');
-const { setApiKey, addApiKey, markKeyLimited, markKeyDead, clearKeyRest } = await import('../server/settings.js');
+const { pickAutoModel, resolveForUser, AUTO_ROUTER, isAuto } = await import('../server/autoPick.js');
+const { setApiKey, addApiKey, markKeyLimited, clearKeyRest } = await import('../server/settings.js');
 
 const uid = 'u-auto';
 await store.createUser({
@@ -52,96 +51,64 @@ const model = (over) => ({
   family: over.family,
   label: over.id,
   description: null,
-  context: over.context ?? 64_000,
+  context: 64_000,
   maxOutput: 8192,
-  priceIn: over.free === false ? 5 : 0,
-  priceOut: over.free === false ? 25 : 0,
-  isFree: over.free !== false,
-  vision: !!over.vision,
-  releasedAt: over.releasedAt || '2026-01-01T00:00:00.000Z',
+  priceIn: 0,
+  priceOut: 0,
+  isFree: true,
+  vision: false,
+  releasedAt: '2026-01-01T00:00:00.000Z',
 });
 
 await store.upsertModels([
-  model({ id: 'openrouter/qwen/qwen3-30b:free', family: 'qwen', releasedAt: '2026-06-01T00:00:00.000Z' }),
-  model({ id: 'openrouter/deepseek/deepseek-v4-flash:free', family: 'deepseek', releasedAt: '2026-05-01T00:00:00.000Z' }),
-  model({ id: 'openrouter/deepseek/deepseek-r1:free', family: 'deepseek', releasedAt: '2026-07-01T00:00:00.000Z', vision: false }),
-  model({ id: 'openrouter/deepseek/deepseek-vl:free', family: 'deepseek', releasedAt: '2026-03-01T00:00:00.000Z', vision: true }),
-  model({ id: 'openrouter/meta-llama/llama-3.3:free', family: 'meta' }),
-  model({ id: 'openrouter/anthropic/claude:paid', family: 'anthropic', free: false }),
+  model({ id: 'openrouter/deepseek/deepseek-r1:free', family: 'deepseek' }),
+  model({ id: 'orcarouter/deepseek/x:free', family: 'deepseek', provider: 'orcarouter' }),
 ]);
 
-section('best free is chosen by family order, then recency');
+// The deployment's shared key would make every account reachable; this suite
+// is about the account's own keys.
+delete process.env.OPENROUTER_API_KEY;
+
+section("auto expands to OpenRouter's free router");
 {
   await setApiKey(uid, 'openrouter', 'k1');
   clearKeyRest(uid, 'openrouter');
-  const m = await pickAutoModel(uid, { vision: false });
-  // deepseek outranks qwen and meta; within deepseek the newest is r1 (Jul).
-  check('a deepseek model wins over qwen and meta', m?.family === 'deepseek', m?.id);
-  check('and the newest deepseek at that', m?.id === 'openrouter/deepseek/deepseek-r1:free', m?.id);
-  check('and nothing paid is ever chosen', m?.isFree !== false, m?.id);
+  const m = await pickAutoModel(uid);
+  check('the id is openrouter/free on the openrouter provider', m?.provider === 'openrouter' && m?.model === 'openrouter/free', m?.id);
+  check('it is free', m?.isFree === true && m?.price?.in === 0 && m?.price?.out === 0);
+  check('it never blocks an image — the router picks a model that reads it', m?.vision === true);
+  check('only the special id is auto', isAuto('auto') && !isAuto('openrouter/openrouter/free'));
+  check('the returned entry is a copy, not the frozen constant', m !== AUTO_ROUTER);
 }
 
-section('vision on narrows to models that can see');
+section('auto is dropped only when every OpenRouter key is resting');
 {
-  const m = await pickAutoModel(uid, { vision: true });
-  // r1 has no vision; the only deepseek that sees is deepseek-vl.
-  check('the chosen model can read images', m?.vision === true, m?.id);
-  check('and it is still the best such deepseek', m?.id === 'openrouter/deepseek/deepseek-vl:free', m?.id);
-}
-
-section('a model is dropped only when every key for its provider is resting');
-{
-  // deepseek/qwen/meta are all openrouter here. Rest one of two keys: still
-  // available, because the other key can serve them.
   await setApiKey(uid, 'openrouter', 'k1');
   await addApiKey(uid, 'openrouter', 'k2');
   clearKeyRest(uid, 'openrouter');
   markKeyLimited(uid, 'openrouter', 0, Date.now() + 60_000);
-  const stillThere = await pickAutoModel(uid, { vision: false });
-  check('one resting key of two does not drop the model', stillThere?.family === 'deepseek', stillThere?.id);
-
-  // Rest the second key too: now no key can serve openrouter, so nothing free
-  // is reachable and the pick is empty rather than a model that cannot run.
+  check('one resting key of two keeps auto available', (await pickAutoModel(uid))?.model === 'openrouter/free');
   markKeyLimited(uid, 'openrouter', 1, Date.now() + 60_000);
-  const gone = await pickAutoModel(uid, { vision: false });
-  check('both keys resting leaves no reachable model', gone === null, gone?.id || 'null');
+  check('both keys resting leaves auto unavailable', (await pickAutoModel(uid)) === null);
   clearKeyRest(uid, 'openrouter');
 }
 
-section('no key and no free model both yield nothing, not a guess');
+section('an OrcaRouter key alone does not run auto');
 {
-  const { setApiKey: setKey } = await import('../server/settings.js');
-  // A provider the account has no key for: its free models are unreachable.
-  await store.upsertModels([model({ id: 'orcarouter/deepseek/x:free', family: 'deepseek', provider: 'orcarouter' })]);
-  clearKeyRest(uid, 'openrouter');
-  await setKey(uid, 'openrouter', 'k1'); // openrouter yes, orcarouter no
-  const m = await pickAutoModel(uid, { vision: false });
-  check('an unreachable provider is skipped', m?.provider === 'openrouter', m?.id);
-
-  // Strip every key: nothing is reachable at all.
-  await setKey(uid, 'openrouter', '');
-  markKeyDead(uid, 'orcarouter', 0);
-  const none = await pickAutoModel(uid, { vision: false });
-  check('no usable key yields null', none === null, none?.id || 'null');
+  await setApiKey(uid, 'openrouter', '');
+  await setApiKey(uid, 'orcarouter', 'sk-orca-k');
+  check('no OpenRouter key yields null', (await pickAutoModel(uid)) === null);
 }
 
 section('resolveForUser expands auto, and passes a real id straight through');
 {
-  const { resolveForUser } = await import('../server/autoPick.js');
-  const { setApiKey, clearKeyRest } = await import('../server/settings.js');
   await setApiKey(uid, 'openrouter', 'k1');
   clearKeyRest(uid, 'openrouter');
-
-  // A real id is resolved as-is — auto handling must not touch the normal path.
   const real = await resolveForUser(uid, 'anthropic/claude-opus-5');
   check('a concrete id resolves to that model', real?.id === 'anthropic/claude-opus-5', real?.id);
-
-  // 'auto' becomes a concrete, runnable free model — the thing sub-agents and
-  // compaction could not do before, which crashed the moment auto was selected.
   const picked = await resolveForUser(uid, 'auto');
-  check('auto resolves to a concrete free model', picked?.provider === 'openrouter' && picked?.id !== 'auto', picked?.id);
+  check('auto resolves to the free router', picked?.model === 'openrouter/free', picked?.id);
 
-  // With nothing free reachable, it is a clear throw rather than a broken id.
   await setApiKey(uid, 'openrouter', '');
   let threw = '';
   try {
@@ -149,7 +116,7 @@ section('resolveForUser expands auto, and passes a real id straight through');
   } catch (err) {
     threw = err.message;
   }
-  check('auto with no free model throws a clear error', /free model/i.test(threw), threw);
+  check('auto with no OpenRouter key throws a clear error', /OpenRouter key/i.test(threw), threw);
 }
 
 section('the library filters by provider, so a row limit cannot hide one');

@@ -454,7 +454,7 @@ async function showWidgetTool({ title, svg, html }) {
  */
 async function extractTool({ url, what, fields }, { userId, chatId, signal }) {
   const prefs = await getPrefs(userId);
-  const entry = await resolveForUser(userId, prefs.defaultModel, { vision: false });
+  const entry = await resolveForUser(userId, prefs.defaultModel);
   return extractFromPage({
     url,
     what,

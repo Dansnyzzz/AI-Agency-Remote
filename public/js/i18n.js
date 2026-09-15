@@ -17,8 +17,9 @@ import { en } from './locales/en.js';
 
 const LOCALES = { vi, en };
 export const LANGUAGES = [
-  { id: 'vi', label: 'Tiếng Việt' },
-  { id: 'en', label: 'English' },
+  // `label` in the language itself, `english` beside it for everyone else.
+  { id: 'vi', label: 'Tiếng Việt', english: 'Vietnamese' },
+  { id: 'en', label: 'English', english: 'English' },
 ];
 
 const STORAGE_KEY = 'ai-remote-language';
@@ -126,6 +127,10 @@ export function applyI18n(root = document) {
    */
   for (const node of root.querySelectorAll('[data-i18n-aria-label]')) {
     node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
+  }
+  // An image that means something is described in the reader's language too.
+  for (const node of /** @type {NodeListOf<HTMLImageElement>} */ (root.querySelectorAll('[data-i18n-alt]'))) {
+    node.alt = t(node.dataset.i18nAlt);
   }
   document.documentElement.lang = current;
 }

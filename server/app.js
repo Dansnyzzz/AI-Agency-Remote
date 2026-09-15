@@ -79,6 +79,7 @@ import { mountChatRoutes } from './routes/chats.js';
 import { mountFileRoutes } from './routes/files.js';
 import { mountWorkflowRoutes } from './routes/workflows.js';
 import { mountConnectorRoutes } from './routes/connectors.js';
+import { translateErrors, translateEvent, languageOf } from './i18n/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -137,7 +138,7 @@ export function readableFailure(error) {
     const model = /models\/([\w.-]+)/.exec(message)?.[1];
     return (
       `${model ? `The model "${model}"` : 'That model'} is not available on this key. ` +
-      `${message} — pick another model from the picker, or check Settings → Models → Check models.`
+      `${message} — pick another model from the picker.`
     );
   }
 
@@ -165,6 +166,9 @@ export function createApp() {
    * this setting changes nothing.
    */
   app.set('trust proxy', 1);
+  // Before the body parser, so the error it raises for an oversized body is
+  // translated too — see server/i18n.
+  app.use(translateErrors);
   // Attachments arrive as base64 inside the JSON body, and base64 costs a third
   // more than the bytes it carries. Six files at the 5MB-each limit is the worst
   // case this has to accept without a confusing 413.
@@ -1519,9 +1523,12 @@ export function createApp() {
       const controller = new AbortController();
       res.on('close', () => controller.abort());
 
+      // The stream's sentences — errors, status lines, a retry's reason — in
+      // the language the browser asked for. See server/i18n.
+      const language = languageOf(req);
       const emit = (event, data) => {
         if (res.writableEnded) return;
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data ?? {})}\n\n`);
+        res.write(`event: ${event}\ndata: ${JSON.stringify(translateEvent(data, language) ?? {})}\n\n`);
       };
 
       /**

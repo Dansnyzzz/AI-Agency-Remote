@@ -57,7 +57,7 @@ export function createScreen() {
       button.type = 'button';
       button.className = `screen__tab${tab.active ? ' is-active' : ''}`;
       button.textContent = tab.host || t('screen.newTab');
-      button.title = `Tab ${tab.index}: ${tab.host}`;
+      button.title = t('screen.tabTitle', { n: tab.index, host: tab.host || '' });
       button.addEventListener('click', () => send({ type: 'tab', key: String(tab.index) }));
       tabStrip.append(button);
     }
@@ -89,7 +89,7 @@ export function createScreen() {
     // own browser window; the desktop mirror is the whole machine. They are not
     // interchangeable and confusing them is how "close it" goes wrong.
     const desktop = meta?.source === 'desktop';
-    source.textContent = desktop ? 'desktop' : 'sandbox';
+    source.textContent = desktop ? t('screen.sourceDesktop') : t('screen.sourceSandbox');
     source.title = desktop
       ? t('screen.wholeMachine')
       : t('screen.sandboxNote');

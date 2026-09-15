@@ -92,7 +92,7 @@ export async function modelForRole(userId, role, entry, prefs = null) {
     const settings = prefs || (await getStore().getUserSetting(userId, 'prefs')) || {};
 
     if (settings.cheapModel) {
-      const chosen = await resolveForUser(userId, settings.cheapModel, { vision: false });
+      const chosen = await resolveForUser(userId, settings.cheapModel);
       if (chosen) return note(role, entry, chosen, 'set in preferences');
     }
 

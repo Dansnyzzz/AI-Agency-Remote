@@ -287,7 +287,7 @@ function attachmentStrip(files) {
     if (file.id) {
       chip.type = 'button';
       chip.dataset.file = file.id;
-      chip.title = `Open ${file.name || 'this file'}`;
+      chip.title = file.name ? t('chat.openNamed', { name: file.name }) : t('chat.openThisFile');
     }
     const kind = el('span', 'bubble__file-ext');
     kind.textContent = extensionBadge(file.name);

@@ -63,7 +63,7 @@ export async function runDeepResearch({ question, userId, user, chatId, signal, 
   const search = deps.search;
   const cap = deps.cap || DEFAULT_CAP;
 
-  const entry = deps.entry || (await resolveForUser(userId, (await getPrefs(userId)).defaultModel, { vision: false }));
+  const entry = deps.entry || (await resolveForUser(userId, (await getPrefs(userId)).defaultModel));
   const budget = { spent: 0, cap, tokensIn: 0, tokensOut: 0 };
   const id = crypto.randomUUID();
 

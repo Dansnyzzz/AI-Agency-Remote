@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { getStore } from '../store/index.js';
 import { sealConfig, forgetMcp, probeMcpServer, mcpStatus, slugify } from '../mcp/registry.js';
 import { searchCatalogue } from '../mcp/catalogue.js';
+import { languageOf, translateMessage } from '../i18n/index.js';
 
 /**
  * Lifted out of server/app.js — see the note on mountWorkspaceRoutes for why.
@@ -32,7 +33,12 @@ export function mountMcpRoutes(api, { wrap, body }) {
   api.get(
     '/mcp/catalogue',
     wrap(async (req, res) => {
-      res.json({ servers: searchCatalogue(req.query.q, Number(req.query.limit) || 12) });
+      const language = languageOf(req);
+      const servers = searchCatalogue(req.query.q, Number(req.query.limit) || 12).map((server) => ({
+        ...server,
+        blurb: translateMessage(server.blurb, language),
+      }));
+      res.json({ servers });
     }),
   );
 
@@ -59,7 +65,11 @@ export function mountMcpRoutes(api, { wrap, body }) {
       // for here rather than remembered, because "it worked when I added it" is
       // exactly the state that goes stale.
       const status = await mcpStatus(req.user.id).catch(() => ({ servers: [] }));
-      res.json({ servers, status: status.servers });
+      const language = languageOf(req);
+      res.json({
+        servers,
+        status: status.servers.map((s) => (s.error ? { ...s, error: translateMessage(s.error, language) } : s)),
+      });
     }),
   );
 

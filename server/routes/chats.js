@@ -6,6 +6,7 @@ import { verifyOwned } from '../attachments.js';
 import { deriveTitle, needsApproval as pendingApproval } from '../agent.js';
 import { compact as compactChat, measure as measureContext } from '../compact.js';
 import { getPrefs } from '../settings.js';
+import { languageOf, translateMessage } from '../i18n/index.js';
 
 /**
  * Lifted out of server/app.js — see the note on mountWorkspaceRoutes for why.
@@ -86,7 +87,7 @@ export function mountChatRoutes(api, { wrap, body, isRunning }) {
             name: c.name,
             input: c.input,
             needsApproval: gated.some((p) => p.id === c.id),
-            reason: riskReason(c.name, c.input),
+            reason: translateMessage(riskReason(c.name, c.input), languageOf(req)),
           }));
         }
       }

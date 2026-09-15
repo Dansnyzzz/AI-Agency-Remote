@@ -5,6 +5,7 @@
  * never inject HTML. Supports headings, lists, code fences, inline formatting,
  * blockquotes, tables, links and rules — the subset chat models actually emit.
  */
+import { t } from './i18n.js';
 
 export function escapeHtml(text) {
   return String(text ?? '')
@@ -65,7 +66,7 @@ function codeBlock(language, body) {
   return (
     `<div class="codeblock">` +
     `<div class="codeblock__bar"><span>${escapeHtml(label)}</span>` +
-    `<button class="copy-btn" type="button" data-copy>Copy</button></div>` +
+    `<button class="copy-btn" type="button" data-copy>${escapeHtml(t('chat.copy'))}</button></div>` +
     `<pre><code>${escapeHtml(body)}</code></pre>` +
     `</div>`
   );
@@ -244,12 +245,12 @@ export function wireCopyButtons(root) {
     if (!code) return;
     try {
       await navigator.clipboard.writeText(code.textContent);
-      btn.textContent = 'Copied';
+      btn.textContent = t('worker.copied');
       setTimeout(() => {
-        btn.textContent = 'Copy';
+        btn.textContent = t('chat.copy');
       }, 1400);
     } catch {
-      btn.textContent = 'Press ⌘/Ctrl+C';
+      btn.textContent = t('devices.pressCtrlC');
     }
   });
 }
