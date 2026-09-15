@@ -1,4 +1,4 @@
--- Synapse schema. Safe to run repeatedly.
+-- AI Remote schema. Safe to run repeatedly.
 --
 -- Everything a person owns is scoped by user_id, including the worker that runs
 -- shell commands on their machine. That scoping is the security boundary: one

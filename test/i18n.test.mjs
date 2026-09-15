@@ -81,8 +81,17 @@ section('the product is called Synapse everywhere a person reads its name');
    * Only these may still say it, because an existing install depends on the
    * old spelling: the scheduled-task name the worker autostart registered (an
    * uninstall has to find it), and the folder downloaded files already live in.
+   * And schema.sql, whose first-line comment is part of the fingerprint that
+   * decides whether every database migrates: renaming a comment is not worth a
+   * schema version, and nobody reads it but a developer.
    */
-  const ALLOWED = new Set(['scripts/autostart.js', 'worker/tools.js', 'test/attachments.test.mjs', 'test/i18n.test.mjs']);
+  const ALLOWED = new Set([
+    'scripts/autostart.js',
+    'worker/tools.js',
+    'server/store/schema.sql',
+    'test/attachments.test.mjs',
+    'test/i18n.test.mjs',
+  ]);
   const root = path.join(import.meta.dirname, '..');
   const walk = (dir) =>
     fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((entry) => {
