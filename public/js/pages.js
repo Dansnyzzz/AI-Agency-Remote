@@ -240,7 +240,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
 
   async function load() {
     const view = views[showing];
-    body.innerHTML = '<div class="viewer__loading"><span class="spinner"></span> Loading…</div>';
+    body.innerHTML = `<div class="viewer__loading"><span class="spinner"></span> ${escapeHtml(t('common.loading'))}</div>`;
     try {
       items = await view.load();
       await draw();
@@ -425,7 +425,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
           }">${peek ? escapeHtml(peek) : artifactMark}</div>
           <div class="card__foot">
             <span class="card__name">${escapeHtml(file.name)}</span>
-            <span class="card__when">Edited ${escapeHtml(ago(file.created_at))}${
+            <span class="card__when">${escapeHtml(t('pages.edited', { when: ago(file.created_at) }))}${
               file.chat_title ? ` · ${escapeHtml(file.chat_title)}` : ''
             } · ${escapeHtml(humanSize(file.bytes || 0))}</span>
           </div>
@@ -502,8 +502,8 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
     lede:
       t('pages.tasks.lede'),
     orders: [
-      { id: 'next', label: t('pages.order.next') },
-      { id: 'name', label: 'Name' },
+      { id: 'next', get label() { return t('pages.order.next'); } },
+      { id: 'name', get label() { return t('pages.order.name'); } },
     ],
     load: async () => (await api.tasks()).tasks,
     matches: (task, q) => `${task.title} ${task.prompt || ''}`.toLowerCase().includes(q),
@@ -707,7 +707,7 @@ export function createPages({ openProject, openViewer, openChat, onLeave, onNewP
       search.value = '';
       searchBox.hidden = true;
       $('page-search-open').hidden = false;
-      search.placeholder = `Search ${views[which].title.toLowerCase()}…`;
+      search.placeholder = t('pages.searchNamed', { name: views[which].title.toLowerCase() });
       closeMenus();
 
       page.hidden = false;

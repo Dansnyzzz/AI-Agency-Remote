@@ -588,7 +588,7 @@ async function refreshChats() {
 
   list.append(Object.assign(document.createElement('div'), {
     className: 'chats__label',
-    textContent: 'Conversations',
+    textContent: t('nav.conversationsLabel'),
   }));
 
   for (const chat of chats) {
@@ -597,15 +597,15 @@ async function refreshChats() {
 
     const btn = document.createElement('button');
     btn.className = 'chat-item';
-    btn.textContent = chat.title || 'Untitled';
-    btn.title = chat.title || 'Untitled';
+    btn.textContent = chat.title || t('chat.untitled');
+    btn.title = chat.title || t('chat.untitled');
     btn.addEventListener('click', () => openChat(chat.id));
 
     if (chat.pinned) {
       const pin = document.createElement('span');
       pin.className = 'chat-row__pin';
       pin.textContent = '📌';
-      pin.title = 'Pinned';
+      pin.title = t('chat.pinned');
       row.append(pin);
     }
 
@@ -613,7 +613,8 @@ async function refreshChats() {
     menu.className = 'chat-row__menu';
     menu.type = 'button';
     menu.textContent = '⋯';
-    menu.title = 'More';
+    menu.title = t('chat.more');
+    menu.setAttribute('aria-label', t('chat.more'));
     menu.setAttribute('aria-haspopup', 'menu');
     menu.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -663,7 +664,7 @@ function openRowMenu(chat, anchor, titleButton) {
 
   rowMenu.innerHTML = '';
   rowMenu.append(
-    item(chat.pinned ? 'Unpin' : 'Pin', ICON.pin, 'P', async () => {
+    item(chat.pinned ? t('chat.unpin') : t('chat.pin'), ICON.pin, 'P', async () => {
       closeRowMenu();
       try {
         await api.updateChat(chat.id, { pinned: !chat.pinned });
@@ -672,7 +673,7 @@ function openRowMenu(chat, anchor, titleButton) {
         toast(err.message, 'error');
       }
     }),
-    item('Rename', ICON.rename, 'R', () => {
+    item(t('chat.rename'), ICON.rename, 'R', () => {
       closeRowMenu();
       startRename(chat, titleButton);
     }),
@@ -686,7 +687,7 @@ function openRowMenu(chat, anchor, titleButton) {
   // changing in place is also a clearer warning than a dialog you dismiss.
   let armed = false;
   rowMenu.append(
-    item('Delete', ICON.trash, 'D', async (el) => {
+    item(t('chat.delete'), ICON.trash, 'D', async (el) => {
       if (!armed) {
         armed = true;
         el.querySelector('span').textContent = t('action.reallyDelete');
@@ -922,7 +923,7 @@ async function openChat(id) {
   refreshModelFacts();
   renderProjectChip();
 
-  $('chat-title').textContent = chat.title || 'Untitled';
+  $('chat-title').textContent = chat.title || t('chat.untitled');
   setEmpty(messages.length === 0);
   renderTopbar();
 
@@ -1082,7 +1083,7 @@ function renderFilesChip() {
   chip.hidden = !files.length;
   if (!files.length) return;
 
-  chip.textContent = files.length === 1 ? '1 file' : `${files.length} files`;
+  chip.textContent = files.length === 1 ? t('chat.filesOne') : t('chat.files', { n: files.length });
   chip.title = files.map((file) => file.name).join('\n');
 }
 
@@ -1274,7 +1275,7 @@ $('project-form-save').addEventListener('click', async () => {
       instructions: $('project-form-about').value.trim(),
     });
     $('project-form').close();
-    toast(`Created "${project.name}".`);
+    toast(t('proj.created', { name: project.name }));
     // Straight into the new project rather than back to the shelf: you named it
     // because you were about to use it.
     projectPage.open(project.id);
@@ -1532,7 +1533,7 @@ $('composer').addEventListener('submit', async (event) => {
     if (message?.id) node.dataset.messageId = message.id;
     settleAttachments(node, sending, ids);
     await refreshChats();
-    $('chat-title').textContent = state.chats.find((c) => c.id === state.chatId)?.title || 'Chat';
+    $('chat-title').textContent = state.chats.find((c) => c.id === state.chatId)?.title || t('chat.untitled');
 
     await stream();
   } catch (err) {
@@ -2413,19 +2414,17 @@ function renderWorker() {
       : '';
 
     card.innerHTML = worker.online
-      ? `<div class="provider"><div class="provider__head"><span class="provider__name">Connected</span>
-           <span class="badge badge--ok">online</span></div>
+      ? `<div class="provider"><div class="provider__head"><span class="provider__name">${escapeHtml(t('worker.connected'))}</span>
+           <span class="badge badge--ok">${escapeHtml(t('devices.online'))}</span></div>
            <div class="hint">${escapeHtml(worker.info?.platform || '')} · Node ${escapeHtml(worker.info?.node || '')}<br />
-           Workspace: <code>${escapeHtml(worker.info?.workspace || '')}</code><br />${reach}</div></div>`
-      : `<div class="provider"><div class="provider__head"><span class="provider__name">Not connected</span>
-           <span class="badge">offline</span></div>
+           ${escapeHtml(t('worker.workspaceLabel'))} <code>${escapeHtml(worker.info?.workspace || '')}</code><br />${reach}</div></div>`
+      : `<div class="provider"><div class="provider__head"><span class="provider__name">${escapeHtml(t('worker.notConnected'))}</span>
+           <span class="badge">${escapeHtml(t('devices.offline'))}</span></div>
            <div class="hint">${
              // "Run a worker" is unhelpful advice when the real reason is that
              // this computer belongs to somebody else's account.
              worker.reason === 'not-the-owner'
-               ? `This server is running on the administrator's computer, and its files and shell belong to
-                  that account alone — that boundary is the point. Either ask an administrator to promote
-                  your account, or pair a machine of your own below; the assistant will reach that one.`
+               ? escapeHtml(t('worker.notTheOwner'))
                : t('worker.noTools')
            }</div></div>`;
   }
@@ -2677,7 +2676,7 @@ $('policy-chip').addEventListener('click', () => {
     $('policy-menu'),
     $('policy-chip'),
     [
-      { static: true, label: 'Modes' },
+      { static: true, label: t('policy.menuTitle') },
       ...POLICIES.map((policy) => ({
         label: POLICY_LABEL(policy),
         hint: POLICY_HINT(policy),
@@ -2717,7 +2716,7 @@ function effortRow() {
   const paint = () => {
     const current = state.boot.prefs.effort;
     const index = EFFORT_IDS.indexOf(current);
-    name.textContent = `Effort (${effortLabel(current)})`;
+    name.textContent = t('effort.named', { level: effortLabel(current) });
     for (const [i, dot] of [...dots.children].entries()) {
       dot.classList.toggle('is-on', i === index);
       dot.classList.toggle('is-under', i < index);
@@ -2738,7 +2737,7 @@ function effortRow() {
       try {
         state.boot.prefs = await api.savePrefs({ effort: value });
         paint();
-        toast(`Effort: ${label.toLowerCase()}.`);
+        toast(t('effort.set', { level: label }));
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -2880,7 +2879,7 @@ function fillSettings() {
       const keys = status.keys || [];
       const label = status.own
         ? keys.length > 1
-          ? `${keys.length} keys`
+          ? t('keys.count', { n: keys.length })
           : t('keys.yours')
         : status.shared
           ? t('keys.shared')
@@ -2894,22 +2893,18 @@ function fillSettings() {
           </div>
           ${
             status.shared
-              ? `<div class="hint">
-                   Falling back to this deployment's <code>${escapeHtml(status.envVar || '')}</code>, so the
-                   usage is billed to whoever set it up — and your monthly token limit applies.
-                   Save your own key below to remove both.
-                 </div>`
+              ? `<div class="hint">${t('keys.sharedFallback', { envVar: `<code>${escapeHtml(status.envVar || '')}</code>` })}</div>`
               : ''
           }
           ${keys.length ? `<div class="keylist">${keys.map((entry) => keyRow(key, entry, keys.length > 1)).join('')}</div>` : ''}
           <div class="provider__row">
             <input type="password" placeholder="${escapeHtml(meta.keyHint)}" data-key="${escapeHtml(key)}" autocomplete="off" />
             <button class="btn btn--ghost" data-save-key="${escapeHtml(key)}" type="button">
-              ${keys.length ? 'Add' : 'Save'}
+              ${escapeHtml(keys.length ? t('keys.add') : t('action.save'))}
             </button>
           </div>
           <div class="hint">
-            <a href="${escapeHtml(meta.console)}" target="_blank" rel="noopener">Get a key →</a>
+            <a href="${escapeHtml(meta.console)}" target="_blank" rel="noopener">${escapeHtml(t('keys.getOne'))}</a>
             ${
               keys.length > 1
                 ? ` · ${escapeHtml(t('keys.triedInOrder'))}`
@@ -3002,7 +2997,7 @@ function fillSettings() {
     <div class="provider">
       <div class="provider__head">
         <span class="provider__name">${escapeHtml(me.name || me.email)}</span>
-        <span class="badge ${me.role === 'admin' ? 'badge--ok' : ''}">${escapeHtml(me.role)}</span>
+        <span class="badge ${me.role === 'admin' ? 'badge--ok' : ''}">${escapeHtml(me.role === 'admin' ? t('role.admin') : t('role.member'))}</span>
       </div>
       <div class="hint">${escapeHtml(me.email)}</div>
     </div>`;
@@ -3041,13 +3036,13 @@ async function loadSkills() {
           (s) => `<div class="rows__item">
             <span class="grow">${escapeHtml(s.name)}
               <span class="muted">· ${escapeHtml(s.description)}${
-                s.used_count ? ` · used ${s.used_count}×` : ''
+                s.used_count ? ` · ${escapeHtml(t('skills.used', { n: s.used_count }))}` : ''
               }</span>
             </span>
             <button data-skill-toggle="${escapeHtml(s.id)}" data-on="${!!s.enabled}">${
-              s.enabled ? 'Disable' : 'Enable'
+              escapeHtml(s.enabled ? t('mcp.disable') : t('mcp.enable'))
             }</button>
-            <button data-skill-del="${escapeHtml(s.id)}">Remove</button>
+            <button data-skill-del="${escapeHtml(s.id)}">${escapeHtml(t('action.remove'))}</button>
           </div>`,
         )
         .join('')}</div>`
@@ -3075,7 +3070,7 @@ $('skill-save').addEventListener('click', async () => {
       description: $('skill-description').value,
       instructions: $('skill-instructions').value,
     });
-    status.textContent = `Saved "${skill.name}".`;
+    status.textContent = t('skills.savedNamed', { name: skill.name });
     $('skill-name').value = '';
     $('skill-description').value = '';
     $('skill-instructions').value = '';
@@ -3170,8 +3165,8 @@ async function loadConnectors() {
         <div class="hint">${escapeHtml(c.help)}</div>
         <div class="provider__row">
           <input type="password" data-token="${escapeHtml(c.id)}" placeholder="${escapeHtml(c.placeholder)}" autocomplete="off" />
-          <button data-connect="${escapeHtml(c.id)}">${c.connected ? 'Replace' : 'Connect'}</button>
-          ${c.connected ? `<button data-disconnect="${escapeHtml(c.id)}">Disconnect</button>` : ''}
+          <button data-connect="${escapeHtml(c.id)}">${escapeHtml(c.connected ? t('connectors.replace') : t('mcp.add'))}</button>
+          ${c.connected ? `<button data-disconnect="${escapeHtml(c.id)}">${escapeHtml(t('connectors.disconnect'))}</button>` : ''}
         </div>
       </div>`,
     )
@@ -3194,7 +3189,7 @@ async function loadConnectors() {
     });
   }
   for (const btn of $('connector-list').querySelectorAll('[data-disconnect]')) {
-    armed(btn, 'Disconnect?', async () => {
+    armed(btn, t('connectors.reallyDisconnect'), async () => {
       await api.disconnect(btn.dataset.disconnect);
       loadConnectors();
     });
@@ -3211,14 +3206,13 @@ function renderUsagePanel(host, usage) {
   host.innerHTML =
     `<div class="provider">
       <div class="provider__head">
-        <span class="provider__name">${month.tokens.toLocaleString()} tokens</span>
-        <span class="badge">${month.calls} calls · $${month.cost.toFixed(4)}</span>
+        <span class="provider__name">${escapeHtml(t('usage.tokens', { n: month.tokens.toLocaleString() }))}</span>
+        <span class="badge">${escapeHtml(t('usage.calls', { n: month.calls }))} · $${month.cost.toFixed(4)}</span>
       </div>
       ${
         limit
           ? `<div class="meter"><div class="meter__fill ${level}" style="width:${pct}%"></div></div>
-             <div class="hint">${pct}% of your ${limit.toLocaleString()} shared-key tokens this month.
-             Add your own API key to remove the limit.</div>`
+             <div class="hint">${escapeHtml(t('usage.sharedLimit', { pct, limit: limit.toLocaleString() }))}</div>`
           : `<div class="hint">${escapeHtml(t('usage.noLimit'))}</div>`
       }
     </div>` +
@@ -3277,12 +3271,12 @@ async function loadAdmin() {
           </span>
           ${
             self
-              ? '<span class="muted">you</span>'
-              : `<button data-limit-user="${escapeHtml(u.id)}">Limit</button>
+              ? `<span class="muted">${escapeHtml(t('admin.you'))}</span>`
+              : `<button data-limit-user="${escapeHtml(u.id)}">${escapeHtml(t('admin.limitButton'))}</button>
                  <button data-suspend-user="${escapeHtml(u.id)}" data-suspended="${!!u.suspended_at}">
-                   ${u.suspended_at ? 'Unsuspend' : 'Suspend'}
+                   ${escapeHtml(u.suspended_at ? t('admin.unsuspend') : t('admin.suspend'))}
                  </button>
-                 <button data-del-user="${escapeHtml(u.id)}">Remove</button>`
+                 <button data-del-user="${escapeHtml(u.id)}">${escapeHtml(t('action.remove'))}</button>`
           }
         </div>`;
       })
@@ -3313,7 +3307,7 @@ async function loadAdmin() {
         field.min = '0';
         field.className = 'chat-item--editing';
         field.style.width = '9rem';
-        field.placeholder = 'tokens / month, 0 = none';
+        field.placeholder = t('admin.limitPlaceholder');
         field.title = t('admin.tokenLimit');
         btn.replaceWith(field);
         field.focus();
@@ -3403,7 +3397,7 @@ $('save-behaviour').addEventListener('click', async () => {
       systemPrompt: $('system-prompt').value,
     });
     renderTopbar();
-    $('behaviour-status').textContent = 'Saved.';
+    $('behaviour-status').textContent = t('status.saved');
     setTimeout(() => ($('behaviour-status').textContent = ''), 2000);
   } catch (err) {
     toast(err.message, 'error');
@@ -3571,9 +3565,7 @@ function renderContext(info) {
 
   const used = Math.round(info.used / 1000);
   const total = Math.round(info.budget / 1000);
-  gauge.title = `${percent}% of the context window — about ${used}K of ${total}K tokens${
-    info.exact ? '' : ' (estimated)'
-  }`;
+  gauge.title = t(info.exact ? 'context.gauge' : 'context.gaugeEstimated', { percent, used, total });
 }
 
 const fmtK = (n) => (n >= 1000 ? `${Math.round(n / 1000)}K` : String(Math.round(n)));
@@ -3585,7 +3577,7 @@ $('context-gauge').addEventListener('click', () => {
 
   openMenu($('context-menu'), $('context-gauge'), [
     {
-      label: `${percent}% used · ${fmtK(info.used)} of ${fmtK(info.budget)} tokens`,
+      label: t('context.menuUsed', { percent, used: fmtK(info.used), total: fmtK(info.budget) }),
       static: true,
     },
     {
@@ -3999,7 +3991,7 @@ async function runSearch() {
     return;
   }
 
-  results.innerHTML = '<p class="hint">Searching…</p>';
+  results.innerHTML = `<p class="hint">${escapeHtml(t('search.searching'))}</p>`;
   let chats;
   try {
     ({ chats } = await api.searchChats(query));
@@ -4018,7 +4010,7 @@ async function runSearch() {
       const snippet = snippetAround(c.snippet, query);
       return `<button class="model-card" data-chat="${escapeHtml(c.id)}" type="button">
         <span class="model-card__main">
-          <span class="model-card__name">${escapeHtml(c.title || 'Untitled')}</span>
+          <span class="model-card__name">${escapeHtml(c.title || t('chat.untitled'))}</span>
           ${snippet ? `<span class="model-card__meta">${escapeHtml(snippet)}</span>` : ''}
         </span>
       </button>`;

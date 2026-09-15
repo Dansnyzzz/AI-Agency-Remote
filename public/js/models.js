@@ -16,15 +16,15 @@ import { parseQuery, familyLabel } from './search.js';
 
 const fmtContext = (n) => {
   if (!n) return null;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M context`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)}K context`;
-  return `${n} context`;
+  if (n >= 1e6) return t('models.contextM', { n: (n / 1e6).toFixed(n % 1e6 ? 1 : 0) });
+  if (n >= 1e3) return t('models.contextK', { n: Math.round(n / 1e3) });
+  return t('models.context', { n });
 };
 
 const fmtPrice = (price) => {
   if (!price) return null;
   const round = (n) => (n >= 1 ? n.toFixed(2) : n.toFixed(3).replace(/0+$/, ''));
-  return `$${round(price.in)} / $${round(price.out)} per 1M`;
+  return t('models.pricePer1M', { in: round(price.in), out: round(price.out) });
 };
 
 /** Released within the last 45 days gets a "new" tag. */
@@ -33,11 +33,11 @@ const isRecent = (iso) => !!iso && Date.now() - new Date(iso).getTime() < 45 * 8
 const relative = (iso) => {
   if (!iso) return '';
   const days = Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000);
-  if (days <= 0) return 'today';
-  if (days === 1) return 'yesterday';
-  if (days < 30) return `${days}d ago`;
-  if (days < 365) return `${Math.round(days / 30)}mo ago`;
-  return `${Math.round(days / 365)}y ago`;
+  if (days <= 0) return t('models.today');
+  if (days === 1) return t('when.yesterday');
+  if (days < 30) return t('time.daysShort', { n: days });
+  if (days < 365) return t('models.monthsAgo', { n: Math.round(days / 30) });
+  return t('models.yearsAgo', { n: Math.round(days / 365) });
 };
 
 export function createModelBrowser({ onPick }) {
@@ -75,7 +75,7 @@ export function createModelBrowser({ onPick }) {
     const family = parsed.family || state.family;
     const { provider } = state;
 
-    results.innerHTML = '<p class="hint">Loading…</p>';
+    results.innerHTML = `<p class="hint">${escapeHtml(t('common.loading'))}</p>`;
 
     let data;
     try {
@@ -184,23 +184,27 @@ export function createModelBrowser({ onPick }) {
       return;
     }
     statusLabel.textContent = status.total
-      ? `${status.total.toLocaleString()} models · ${status.free.toLocaleString()} free · updated ${relative(status.refreshedAt)}`
+      ? t('models.libraryStatus', {
+          total: status.total.toLocaleString(),
+          free: status.free.toLocaleString(),
+          when: relative(status.refreshedAt),
+        })
       : t('models.empty');
   }
 
   function card(model, isBuiltin) {
     const tags = [];
-    if (model.isFree) tags.push('<span class="tag tag--free">free</span>');
-    if (isRecent(model.releasedAt)) tags.push('<span class="tag tag--new">new</span>');
+    if (model.isFree) tags.push(`<span class="tag tag--free">${escapeHtml(t('models.tagFree'))}</span>`);
+    if (isRecent(model.releasedAt)) tags.push(`<span class="tag tag--new">${escapeHtml(t('models.tagNew'))}</span>`);
     // The one capability that fails loudly rather than quietly: send a picture
     // to a model without it and the provider rejects the whole request.
     if (model.vision !== false) tags.push(`<span class="tag tag--vision">${escapeHtml(t('models.seesImages'))}</span>`);
-    if (isBuiltin) tags.push('<span class="tag">built-in</span>');
+    if (isBuiltin) tags.push(`<span class="tag">${escapeHtml(t('models.tagBuiltIn'))}</span>`);
 
     const meta = [
       fmtContext(model.context),
-      model.isFree ? 'no cost' : fmtPrice(model.price),
-      model.releasedAt ? `released ${relative(model.releasedAt)}` : null,
+      model.isFree ? t('models.noCost') : fmtPrice(model.price),
+      model.releasedAt ? t('models.released', { when: relative(model.releasedAt) }) : null,
     ]
       .filter(Boolean)
       .join(' · ');
@@ -252,7 +256,7 @@ export function createModelBrowser({ onPick }) {
     if (builtin.length) {
       const heading =
         provider && provider !== 'all'
-          ? t('models.onYourKey').replace('{provider}', PROVIDER_LABEL[provider])
+          ? t('models.onYourKey', { provider: PROVIDER_LABEL[provider] })
           : t('models.builtIn');
       sections.push(
         `<div class="model-group__label">${escapeHtml(heading)}</div>` +
@@ -267,17 +271,17 @@ export function createModelBrowser({ onPick }) {
       const paid = models.filter((m) => !m.isFree);
       if (free.length) {
         sections.push(
-          `<div class="model-group__label">Free · ${free.length}</div>` + free.map((m) => card(m)).join(''),
+          `<div class="model-group__label">${escapeHtml(t('models.free'))} · ${free.length}</div>` + free.map((m) => card(m)).join(''),
         );
       }
       if (paid.length) {
         sections.push(
-          `<div class="model-group__label">Paid · ${paid.length}</div>` + paid.map((m) => card(m)).join(''),
+          `<div class="model-group__label">${escapeHtml(t('models.paid'))} · ${paid.length}</div>` + paid.map((m) => card(m)).join(''),
         );
       }
     } else if (models.length) {
       sections.push(
-        `<div class="model-group__label">${tier === 'free' ? 'Free' : 'Paid'} · ${models.length}</div>` +
+        `<div class="model-group__label">${escapeHtml(tier === 'free' ? t('models.free') : t('models.paid'))} · ${models.length}</div>` +
           models.map((m) => card(m)).join(''),
       );
     }

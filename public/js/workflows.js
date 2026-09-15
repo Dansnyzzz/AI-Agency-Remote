@@ -151,9 +151,7 @@ export function workflowsView({ blank, body, toast, openChat, onLeave, openForm,
 
           const attention =
             run?.status === 'needs_attention'
-              ? `<p class="wf__flag">A step was interrupted and is <strong>not repeated automatically</strong> —
-                   there is no way to tell whether what it does had already happened. Check the conversation,
-                   then run it again if it still needs doing.</p>`
+              ? `<p class="wf__flag">${t('wf.interrupted')}</p>`
               : '';
 
           return `

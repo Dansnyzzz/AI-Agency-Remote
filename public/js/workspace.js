@@ -194,8 +194,8 @@ export function createWorkspace() {
         <textarea class="editor__box" id="workspace-editor" spellcheck="false"></textarea>
         <div class="editor__bar">
           <span class="editor__hint" id="workspace-editor-hint"></span>
-          <button class="btn btn--ghost editor__save" id="workspace-back" type="button">Back</button>
-          <button class="btn btn--primary editor__save" id="workspace-save" type="button">Save</button>
+          <button class="btn btn--ghost editor__save" id="workspace-back" type="button">${escapeHtml(t('action.back'))}</button>
+          <button class="btn btn--primary editor__save" id="workspace-save" type="button">${escapeHtml(t('action.save'))}</button>
         </div>
       </div>`;
 
@@ -208,7 +208,7 @@ export function createWorkspace() {
     box.addEventListener('input', () => {
       const changed = box.value !== editing.content;
       $('workspace-editor-hint').textContent = `${editing.path} · ${humanSize(editing.bytes)}${
-        changed ? ' · unsaved' : ''
+        changed ? ` · ${t('ws.unsaved')}` : ''
       }`;
     });
 
@@ -252,12 +252,12 @@ export function createWorkspace() {
       toast(err.message, 'error');
     } finally {
       button.disabled = false;
-      button.textContent = 'Save';
+      button.textContent = t('action.save');
     }
   }
 
   async function openFile(path) {
-    body.innerHTML = '<div class="viewer__loading"><span class="spinner"></span> Reading…</div>';
+    body.innerHTML = `<div class="viewer__loading"><span class="spinner"></span> ${escapeHtml(t('ws.reading'))}</div>`;
     try {
       const file = await api.workspaceFile(path);
       editing = { ...file, name: path.split('/').pop() };
@@ -311,7 +311,7 @@ export function createWorkspace() {
       button.addEventListener('click', () => open(button.dataset.go));
     }
 
-    body.innerHTML = '<div class="viewer__loading"><span class="spinner"></span> Searching…</div>';
+    body.innerHTML = `<div class="viewer__loading"><span class="spinner"></span> ${escapeHtml(t('search.searching'))}</div>`;
 
     let found;
     try {
@@ -382,7 +382,7 @@ export function createWorkspace() {
     const path = name.includes('/') ? name : (at === '.' ? name : `${at}/${name}`);
     try {
       await api.saveWorkspaceFile(path, '');
-      toast(`Created ${path}.`);
+      toast(t('ws.created', { path }));
       await openFile(path);
     } catch (err) {
       toast(err.message, 'error');
