@@ -1014,10 +1014,9 @@ async function sendEmailTool({ to, subject, body, html, kind }, { user } = {}) {
   }
 
   /*
-   * Sent from the deployment's mailbox under the deployment's own name, for this
-   * person: their address as Reply-To, so an answer reaches them rather than a
-   * shared inbox, and a line at the foot saying who sent it. Not their name on
-   * the From line — see fromHeader for why that went to spam.
+   * Sent as the business: its name and mailbox on the From line, replies to it,
+   * and the person named — never their own address — at the foot. Not their
+   * name on the From line — see fromHeader for why that went to spam.
    *
    * The body is Markdown, laid out by mailTemplate.js as a finished email —
    * header, title, sections, lists, tables, footer — with a plain-text twin,
@@ -1030,7 +1029,8 @@ async function sendEmailTool({ to, subject, body, html, kind }, { user } = {}) {
         brand: senderName(),
         subject: line,
         markdown: text,
-        sender: user?.email ? { name: user.name || '', email: user.email } : null,
+        // A name only: the person's own address is never printed in the message.
+        sender: user?.name ? { name: user.name } : null,
         // A kind the model named is used as given; anything else is inferred.
         kind: KIND_NAMES.includes(String(kind)) ? String(kind) : 'auto',
         language: account.language,
@@ -1042,7 +1042,10 @@ async function sendEmailTool({ to, subject, body, html, kind }, { user } = {}) {
     subject: line,
     text: composed?.text,
     html: html || composed?.html,
-    replyTo: user?.email || undefined,
+    // Replies come back to the business. EMAIL_REPLY_TO names a different
+    // mailbox for them (support@…); the person's own address is not used, so it
+    // never appears in a header either.
+    replyTo: process.env.EMAIL_REPLY_TO || undefined,
   });
   // `sendEmail` never throws — a failed password-reset mail must not break the
   // request — so a refusal from the provider arrives here as `ok: false`, and
@@ -1060,7 +1063,7 @@ async function sendEmailTool({ to, subject, body, html, kind }, { user } = {}) {
     .join('; ');
   return (
     `The mail server accepted an email${composed ? ` (laid out as: ${composed.kind.replace('_', ' ')})` : ''} to ${accepted.join(', ')} with the subject "${line}"` +
-    `${user?.email ? `; replies go to ${user.email}` : ''}.` +
+    `; replies come back to ${process.env.EMAIL_REPLY_TO || `the ${senderName()} mailbox`}.` +
     `${refused.length ? ` It REFUSED ${refused.join(', ')} — say that those did not get it.` : ''}` +
     `${evidence ? ` (${evidence})` : ''} ` +
     'Accepted is not the same as delivered: if it does not arrive, it is in Spam, Promotions or All Mail, or a bounce ' +

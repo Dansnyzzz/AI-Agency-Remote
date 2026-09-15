@@ -1,6 +1,25 @@
+import fs from 'node:fs';
 import nodemailer from 'nodemailer';
 import { log } from './util/trace.js';
-import { resetMessage } from './mailTemplate.js';
+import { resetMessage, LOGO_CID } from './mailTemplate.js';
+
+/** The logo emails embed. Under server/, so a Vercel function bundles it. */
+const LOGO_FILE = new URL('./assets/email-logo.png', import.meta.url);
+
+/**
+ * The logo as an inline attachment, when the message's HTML asks for it.
+ * SMTP clients get it by content id; Resend is given the same file with the
+ * same id.
+ */
+function logoAttachment(html) {
+  if (!html || !html.includes(`cid:${LOGO_CID}`)) return null;
+  try {
+    return { filename: 'logo.png', content: fs.readFileSync(LOGO_FILE), cid: LOGO_CID, contentType: 'image/png' };
+  } catch (err) {
+    log.warn('email logo missing; sending without it', { err: err.message });
+    return null;
+  }
+}
 
 /**
  * Email delivery with three backends, chosen by whichever is configured:
@@ -123,7 +142,7 @@ export const __testing = {
 
 const asList = (value) => (Array.isArray(value) ? value : value ? [value] : []);
 
-async function sendViaResend({ to, subject, html, text, replyTo, from }) {
+async function sendViaResend({ to, subject, html, text, replyTo, from, logo }) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -137,6 +156,7 @@ async function sendViaResend({ to, subject, html, text, replyTo, from }) {
       html,
       text,
       ...(replyTo ? { reply_to: asList(replyTo) } : {}),
+      ...(logo ? { attachments: [{ filename: logo.filename, content: logo.content.toString('base64'), content_id: logo.cid }] } : {}),
     }),
     signal: AbortSignal.timeout(20_000),
   });
@@ -173,9 +193,20 @@ export async function sendEmail({ to, subject, html, text, replyTo }) {
      * sending mailbox's Sent folder, or match it to a bounce.
      */
     let receipt = null;
-    if (backend === 'resend') receipt = await sendViaResend({ to, subject, html, text, replyTo, from });
+    // Without the file the image would show as broken, so it is left out.
+    const logo = logoAttachment(html);
+    if (html && !logo) html = html.replace(/<img src="cid:brand-logo@mail"[^>]*>/g, '');
+    if (backend === 'resend') receipt = await sendViaResend({ to, subject, html, text, replyTo, from, logo });
     else if (backend === 'smtp') {
-      const info = await smtpTransport().sendMail({ from, to: asList(to), subject, html, text, ...(replyTo ? { replyTo } : {}) });
+      const info = await smtpTransport().sendMail({
+        from,
+        to: asList(to),
+        subject,
+        html,
+        text,
+        ...(replyTo ? { replyTo } : {}),
+        ...(logo ? { attachments: [logo] } : {}),
+      });
       receipt = {
         messageId: info?.messageId || null,
         accepted: (info?.accepted || []).map(String),

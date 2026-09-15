@@ -27,3 +27,6 @@
 # Fonts are binary; the script and stylesheet must not have their line endings
 # rewritten on a Windows checkout either.
 public/vendor/** -text
+
+# Generated assets are served byte for byte.
+server/assets/** -text

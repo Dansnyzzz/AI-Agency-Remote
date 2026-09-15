@@ -34,7 +34,7 @@
  */
 
 const BASE = {
-  page: '#f3f5f8',
+  page: '#f4f3f9',
   card: '#ffffff',
   line: '#e5e9ef',
   text: '#1c2733',
@@ -44,6 +44,20 @@ const BASE = {
   soft: '#fafbfc',
   up: '#0e8f63',
   down: '#d23f3f',
+};
+/**
+ * The galaxy look: deep indigo into violet into fuchsia.
+ *
+ * Every gradient is written with a solid `background-color` first. Apple Mail,
+ * iOS Mail and most phone apps paint the gradient; a client that drops
+ * `background-image` (Outlook for Windows renders with Word) still shows the
+ * solid colour, so white text on a header is readable either way.
+ */
+const GALAXY = {
+  hero: 'background-color:#2e1065;background-image:linear-gradient(135deg,#0f0c29 0%,#2e1065 38%,#6d28d9 72%,#c026d3 100%)',
+  button: 'background-color:#6d28d9;background-image:linear-gradient(135deg,#4f46e5 0%,#7c3aed 55%,#c026d3 100%)',
+  bar: 'background-color:#7c3aed;background-image:linear-gradient(180deg,#6366f1 0%,#a855f7 55%,#d946ef 100%)',
+  line: 'background-color:#7c3aed;background-image:linear-gradient(90deg,#4f46e5 0%,#7c3aed 50%,#d946ef 100%)',
 };
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif";
 const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace";
@@ -62,51 +76,51 @@ const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monos
 export const KINDS = {
   letter: {
     shape: 'letter',
-    accent: '#0e8f63',
-    soft: '#e8f6f0',
+    accent: '#6d28d9',
+    soft: '#f3efff',
     label: { vi: 'Thư', en: 'Letter' },
     words: [],
   },
   thank_you: {
     shape: 'letter',
-    accent: '#0e8f63',
-    soft: '#e8f6f0',
+    accent: '#9333ea',
+    soft: '#f7effe',
     label: { vi: 'Lời cảm ơn', en: 'Thank you' },
     words: ['cảm ơn', 'cam on', 'tri ân', 'thank you', 'thanks for', 'appreciation'],
   },
   apology: {
     shape: 'letter',
-    accent: '#64748b',
-    soft: '#f1f5f9',
+    accent: '#5b5bd6',
+    soft: '#efeffc',
     label: { vi: 'Lời xin lỗi', en: 'Apology' },
     words: ['xin lỗi', 'xin loi', 'rất tiếc vì', 'apolog', 'we are sorry', "we're sorry"],
   },
   follow_up: {
     shape: 'letter',
-    accent: '#0e7490',
-    soft: '#e6f4f7',
+    accent: '#6d28d9',
+    soft: '#f3efff',
     label: { vi: 'Theo dõi', en: 'Follow-up' },
     words: ['follow up', 'follow-up', 'following up', 'checking in', 'phản hồi giúp', 'chưa nhận được phản hồi'],
   },
   application: {
     shape: 'letter',
-    accent: '#1d4ed8',
-    soft: '#eaf0fd',
+    accent: '#4f46e5',
+    soft: '#eef0fe',
     label: { vi: 'Thư ứng tuyển', en: 'Application' },
     words: ['ứng tuyển', 'ung tuyen', 'thư xin việc', 'cover letter', 'job application', 'applying for'],
   },
   newsletter: {
     shape: 'card',
-    accent: '#0e8f63',
-    soft: '#e8f6f0',
+    accent: '#6d28d9',
+    soft: '#f3efff',
     dated: true,
     label: { vi: 'Bản tin', en: 'Newsletter' },
     words: ['bản tin', 'ban tin', 'điểm tin', 'newsletter', 'digest', 'weekly roundup', 'daily brief'],
   },
   report: {
     shape: 'card',
-    accent: '#2563eb',
-    soft: '#eaf1fe',
+    accent: '#4f46e5',
+    soft: '#eef0fe',
     dated: true,
     label: { vi: 'Báo cáo', en: 'Report' },
     words: ['báo cáo', 'bao cao', 'tổng kết', 'kết quả kinh doanh', 'report', 'summary of results', 'kpi'],
@@ -114,71 +128,71 @@ export const KINDS = {
   announcement: {
     shape: 'card',
     accent: '#7c3aed',
-    soft: '#f2ecfe',
+    soft: '#f3edfe',
     label: { vi: 'Thông báo', en: 'Announcement' },
     words: ['thông báo', 'thong bao', 'ra mắt', 'announcement', 'announcing', 'we are excited', 'launch'],
   },
   alert: {
     shape: 'card',
-    accent: '#c2410c',
-    soft: '#fdf0e8',
+    accent: '#be185d',
+    soft: '#fdf0f6',
     label: { vi: 'Cảnh báo', en: 'Alert' },
     words: ['cảnh báo', 'canh bao', 'khẩn', 'sự cố', 'gián đoạn', 'alert', 'urgent', 'incident', 'outage', 'security notice'],
   },
   invitation: {
     shape: 'card',
-    accent: '#db2777',
-    soft: '#fdeaf3',
+    accent: '#c026d3',
+    soft: '#fbeefc',
     label: { vi: 'Thư mời', en: 'Invitation' },
     words: ['thư mời', 'thu moi', 'trân trọng kính mời', 'kính mời', 'mời bạn', 'sự kiện', 'invitation', 'you are invited', "you're invited", 'rsvp', 'event'],
   },
   reminder: {
     shape: 'card',
-    accent: '#b45309',
-    soft: '#fdf3e3',
+    accent: '#a21caf',
+    soft: '#faeefb',
     label: { vi: 'Nhắc việc', en: 'Reminder' },
     words: ['nhắc nhở', 'nhắc việc', 'nhắc lịch', 'hạn chót', 'đến hạn', 'reminder', 'deadline', 'due date', 'due on'],
   },
   quotation: {
     shape: 'card',
-    accent: '#0f766e',
-    soft: '#e6f4f2',
+    accent: '#5b21b6',
+    soft: '#f1ecfb',
     label: { vi: 'Báo giá', en: 'Quotation' },
     words: ['báo giá', 'bao gia', 'đề xuất', 'chào giá', 'quotation', 'quote for', 'proposal', 'estimate'],
   },
   invoice: {
     shape: 'card',
-    accent: '#334155',
-    soft: '#eef1f5',
+    accent: '#3730a3',
+    soft: '#eeeffb',
     label: { vi: 'Hoá đơn', en: 'Invoice' },
     words: ['hoá đơn', 'hóa đơn', 'hoa don', 'biên nhận', 'biên lai', 'thanh toán', 'invoice', 'receipt', 'payment due', 'amount due'],
   },
   confirmation: {
     shape: 'card',
-    accent: '#15803d',
-    soft: '#e8f5ec',
+    accent: '#6d28d9',
+    soft: '#f3efff',
     label: { vi: 'Xác nhận', en: 'Confirmation' },
     words: ['xác nhận', 'xac nhan', 'đặt chỗ', 'đặt lịch', 'đơn hàng', 'confirmation', 'confirmed', 'booking', 'order #', 'your order'],
   },
   meeting: {
     shape: 'card',
-    accent: '#4f46e5',
-    soft: '#eeedfd',
+    accent: '#4338ca',
+    soft: '#eeeffc',
     dated: true,
     label: { vi: 'Biên bản họp', en: 'Meeting notes' },
     words: ['biên bản', 'bien ban', 'cuộc họp', 'buổi họp', 'meeting notes', 'minutes', 'meeting recap', 'action items'],
   },
   welcome: {
     shape: 'card',
-    accent: '#0e8f63',
-    soft: '#e8f6f0',
+    accent: '#7c3aed',
+    soft: '#f3edfe',
     label: { vi: 'Chào mừng', en: 'Welcome' },
     words: ['chào mừng', 'chao mung', 'welcome', 'getting started', 'onboarding'],
   },
   security: {
     shape: 'card',
-    accent: '#0e8f63',
-    soft: '#e8f6f0',
+    accent: '#6d28d9',
+    soft: '#f3efff',
     label: { vi: 'Bảo mật', en: 'Security' },
     words: ['mã xác thực', 'mã otp', 'đặt lại mật khẩu', 'verification code', 'reset your password', 'one-time code'],
   },
@@ -244,7 +258,7 @@ function isCapsHeading(line) {
 function heading(text, level, theme) {
   const bar = (size, extra = '') =>
     `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 12px">` +
-    `<tr><td width="4" style="background:${theme.accent};border-radius:2px">&nbsp;</td>` +
+    `<tr><td width="4" style="${GALAXY.bar};border-radius:2px">&nbsp;</td>` +
     `<td style="padding-left:12px;font-size:${size}px;line-height:1.4;font-weight:700;color:${BASE.text};${extra}">${inline(text, theme)}</td></tr></table>`;
   if (level === 'caps') return bar(14, 'letter-spacing:0.05em');
   if (level === 1) {
@@ -331,7 +345,7 @@ const LONE_LINK = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/;
 function button(url, label, theme) {
   return (
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:6px 0 22px"><tr>` +
-    `<td style="background:${theme.accent};border-radius:9px">` +
+    `<td style="${GALAXY.button};border-radius:9px">` +
     `<a class="sx-btn" href="${escapeHtml(url)}" style="display:inline-block;padding:12px 22px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none">${escapeHtml(label)}</a>` +
     `</td></tr></table>`
   );
@@ -568,40 +582,69 @@ function dateLine(language, now, timeZone) {
 /* ── the page ───────────────────────────────────────────────────────── */
 
 const WORDS = {
-  en: { sentBy: 'Sent by', via: 'with', reply: 'Reply to this email to reach them directly.', brandLine: 'An AI workspace' },
-  vi: { sentBy: 'Gửi bởi', via: 'qua', reply: 'Trả lời email này để liên hệ trực tiếp với người gửi.', brandLine: 'Không gian làm việc AI' },
+  en: { sentBy: 'Sent by', reply: 'Reply to this email and we will get back to you.' },
+  vi: { sentBy: 'Người gửi', reply: 'Trả lời email này, chúng tôi sẽ phản hồi bạn.' },
 };
 
 /**
  * Dark mode and phone spacing, for the clients that honour a `<style>` block.
- * Descendant selectors rather than a class on every element, so the body
- * renderer does not have to know about it.
+ * The galaxy header is already dark and is left alone; the white card and its
+ * contents turn to night colours. Descendant selectors rather than a class on
+ * every element, so the body renderer does not have to know about it.
  */
-function adaptiveCss(theme) {
+function adaptiveCss() {
   return [
     ':root{color-scheme:light dark;supported-color-schemes:light dark}',
-    '@media (max-width:520px){.sx-outer{padding:16px 6px!important}.sx-pad{padding-left:20px!important;padding-right:20px!important}.sx-h1{font-size:22px!important}}',
+    '@media (max-width:520px){.sx-outer{padding:14px 6px!important}.sx-pad{padding-left:20px!important;padding-right:20px!important}.sx-h1{font-size:22px!important}}',
     '@media (prefers-color-scheme:dark){' +
-      '.sx-page{background:#0d1217!important}' +
-      '.sx-card{background:#161c22!important;border-color:#29323c!important}' +
-      '.sx-card p,.sx-card li,.sx-card h1,.sx-card h2,.sx-card td,.sx-card strong,.sx-card div,.sx-brand{color:#e5ebf1!important}' +
-      '.sx-card a{color:#7dd3b4!important}.sx-card a.sx-btn{color:#ffffff!important}' +
-      '.sx-card code,.sx-card pre,.sx-card .sx-th{background:#1f2730!important}' +
-      '.sx-card .sx-zebra{background:#1a2027!important}' +
-      '.sx-card .sx-callout,.sx-card .sx-facts,.sx-card .sx-total{background:#1d242c!important}' +
-      `.sx-card .sx-quiet,.sx-card .sx-date,.sx-card .sx-th{color:#8894a1!important}.sx-card .sx-label{color:${theme.accent}!important;filter:brightness(1.6)}` +
-      '.sx-card .sx-up{color:#3fcf8e!important}.sx-card .sx-down{color:#ff7b7b!important}' +
-      '.sx-foot{background:#12171c!important;border-color:#29323c!important}.sx-foot,.sx-foot *{color:#8f9ba8!important}' +
-      '.sx-under{color:#6b7784!important}' +
+      '.sx-page{background:#0b0a14!important}' +
+      '.sx-card{background:#15131f!important;border-color:#2b2740!important}' +
+      '.sx-body p,.sx-body li,.sx-body h2,.sx-body td,.sx-body strong,.sx-body div,.sx-brand{color:#ece9f6!important}' +
+      '.sx-body a{color:#c4b5fd!important}.sx-card a.sx-btn{color:#ffffff!important}' +
+      '.sx-body code,.sx-body pre,.sx-body .sx-th{background:#221f31!important}' +
+      '.sx-body .sx-zebra{background:#1b1828!important}' +
+      '.sx-body .sx-callout,.sx-body .sx-facts,.sx-body .sx-total{background:#211d33!important}' +
+      '.sx-body .sx-quiet,.sx-body .sx-th{color:#9a93b3!important}' +
+      '.sx-body .sx-up{color:#3fcf8e!important}.sx-body .sx-down{color:#ff7b9c!important}' +
+      '.sx-foot{background:#110f1a!important;border-color:#2b2740!important}.sx-foot,.sx-foot *{color:#9a93b3!important}' +
+      '.sx-under{color:#6f6989!important}' +
       '}',
   ].join('');
 }
 
 /**
+ * The logo, embedded in the message itself.
+ *
+ * Referenced as `cid:` and attached by server/email.js, so it shows without
+ * the "display images" prompt a remote image gets, and nothing is fetched from
+ * the web when the email is opened. The file is the web app's own logo scaled
+ * for mail — see scripts/email-logo.js.
+ */
+export const LOGO_CID = 'brand-logo@mail';
+
+/** The brand mark: the logo, or the first letter on the galaxy gradient when there is none. */
+function brandMark(brand, size, logo) {
+  if (logo) {
+    return (
+      `<td width="${size}" height="${size}" valign="middle">` +
+      `<img src="cid:${LOGO_CID}" width="${size}" height="${size}" alt="${escapeHtml(brand)}" style="display:block;width:${size}px;height:${size}px;border:0;outline:none"></td>`
+    );
+  }
+  return (
+    `<td width="${size}" height="${size}" align="center" valign="middle" style="${GALAXY.button};border-radius:${Math.round(size / 3.6)}px;` +
+    `color:#ffffff;font-size:${Math.round(size * 0.55)}px;font-weight:700;line-height:${size}px;font-family:${FONT}">${escapeHtml(brand.charAt(0).toUpperCase())}</td>`
+  );
+}
+
+/**
  * The whole message around a body.
  *
+ * A card opens with the galaxy header — brand, the kind's label and date, and
+ * the title in white. A letter keeps a person's email's quiet: the brand above
+ * a plain card with a thin gradient line along its top.
+ *
  * @param {object} options
- * @param {string} options.brand         the deployment's name, in the header
+ * @param {string} options.brand         the business's name — header and foot
  * @param {string} options.title         a card's heading — usually the subject
  * @param {string} options.contentHtml   already rendered and escaped
  * @param {string} [options.kind]        one of KIND_NAMES; decides shape, colour and label
@@ -610,20 +653,41 @@ function adaptiveCss(theme) {
  * @param {string} [options.language]    'vi' or 'en'
  * @param {Date} [options.now]           the date shown on a dated card
  * @param {string} [options.timeZone]    the zone that date is read in
+ * @param {boolean} [options.logo]       show the embedded logo (the sender attaches it)
  */
-export function layoutEmail({ brand, title, contentHtml, kind = 'newsletter', preheader = '', footerHtml = '', language = 'en', now = new Date(), timeZone = '' }) {
+export function layoutEmail({ brand, title, contentHtml, kind = 'newsletter', preheader = '', footerHtml = '', language = 'en', now = new Date(), timeZone = '', logo = true }) {
   const theme = KINDS[kind] || KINDS.newsletter;
   const lang = language === 'vi' ? 'vi' : 'en';
-  const words = WORDS[lang];
   const card = theme.shape === 'card';
   const date = card && theme.dated ? dateLine(lang, now, timeZone) : '';
-  const markSize = card ? 26 : 22;
 
-  const header = card
-    ? `<div class="sx-label" style="font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${theme.accent};margin:0 0 6px">${escapeHtml(theme.label[lang])}` +
-      `${date ? `<span class="sx-date" style="font-weight:500;color:${BASE.faint}"> · ${escapeHtml(date)}</span>` : ''}</div>` +
-      `<h1 class="sx-h1" style="margin:0 0 22px;font-size:25px;line-height:1.3;font-weight:700;letter-spacing:-0.015em;color:${BASE.text}">${escapeHtml(title)}</h1>`
-    : '';
+  const above = card
+    ? ''
+    : `<tr><td style="padding:0 8px 12px">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        ${brandMark(brand, 26, logo)}
+        <td class="sx-brand" style="padding-left:10px;font-size:14px;font-weight:700;letter-spacing:-0.01em;color:${BASE.text};font-family:${FONT}">${escapeHtml(brand)}</td>
+      </tr></table>
+    </td></tr>`;
+
+  const top = card
+    ? `<tr><td class="sx-hero sx-pad" style="${GALAXY.hero};padding:22px 28px 26px">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 22px"><tr>
+            <td width="36" height="36" align="center" valign="middle" style="background-color:#ffffff;border-radius:10px;${logo ? '' : `color:#4c1d95;font-size:15px;font-weight:700;line-height:36px`}">${
+              // On the dark gradient the logo sits on a white tile, so its own deep blues do not sink into the background.
+              logo
+                ? `<img src="cid:${LOGO_CID}" width="26" height="26" alt="${escapeHtml(brand)}" style="display:block;margin:5px;width:26px;height:26px;border:0;outline:none">`
+                : escapeHtml(brand.charAt(0).toUpperCase())
+            }</td>
+            <td style="padding-left:11px;font-size:15px;font-weight:700;letter-spacing:0.01em;color:#ffffff">${escapeHtml(brand)}</td>
+          </tr></table>
+          <div style="margin:0 0 10px">
+            <span style="display:inline-block;padding:3px 10px;border-radius:999px;background-color:rgba(255,255,255,0.14);border:1px solid rgba(255,255,255,0.28);font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffffff">${escapeHtml(theme.label[lang])}</span>
+            ${date ? `<span style="padding-left:8px;font-size:12px;color:#ddd6fe">${escapeHtml(date)}</span>` : ''}
+          </div>
+          <h1 class="sx-h1" style="margin:0;font-size:26px;line-height:1.28;font-weight:700;letter-spacing:-0.015em;color:#ffffff">${escapeHtml(title)}</h1>
+        </td></tr>`
+    : `<tr><td height="3" style="${GALAXY.line};font-size:0;line-height:0">&nbsp;</td></tr>`;
 
   return `<!doctype html>
 <html lang="${lang}">
@@ -633,24 +697,18 @@ export function layoutEmail({ brand, title, contentHtml, kind = 'newsletter', pr
 <meta name="color-scheme" content="light dark">
 <meta name="supported-color-schemes" content="light dark">
 <title>${escapeHtml(title)}</title>
-<style>${adaptiveCss(theme)}</style>
+<style>${adaptiveCss()}</style>
 </head>
 <body class="sx-page" style="margin:0;padding:0;background:${BASE.page};-webkit-text-size-adjust:100%">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;mso-hide:all">${escapeHtml(preheader)}</div>
 <table class="sx-page" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${BASE.page}">
-<tr><td class="sx-outer" align="center" style="padding:${card ? '32px 12px' : '24px 12px'}">
+<tr><td class="sx-outer" align="center" style="padding:${card ? '28px 12px' : '24px 12px'}">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;font-family:${FONT}">
-    <tr><td style="padding:0 8px ${card ? 16 : 12}px">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-        <td width="${markSize}" height="${markSize}" align="center" valign="middle" style="background:${theme.accent};border-radius:6px;color:#ffffff;font-size:${card ? 15 : 13}px;font-weight:700;line-height:${markSize}px;font-family:${FONT}">${escapeHtml(brand.charAt(0).toUpperCase())}</td>
-        <td class="sx-brand" style="padding-left:10px;font-size:${card ? 16 : 14}px;font-weight:700;letter-spacing:-0.01em;color:${BASE.text};font-family:${FONT}">${escapeHtml(brand)}</td>
-      </tr></table>
-    </td></tr>
-    <tr><td class="sx-card" style="background:${BASE.card};border:1px solid ${BASE.line};border-radius:14px;overflow:hidden">
+    ${above}
+    <tr><td class="sx-card" style="background:${BASE.card};border:1px solid ${BASE.line};border-radius:16px;overflow:hidden">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-        ${card ? `<tr><td height="4" style="background:${theme.accent};font-size:0;line-height:0">&nbsp;</td></tr>` : ''}
-        <tr><td class="sx-pad" style="padding:${card ? '28px 28px 8px' : '28px 28px 12px'}">
-          ${header}
+        ${top}
+        <tr><td class="sx-body sx-pad" style="padding:${card ? '26px 28px 8px' : '26px 28px 12px'}">
           ${contentHtml}
         </td></tr>
         ${
@@ -661,7 +719,7 @@ export function layoutEmail({ brand, title, contentHtml, kind = 'newsletter', pr
       </table>
     </td></tr>
     <tr><td class="sx-under" align="center" style="padding:16px 8px 0;font-size:12px;line-height:1.6;color:${BASE.faint}">
-      ${escapeHtml(brand)} · ${escapeHtml(words.brandLine)}
+      ${escapeHtml(brand)}
     </td></tr>
   </table>
 </td></tr>
@@ -698,7 +756,7 @@ function previewLine(markdown, subject) {
  * @param {string} options.brand
  * @param {string} options.subject
  * @param {string} options.markdown
- * @param {{ name?: string, email: string } | null} [options.sender]
+ * @param {{ name?: string } | null} [options.sender]   named in the footer; an address is never shown
  * @param {string} [options.kind]       one of KIND_NAMES, or 'auto'
  * @param {string} [options.language]   the account's language, used only when the body cannot tell
  * @param {string} [options.timeZone]   the account's zone, for a dated card
@@ -720,13 +778,16 @@ export function composeMessage({ brand, subject, markdown, sender, kind = 'auto'
   const words = WORDS[lang];
   const text = plainTextFrom(body);
 
-  const who = sender?.email ? (sender.name ? `${sender.name} (${sender.email})` : sender.email) : '';
-  const footerHtml = who
-    ? `${escapeHtml(words.sentBy)} <strong style="color:${BASE.text};font-weight:600">${escapeHtml(sender.name || sender.email)}</strong>` +
-      `${sender.name ? ` &lt;<a href="mailto:${escapeHtml(sender.email)}" style="color:${theme.accent}">${escapeHtml(sender.email)}</a>&gt;` : ''}` +
-      ` ${escapeHtml(words.via)} ${escapeHtml(brand)}.<br>${escapeHtml(words.reply)}`
-    : '';
-  const footerText = who ? `${words.sentBy} ${who} ${words.via} ${brand}. ${words.reply}` : '';
+  /*
+   * The person is named, never their address. The message goes out as the
+   * business — its name, its mailbox, replies to it — and an employee's own
+   * email printed in the footer is exactly what it must not reveal.
+   */
+  const name = String(sender?.name || '').trim();
+  const footerHtml =
+    (name ? `${escapeHtml(words.sentBy)} <strong style="color:${BASE.text};font-weight:600">${escapeHtml(name)}</strong> · ${escapeHtml(brand)}<br>` : '') +
+    escapeHtml(words.reply);
+  const footerText = `${name ? `${words.sentBy} ${name} · ${brand}. ` : ''}${words.reply}`;
 
   return {
     html: layoutEmail({

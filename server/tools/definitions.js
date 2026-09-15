@@ -1583,7 +1583,8 @@ export const TOOLS = [
     scope: 'cloud',
     readOnly: false,
     description:
-      "Send an email from the deployment's own mail account, on the user's behalf; replies go to their account address. " +
+      "Send an email as the business, from its own mailbox; replies come back to that mailbox. Never write the user's own " +
+      'email address into the message unless they ask for it. ' +
       'Use it when the user asks you to send something. Leave `to` empty to send it to the user themself (their registered ' +
       'address); otherwise use exactly the address or addresses they gave. ' +
       'It leaves immediately and cannot be recalled, so read the recipient, the subject and the body back to the user ' +
