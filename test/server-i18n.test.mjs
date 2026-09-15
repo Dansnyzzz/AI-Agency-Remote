@@ -16,6 +16,7 @@
  *   node test/server-i18n.test.mjs
  */
 import http from 'node:http';
+import { performance } from 'node:perf_hooks';
 import express from 'express';
 
 let failures = 0;
@@ -83,6 +84,15 @@ section('the translator');
   check('English is returned as written', translateMessage('Wrong email or password.', 'en') === 'Wrong email or password.');
   check('an unknown language is treated as English', translateMessage('Wrong email or password.', 'fr') === 'Wrong email or password.');
   check('a non-string is left alone', translateMessage(undefined, 'vi') === undefined);
+  {
+    // A provider can hand back a whole error body. Matching it against every
+    // shape must stay cheap, and a dump that long is data, not a sentence.
+    const dump = ' is required and was not given'.repeat(2000);
+    const started = performance.now();
+    const out = translateMessage(dump, 'vi');
+    const ms = performance.now() - started;
+    check('a very long text is passed through, quickly', out === dump && ms < 50, `${ms.toFixed(1)}ms`);
+  }
 
   const event = translateEvent(
     { message: 'Timed out.', code: 'x', toolCalls: [{ id: '1', reason: 'This path is outside your workspace.' }] },

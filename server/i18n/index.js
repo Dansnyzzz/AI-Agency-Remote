@@ -26,6 +26,14 @@ import { vi } from './vi.js';
  */
 
 export const SERVER_LANGUAGES = new Set(['en', 'vi']);
+
+/**
+ * Longer than any sentence the server writes, with room for the values put in
+ * it. Past this the text is a dump — a provider's whole error body — and it is
+ * passed through rather than run past a hundred patterns, which keeps the cost
+ * of translating one event bounded whatever arrives.
+ */
+const MAX_TRANSLATABLE = 4000;
 const DICTIONARIES = { vi };
 
 /** Escape a string for use inside a RegExp. */
@@ -76,6 +84,7 @@ function tableFor(language) {
  */
 export function translateMessage(text, language, depth = 0) {
   if (typeof text !== 'string' || !text || language === 'en' || !DICTIONARIES[language] || depth > 3) return text;
+  if (text.length > MAX_TRANSLATABLE) return text;
   const { exact, shapes } = tableFor(language);
 
   const whole = exact.get(text) ?? exact.get(text.trim());
